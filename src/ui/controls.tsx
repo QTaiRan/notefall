@@ -11,6 +11,15 @@ import {
   ListBox,
   ListBoxItem,
   Button,
+  ColorPicker,
+  ColorArea,
+  ColorSlider,
+  ColorThumb,
+  ColorField,
+  ColorSwatch,
+  Input,
+  DialogTrigger,
+  Dialog,
 } from 'react-aria-components'
 import type { Key } from 'react-aria-components'
 
@@ -40,16 +49,31 @@ export function SliderRow({ label, value, min, max, step = 0.01, onChange, forma
           {format ? format(value) : value.toFixed(step < 1 ? 2 : 0)}
         </SliderOutput>
       </div>
-      <SliderTrack className="relative h-1.5 w-full rounded-full bg-neutral-800">
-        {({ state }) => (
-          <>
-            <div
-              className="absolute h-full rounded-full bg-sky-500/80"
-              style={{ width: `${state.getThumbPercent(0) * 100}%` }}
-            />
-            <SliderThumb className="top-1/2 h-3.5 w-3.5 rounded-full bg-white shadow ring-1 ring-neutral-900 outline-none focus-visible:ring-2 focus-visible:ring-sky-400" />
-          </>
-        )}
+      <SliderTrack className="relative flex h-4 w-full cursor-pointer items-center">
+        {({ state, isHovered }) => {
+          const expanded = isHovered || state.isThumbDragging(0)
+          return (
+            <>
+              <div
+                className={`relative w-full overflow-hidden rounded-full transition-all duration-150 ${
+                  expanded ? 'h-2 bg-neutral-700' : 'h-1.5 bg-neutral-800'
+                }`}
+              >
+                <div
+                  className={`h-full transition-colors duration-150 ${
+                    expanded ? 'bg-sky-400' : 'bg-sky-500/80'
+                  }`}
+                  style={{ width: `${state.getThumbPercent(0) * 100}%` }}
+                />
+              </div>
+              <SliderThumb
+                className={`top-1/2 h-3 w-3 rounded-full bg-white shadow ring-1 ring-neutral-900 outline-none transition-all duration-150 ${
+                  expanded ? 'scale-100 opacity-100' : 'scale-0 opacity-0'
+                } data-[dragging]:scale-125 focus-visible:scale-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sky-400`}
+              />
+            </>
+          )
+        }}
       </SliderTrack>
     </Slider>
   )
@@ -84,21 +108,47 @@ type ColorRowProps = {
 
 export function ColorRow({ label, value, onChange }: ColorRowProps) {
   return (
-    <label className="flex items-center justify-between py-1 text-xs">
+    <div className="flex items-center justify-between py-1 text-xs">
       <span className="text-neutral-400">{label}</span>
-      <span className="flex items-center gap-2">
-        <span
-          className="h-4 w-4 rounded ring-1 ring-neutral-700"
-          style={{ background: value }}
-        />
-        <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-6 w-10 cursor-pointer rounded border border-neutral-700 bg-transparent"
-        />
-      </span>
-    </label>
+      <ColorPicker
+        value={value}
+        onChange={(color) => onChange(color.toString('hex'))}
+      >
+        <DialogTrigger>
+          <Button
+            aria-label={`Edit ${label} color`}
+            className="flex items-center gap-2 rounded border border-neutral-700 bg-neutral-900 px-1.5 py-1 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
+          >
+            <ColorSwatch className="h-4 w-4 rounded ring-1 ring-neutral-700" />
+            <span className="font-mono text-[10px] uppercase text-neutral-300">{value}</span>
+          </Button>
+          <Popover
+            placement="bottom end"
+            className="rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
+          >
+            <Dialog className="flex flex-col gap-3 outline-none">
+              <ColorArea
+                colorSpace="hsb"
+                xChannel="saturation"
+                yChannel="brightness"
+                className="relative h-44 w-44 rounded"
+              >
+                <ColorThumb className="z-10 h-4 w-4 rounded-full border-2 border-white shadow-md ring-1 ring-black/40 outline-none data-[focus-visible]:h-5 data-[focus-visible]:w-5" />
+              </ColorArea>
+              <ColorSlider colorSpace="hsb" channel="hue" className="flex flex-col gap-1">
+                <SliderTrack className="relative h-3 w-44 rounded">
+                  <ColorThumb className="top-1/2 h-4 w-4 rounded-full border-2 border-white shadow-md ring-1 ring-black/40 outline-none data-[focus-visible]:h-5 data-[focus-visible]:w-5" />
+                </SliderTrack>
+              </ColorSlider>
+              <ColorField className="flex items-center gap-2">
+                <Label className="text-[10px] uppercase tracking-wider text-neutral-500">Hex</Label>
+                <Input className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1.5 py-0.5 font-mono text-xs uppercase text-neutral-200 outline-none focus-visible:border-sky-500" />
+              </ColorField>
+            </Dialog>
+          </Popover>
+        </DialogTrigger>
+      </ColorPicker>
+    </div>
   )
 }
 

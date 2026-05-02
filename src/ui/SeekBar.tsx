@@ -82,12 +82,13 @@ export function SeekBar() {
             )}
           </Button>
           <Button
+            isDisabled={!song}
             onPress={() => setLoop(!loop)}
             aria-label={loop ? 'Disable loop' : 'Enable loop'}
             className={
               loop
-                ? 'flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300'
-                : 'flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500'
+                ? 'flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600'
+                : 'flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600'
             }
           >
             <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">

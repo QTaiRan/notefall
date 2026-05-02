@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { DropZone, Text } from 'react-aria-components'
+import { useHover } from 'react-aria'
 import { Scene } from '../scene/Scene'
 import { SeekBar } from './SeekBar'
 import { useStore } from '../store'
@@ -61,15 +63,16 @@ function FastForwardIndicator() {
 export function Viewport() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
-  const [dragOver, setDragOver] = useState(false)
-  const [hovering, setHovering] = useState(false)
   const transport = useStore((s) => s.transport)
   const setSong = useStore((s) => s.setSong)
   const setTransport = useStore((s) => s.setTransport)
 
+  // useHover is touch-aware: it does not fire on touch tap (unlike CSS :hover
+  // which sticks until the next interaction) and is normalised across browsers.
+  const { hoverProps, isHovered } = useHover({})
   // Show transport controls on hover; also keep them visible whenever the
   // song is not actively playing (so the user can always see play/seek).
-  const controlsVisible = hovering || transport !== 'playing'
+  const controlsVisible = isHovered || transport !== 'playing'
 
   useEffect(() => {
     const el = wrapRef.current
@@ -91,11 +94,7 @@ export function Viewport() {
     return () => ro.disconnect()
   }, [])
 
-  const onDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-    const file = e.dataTransfer.files?.[0]
-    if (!file) return
+  const handleFile = async (file: File) => {
     const buf = await file.arrayBuffer()
     const parsed = await parseMidi(buf, file.name)
     setSong(parsed)
@@ -104,40 +103,52 @@ export function Viewport() {
   }
 
   return (
-    <div
+    <DropZone
       ref={wrapRef}
-      className="relative flex flex-1 items-center justify-center overflow-hidden bg-black"
-      onDragOver={(e) => {
-        e.preventDefault()
-        setDragOver(true)
+      className="relative flex flex-1 items-center justify-center overflow-hidden bg-black outline-none"
+      getDropOperation={(types) =>
+        // Accept any file drop; we filter by .mid/.midi in onDrop
+        types.has('Files') ? 'copy' : 'cancel'
+      }
+      onDrop={async (e) => {
+        const fileItem = e.items.find((item) => item.kind === 'file')
+        if (!fileItem || fileItem.kind !== 'file') return
+        if (!/\.midi?$/i.test(fileItem.name)) return
+        const file = await fileItem.getFile()
+        await handleFile(file)
       }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={onDrop}
     >
-      <div
-        className="relative shadow-2xl"
-        style={{ width: size.w, height: size.h, touchAction: 'none' }}
-        onMouseEnter={() => setHovering(true)}
-        onMouseLeave={() => setHovering(false)}
-      >
-        <Scene />
-        <PausedIndicator />
-        <FastForwardIndicator />
-        <div
-          className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-opacity duration-200 ${
-            controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
-          }`}
-        >
-          <SeekBar />
-        </div>
-        {dragOver && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-sky-500/10 ring-2 ring-inset ring-sky-400">
-            <span className="rounded bg-neutral-950/80 px-3 py-1 text-sm text-sky-300">
-              Drop MIDI file
-            </span>
+      {({ isDropTarget }) => (
+        <>
+          {/* Visually-hidden label for screen readers */}
+          <Text slot="label" className="sr-only">
+            Drop a MIDI file here
+          </Text>
+          <div
+            className="relative shadow-2xl"
+            style={{ width: size.w, height: size.h, touchAction: 'none' }}
+            {...hoverProps}
+          >
+            <Scene />
+            <PausedIndicator />
+            <FastForwardIndicator />
+            <div
+              className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-opacity duration-200 ${
+                controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+              }`}
+            >
+              <SeekBar />
+            </div>
+            {isDropTarget && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-sky-500/10 ring-2 ring-inset ring-sky-400">
+                <span className="rounded bg-neutral-950/80 px-3 py-1 text-sm text-sky-300">
+                  Drop MIDI file
+                </span>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-    </div>
+        </>
+      )}
+    </DropZone>
   )
 }

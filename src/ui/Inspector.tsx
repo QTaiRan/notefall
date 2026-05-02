@@ -1,6 +1,6 @@
 import { useStore, defaultSettings } from '../store'
 import { ColorRow, SectionTitle, SelectRow, SliderRow, SwitchRow } from './controls'
-import { Button } from 'react-aria-components'
+import { Button, OverlayArrow, Tooltip, TooltipTrigger } from 'react-aria-components'
 
 export function Inspector() {
   const s = useStore((st) => st.settings)
@@ -11,12 +11,25 @@ export function Inspector() {
     <aside className="flex h-full w-72 flex-col border-l border-neutral-800 bg-neutral-950">
       <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2 text-xs font-medium text-neutral-300">
         <span>Inspector</span>
-        <Button
-          onPress={() => reset()}
-          className="rounded px-2 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-        >
-          Reset
-        </Button>
+        <TooltipTrigger delay={300}>
+          <Button
+            onPress={() => reset()}
+            className="rounded px-2 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+          >
+            Reset
+          </Button>
+          <Tooltip
+            offset={6}
+            className="rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] text-neutral-200 shadow-lg outline-none data-[entering]:animate-in data-[entering]:fade-in data-[exiting]:animate-out data-[exiting]:fade-out"
+          >
+            <OverlayArrow>
+              <svg viewBox="0 0 8 8" width={8} height={8} className="fill-neutral-800 stroke-neutral-700 group-data-[placement=bottom]/popover:rotate-180">
+                <path d="M0 0 L4 4 L8 0" />
+              </svg>
+            </OverlayArrow>
+            Reset all settings to defaults
+          </Tooltip>
+        </TooltipTrigger>
       </div>
       <div className="scroll-thin flex-1 overflow-y-auto px-3 pb-6">
         <SectionTitle>Camera</SectionTitle>
