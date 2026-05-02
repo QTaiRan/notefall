@@ -1,0 +1,39 @@
+{
+  "name": "notefall",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.114.0",
+    "@react-three/fiber": "^8.17.10",
+    "@react-three/postprocessing": "^2.16.3",
+    "@tonejs/midi": "^2.0.28",
+    "clsx": "^2.1.1",
+    "react": "^18.3.1",
+    "react-aria-components": "^1.4.1",
+    "react-dom": "^18.3.1",
+    "smplr": "^0.20.0",
+    "three": "^0.169.0",
+    "tone": "^15.0.4",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "tailwindcss-react-aria-components": "^1.2.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

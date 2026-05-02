@@ -1,0 +1,234 @@
+import { useMemo, useRef, useEffect } from 'react'
+import * as THREE from 'three'
+import { useFrame } from '@react-three/fiber'
+import { useStore } from '../store'
+import { audioEngine } from '../audio/engine'
+import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
+
+const MAX_INSTANCES = 4096
+const FALL_DISTANCE = 3.5
+
+const VERTEX_SHADER = /* glsl */ `
+  attribute vec2 instanceSize;
+  varying vec2 vUv;
+  varying vec2 vSize;
+  void main() {
+    vUv = uv;
+    vSize = instanceSize;
+    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  }
+`
+
+const FRAGMENT_SHADER = /* glsl */ `
+  precision highp float;
+  varying vec2 vUv;
+  varying vec2 vSize;
+  uniform vec3 uColor;
+  uniform float uEmissive;
+  uniform float uOpacity;
+  uniform float uRadius;
+
+  float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
+  }
+
+  void main() {
+    // Reject uninitialised instances (vSize=0) explicitly — the SDF degenerates
+    // to d=0 at the origin and would otherwise render a bright square.
+    if (vSize.x < 0.0001 || vSize.y < 0.0001) discard;
+    vec2 halfSize = vSize * 0.5;
+    vec2 p = (vUv - 0.5) * vSize;
+    float r = min(uRadius, min(halfSize.x, halfSize.y) - 0.0001);
+    r = max(r, 0.0);
+    float d = sdRoundedBox(p, halfSize, r);
+    if (d > 0.001) discard;
+    float aa = max(fwidth(d), 0.0001);
+    float alpha = clamp(-d / aa + 0.5, 0.0, 1.0);
+    // Additive emissive: at uEmissive=0 the note is rendered at its chosen
+    // color (visible, no bloom). Higher uEmissive adds extra brightness on
+    // top, which the Bloom pass picks up as glow. This way Opacity controls
+    // transparency independently — the two controls are orthogonal.
+    vec3 col = uColor * (1.0 + uEmissive);
+    gl_FragColor = vec4(col, alpha * uOpacity);
+  }
+`
+
+export function FallingNotes() {
+  const settings = useStore((s) => s.settings)
+  const song = useStore((s) => s.song)
+
+  const meshRef = useRef<THREE.InstancedMesh>(null)
+  const dummy = useMemo(() => new THREE.Object3D(), [])
+
+  // per-instance world size attribute (width, length)
+  const sizes = useMemo(() => new Float32Array(MAX_INSTANCES * 2), [])
+  const sizeAttr = useMemo(() => {
+    const a = new THREE.InstancedBufferAttribute(sizes, 2)
+    a.setUsage(THREE.DynamicDrawUsage)
+    return a
+  }, [sizes])
+
+  const material = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(settings.noteColor) },
+        uEmissive: { value: settings.noteEmissive },
+        uOpacity: { value: settings.noteOpacity },
+        uRadius: { value: settings.noteCornerRadius },
+      },
+      vertexShader: VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    })
+    // we intentionally don't include settings in deps — uniforms are mutated via the effect below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    material.uniforms.uColor.value.set(settings.noteColor)
+    material.uniforms.uEmissive.value = settings.noteEmissive
+    material.uniforms.uOpacity.value = settings.noteOpacity
+    material.uniforms.uRadius.value = settings.noteCornerRadius
+  }, [
+    material,
+    settings.noteColor,
+    settings.noteEmissive,
+    settings.noteOpacity,
+    settings.noteCornerRadius,
+  ])
+
+  useEffect(() => {
+    const mesh = meshRef.current
+    if (!mesh) return
+    mesh.geometry.setAttribute('instanceSize', sizeAttr)
+    return () => {
+      mesh.geometry.deleteAttribute('instanceSize')
+    }
+  }, [sizeAttr])
+
+  useEffect(() => () => material.dispose(), [material])
+
+  useFrame(() => {
+    audioEngine.tick()
+
+    const mesh = meshRef.current
+    if (!mesh) return
+
+    const t = audioEngine.currentSongTime()
+    const hitY = noteHitYWorld(settings.keyboardY)
+    const isDown = settings.fallDirection === 'down'
+    const fall = settings.fallDurationSec
+    const widthScale = settings.noteWidthScale
+    // notes sit just in front of the black keys (which are at z = 0.04)
+    const noteZ = 0.05
+
+    let count = 0
+    const notes = song?.notes ?? []
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i]
+      let headProgress: number
+      let tailProgress: number
+
+      if (isDown) {
+        // Future notes fall from above onto the keyboard.
+        // headT = time until head hits the keyboard (positive = future).
+        const headT = n.time - t
+        const tailT = headT + n.duration
+        if (headT > fall) break // sorted by time → no later notes are visible yet
+        if (tailT < 0) continue // already past
+        headProgress = Math.max(0, headT) / fall
+        tailProgress = Math.max(0, tailT) / fall
+      } else {
+        // Past notes rise from the keyboard upward (history trail).
+        // headT = time since the head emerged.
+        const headT = t - n.time
+        const tailT = headT - n.duration
+        if (headT < 0) break // sorted by time → all later notes haven't started
+        if (tailT > fall) continue // fully exited the visible strip
+        headProgress = Math.min(1, headT / fall)
+        tailProgress = Math.max(0, Math.min(1, tailT / fall))
+      }
+
+      // Both progress values are in [0, 1]; positive offset = above the keyboard.
+      const headY = hitY + headProgress * FALL_DISTANCE
+      const tailY = hitY + tailProgress * FALL_DISTANCE
+      const centerY = (headY + tailY) / 2
+      const length = Math.max(0.02, Math.abs(tailY - headY))
+
+      const idx = n.midi - MIDI_MIN
+      if (idx < 0 || idx >= KEY_COUNT) continue
+      const key = KEYBOARD_LAYOUT.keys[idx]
+      const width = key.width * widthScale
+
+      dummy.position.set(key.x, centerY, noteZ)
+      dummy.rotation.set(0, 0, 0)
+      dummy.scale.set(width, length, 1)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(count, dummy.matrix)
+
+      // store world size so the fragment shader can compute the SDF correctly
+      sizes[count * 2] = width
+      sizes[count * 2 + 1] = length
+
+      count++
+      if (count >= MAX_INSTANCES) break
+    }
+
+    // Live notes (touch/click) — always render in 'up' (rising trail) mode,
+    // independent of the song direction setting.
+    const liveNotes = audioEngine.getLiveNotes()
+    if (liveNotes.length > 0) {
+      const liveNow = performance.now() / 1000
+      for (let i = 0; i < liveNotes.length; i++) {
+        const ln = liveNotes[i]
+        const headT = liveNow - ln.startTime
+        const noteDuration = (ln.endTime ?? liveNow) - ln.startTime
+        const tailT = headT - noteDuration
+        if (headT < 0) continue
+        if (tailT > fall) continue
+
+        const headProgress = Math.min(1, headT / fall)
+        const tailProgress = Math.max(0, Math.min(1, tailT / fall))
+        const headY = hitY + headProgress * FALL_DISTANCE
+        const tailY = hitY + tailProgress * FALL_DISTANCE
+        const centerY = (headY + tailY) / 2
+        const length = Math.max(0.02, Math.abs(headY - tailY))
+
+        const idx = ln.midi - MIDI_MIN
+        if (idx < 0 || idx >= KEY_COUNT) continue
+        const key = KEYBOARD_LAYOUT.keys[idx]
+        const width = key.width * widthScale
+
+        dummy.position.set(key.x, centerY, noteZ)
+        dummy.rotation.set(0, 0, 0)
+        dummy.scale.set(width, length, 1)
+        dummy.updateMatrix()
+        mesh.setMatrixAt(count, dummy.matrix)
+        sizes[count * 2] = width
+        sizes[count * 2 + 1] = length
+
+        count++
+        if (count >= MAX_INSTANCES) break
+      }
+    }
+
+    mesh.count = count
+    mesh.instanceMatrix.needsUpdate = true
+    sizeAttr.needsUpdate = true
+  })
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, undefined, MAX_INSTANCES]}
+      frustumCulled={false}
+      material={material}
+      count={0}
+    >
+      <planeGeometry args={[1, 1]} />
+    </instancedMesh>
+  )
+}
