@@ -50,10 +50,10 @@ function SceneContents() {
 }
 
 /**
- * Invisible click region above the keyboard. Short click toggles play/pause;
- * pressing-and-holding (>200ms) temporarily doubles the playback rate, and
- * releasing restores the slider value. Sits behind the notes (z < note z);
- * notes have no event handlers so the raycast falls through here regardless.
+ * Invisible click regions above and below the keyboard. Short click toggles
+ * play/pause; pressing-and-holding (>200ms) temporarily doubles the playback
+ * rate and releasing restores the slider value. Sits behind the notes
+ * (z < note z); notes have no event handlers so the raycast falls through.
  */
 const HOLD_THRESHOLD_MS = 200
 
@@ -62,9 +62,15 @@ function PlayToggleArea() {
   const camDistance = Math.abs(s.cameraPos[2])
   const halfVisHeight = camDistance * Math.tan((s.cameraFov * Math.PI) / 360)
   const visibleTopY = s.cameraLookAt[1] + halfVisHeight
+  const visibleBottomY = s.cameraLookAt[1] - halfVisHeight
   const topOfKeyboard = s.keyboardY + WHITE_KEY_LENGTH
-  const height = visibleTopY - topOfKeyboard
-  const centerY = (visibleTopY + topOfKeyboard) / 2
+  const bottomOfKeyboard = s.keyboardY
+  // Above-keyboard region (where falling notes appear)
+  const upperHeight = visibleTopY - topOfKeyboard
+  const upperCenterY = (visibleTopY + topOfKeyboard) / 2
+  // Below-keyboard region
+  const lowerHeight = bottomOfKeyboard - visibleBottomY
+  const lowerCenterY = (bottomOfKeyboard + visibleBottomY) / 2
   // Wide enough to cover any reasonable aspect ratio at this camera distance.
   const width = halfVisHeight * 4
 
@@ -112,8 +118,6 @@ function PlayToggleArea() {
     }
   }, [stopFastForward])
 
-  if (height <= 0) return null
-
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation()
     if (holdTimer.current !== null || fastForwardActive.current) return
@@ -149,14 +153,28 @@ function PlayToggleArea() {
   }
 
   return (
-    <mesh
-      position={[0, centerY, 0.01]}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-    >
-      <planeGeometry args={[width, height]} />
-      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-    </mesh>
+    <>
+      {upperHeight > 0 && (
+        <mesh
+          position={[0, upperCenterY, 0.01]}
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+        >
+          <planeGeometry args={[width, upperHeight]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      )}
+      {lowerHeight > 0 && (
+        <mesh
+          position={[0, lowerCenterY, 0.01]}
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+        >
+          <planeGeometry args={[width, lowerHeight]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      )}
+    </>
   )
 }
 

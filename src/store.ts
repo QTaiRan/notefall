@@ -18,6 +18,8 @@ export type Settings = {
   noteOpacity: number
   noteCornerRadius: number
   noteWidthScale: number
+  // Minimum visible length so very short notes do not collapse into a line
+  noteMinLength: number
   // Effects (Bloom)
   bloomIntensity: number
   bloomThreshold: number
@@ -52,6 +54,7 @@ export const defaultSettings: Settings = {
   noteOpacity: 1.0,
   noteCornerRadius: 0.05,
   noteWidthScale: 1.0,
+  noteMinLength: 0.15,
   bloomIntensity: 1.2,
   bloomThreshold: 0.2,
   bloomRadius: 0.7,

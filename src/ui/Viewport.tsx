@@ -132,9 +132,17 @@ export function Viewport() {
             <Scene />
             <PausedIndicator />
             <FastForwardIndicator />
+            {/* Gradient and SeekBar root are click-through (pointer-events-none);
+                only the buttons / slider inside SeekBar carry pointer-events-auto.
+                That lets the lower PlayToggleArea under the keyboard still
+                receive clicks in the empty space around the controls.
+                When hiding, visibility transitions to hidden after the opacity
+                fade so the (invisible) buttons stop intercepting events. */}
             <div
-              className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-opacity duration-200 ${
-                controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+              className={`pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-[opacity,visibility] duration-200 ${
+                controlsVisible
+                  ? 'visible opacity-100'
+                  : 'invisible opacity-0 [transition-delay:0s,200ms]'
               }`}
             >
               <SeekBar />

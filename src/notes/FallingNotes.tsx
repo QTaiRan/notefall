@@ -125,6 +125,7 @@ export function FallingNotes() {
     const isDown = settings.fallDirection === 'down'
     const fall = settings.fallDurationSec
     const widthScale = settings.noteWidthScale
+    const minLength = Math.max(0.01, settings.noteMinLength)
     // notes sit just in front of the black keys (which are at z = 0.04)
     const noteZ = 0.05
 
@@ -167,8 +168,11 @@ export function FallingNotes() {
       // Both progress values are in [0, 1]; positive offset = above the keyboard.
       const headY = hitY + headProgress * FALL_DISTANCE
       const tailY = hitY + tailProgress * FALL_DISTANCE
-      const centerY = (headY + tailY) / 2
-      const length = Math.max(0.02, Math.abs(tailY - headY))
+      // Anchor the end nearest the keyboard so the visual landing time stays
+      // accurate, then enforce the minimum length upward.
+      const bottomY = Math.min(headY, tailY)
+      const length = Math.max(minLength, Math.abs(tailY - headY))
+      const centerY = bottomY + length / 2
 
       const idx = n.midi - MIDI_MIN
       if (idx < 0 || idx >= KEY_COUNT) continue
@@ -206,8 +210,9 @@ export function FallingNotes() {
         const tailProgress = Math.max(0, Math.min(1, tailT / fall))
         const headY = hitY + headProgress * FALL_DISTANCE
         const tailY = hitY + tailProgress * FALL_DISTANCE
-        const centerY = (headY + tailY) / 2
-        const length = Math.max(0.02, Math.abs(headY - tailY))
+        const bottomY = Math.min(headY, tailY)
+        const length = Math.max(minLength, Math.abs(headY - tailY))
+        const centerY = bottomY + length / 2
 
         const idx = ln.midi - MIDI_MIN
         if (idx < 0 || idx >= KEY_COUNT) continue

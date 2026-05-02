@@ -45,8 +45,11 @@ export function SeekBar() {
     useStore.getState().setCurrentTime(0)
   }
 
+  // Root + the time/grid/button row are pointer-events-none so empty padding
+  // around the controls falls through to the play-toggle area on the canvas.
+  // Each interactive widget (Button, Slider) re-enables pointer-events-auto.
   return (
-    <div className="px-4 pt-3 pb-4">
+    <div className="pointer-events-none px-4 pt-3 pb-4">
       <div className="mb-3 grid grid-cols-3 items-center">
         <span className="font-mono text-sm tabular-nums text-neutral-300">
           {fmt(value)} / {fmt(duration)}
@@ -57,7 +60,7 @@ export function SeekBar() {
             isDisabled={!song}
             onPress={onRewind}
             aria-label="Rewind to start"
-            className="flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
           >
             <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
               <path d="M6 6h2v12H6zM9.5 12l8.5 6V6z" />
@@ -67,7 +70,7 @@ export function SeekBar() {
             isDisabled={!song || loadStatus.state === 'loading'}
             onPress={transport === 'playing' ? pauseSong : playSong}
             aria-label={transport === 'playing' ? 'Pause' : 'Play'}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-sky-500 text-neutral-950 outline-none hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800 disabled:text-neutral-600"
+            className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-500 text-neutral-950 outline-none hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800 disabled:text-neutral-600"
           >
             {loadStatus.state === 'loading' ? (
               <span className="text-base">…</span>
@@ -87,8 +90,8 @@ export function SeekBar() {
             aria-label={loop ? 'Disable loop' : 'Enable loop'}
             className={
               loop
-                ? 'flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600'
-                : 'flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600'
+                ? 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600'
+                : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600'
             }
           >
             <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
@@ -108,7 +111,7 @@ export function SeekBar() {
         onChange={onSliderChange}
         onChangeEnd={onSliderEnd}
         isDisabled={!song}
-        className="w-full"
+        className="pointer-events-auto w-full"
       >
         {/* h-5 wrapper expands the pointer hit area so hover is easy to land
             on; the visible bar stays thin and is centered inside it. */}

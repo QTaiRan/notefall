@@ -58,6 +58,7 @@ export function Inspector() {
         <SliderRow label="Opacity" value={s.noteOpacity} min={0} max={1} step={0.01} onChange={(v) => update({ noteOpacity: v })} />
         <SliderRow label="Width" value={s.noteWidthScale} min={0.2} max={1.5} step={0.01} onChange={(v) => update({ noteWidthScale: v })} />
         <SliderRow label="Corner Radius" value={s.noteCornerRadius} min={0} max={0.2} step={0.005} onChange={(v) => update({ noteCornerRadius: v })} />
+        <SliderRow label="Min Length" value={s.noteMinLength} min={0} max={0.6} step={0.01} onChange={(v) => update({ noteMinLength: v })} />
 
         <SectionTitle>Bloom</SectionTitle>
         <SliderRow label="Intensity" value={s.bloomIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ bloomIntensity: v })} />
