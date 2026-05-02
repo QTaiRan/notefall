@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Dark rounded background, matching the app's scene background -->
+  <rect width="32" height="32" rx="6" fill="#05060a"/>
+
+  <!-- Falling note (cyan), centered over the middle white key -->
+  <rect x="14.4" y="4" width="3.2" height="15" rx="0.8" fill="#5ad7ff"/>
+
+  <!-- White keys: 7 separate rects with thin gaps so each key is distinguishable -->
+  <g fill="#f5f5f5">
+    <rect x="2"   y="21" width="3.7" height="9" rx="0.4"/>
+    <rect x="6"   y="21" width="3.7" height="9" rx="0.4"/>
+    <rect x="10"  y="21" width="3.7" height="9" rx="0.4"/>
+    <rect x="14"  y="21" width="3.7" height="9" rx="0.4"/>
+    <rect x="18"  y="21" width="3.7" height="9" rx="0.4"/>
+    <rect x="22"  y="21" width="3.7" height="9" rx="0.4"/>
+    <rect x="26"  y="21" width="3.7" height="9" rx="0.4"/>
+  </g>
+
+  <!-- Black keys: positioned at the C#, D#, F#, G#, A# slots (skip E-F and B-C) -->
+  <g fill="#161616">
+    <rect x="5"   y="21" width="2"   height="5.5" rx="0.3"/>
+    <rect x="9"   y="21" width="2"   height="5.5" rx="0.3"/>
+    <rect x="17"  y="21" width="2"   height="5.5" rx="0.3"/>
+    <rect x="21"  y="21" width="2"   height="5.5" rx="0.3"/>
+    <rect x="25"  y="21" width="2"   height="5.5" rx="0.3"/>
+  </g>
+</svg>
