@@ -19,6 +19,15 @@ type ActiveNote = {
  */
 const STOP_BUFFER = 0.02
 
+/**
+ * Background-tab ticking. `requestAnimationFrame` (which drives `useFrame`
+ * → `tick()`) is paused while `document.hidden = true`, so notes scheduled
+ * during the hidden period pile up and burst at once on return. A Web Worker
+ * timer is exempt from main-thread throttling and keeps the scheduler running.
+ * 25 ms gives ~40 Hz tick rate, well within the 15 ms audio lookahead window.
+ */
+const TICK_INTERVAL_MS = 25
+
 /** Note triggered live by the user (touch/click), independent of song timeline. */
 export type LiveNote = {
   id: number
@@ -69,6 +78,10 @@ export class AudioEngine {
   private liveIdCounter = 0
   // map liveNote.id → its smplr stop fn
   private liveStops = new Map<number, () => void>()
+
+  // Worker-driven ticker that keeps scheduling alive in background tabs
+  private tickWorker: Worker | null = null
+  private tickWorkerUrl: string | null = null
 
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
     if (this.piano) return
@@ -131,6 +144,7 @@ export class AudioEngine {
     }
     this.startedAt = performance.now() / 1000
     this.playing = true
+    this.startBackgroundTicker()
   }
 
   pause(): void {
@@ -139,6 +153,7 @@ export class AudioEngine {
     this.offsetAtStart = t
     this.playing = false
     this.releaseAllSounding()
+    this.stopBackgroundTicker()
   }
 
   stop(): void {
@@ -148,6 +163,7 @@ export class AudioEngine {
     this.pedalIdx = 0
     this.pedalDown = false
     this.releaseAll()
+    this.stopBackgroundTicker()
   }
 
   seek(t: number): void {
@@ -233,6 +249,28 @@ export class AudioEngine {
     this.pedalHeld = []
   }
 
+  private startBackgroundTicker(): void {
+    if (this.tickWorker || typeof Worker === 'undefined') return
+    try {
+      const code = `setInterval(() => postMessage(0), ${TICK_INTERVAL_MS})`
+      const blob = new Blob([code], { type: 'application/javascript' })
+      this.tickWorkerUrl = URL.createObjectURL(blob)
+      this.tickWorker = new Worker(this.tickWorkerUrl)
+      this.tickWorker.onmessage = () => this.tick()
+    } catch {
+      /* fall back to rAF-only ticking when Worker construction fails */
+    }
+  }
+
+  private stopBackgroundTicker(): void {
+    this.tickWorker?.terminate()
+    this.tickWorker = null
+    if (this.tickWorkerUrl) {
+      URL.revokeObjectURL(this.tickWorkerUrl)
+      this.tickWorkerUrl = null
+    }
+  }
+
   private releaseAll(): void {
     this.piano?.stopAll()
     const t = this.currentSongTime()
@@ -275,10 +313,15 @@ export class AudioEngine {
     this.pedalDown = pedalDown
   }
 
-  /** Called every frame from the visual loop. */
+  /** Called every frame from the visual loop, plus from the background-tab worker. */
   tick(): void {
     this.cleanupLiveNotes()
     if (!this.piano || !this.song || !this.playing) return
+    // Some browsers suspend the AudioContext on background tabs even with
+    // sources active; nudge it back to running so scheduled notes still fire.
+    if (this.piano.context.state === 'suspended') {
+      this.piano.context.resume().catch(() => {})
+    }
     const songTime = this.currentSongTime()
 
     // process pedal events

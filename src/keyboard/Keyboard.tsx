@@ -1,11 +1,62 @@
-import { useMemo, useRef, useEffect, useCallback } from 'react'
-import * as THREE from 'three'
-import * as Tone from 'tone'
-import { useFrame } from '@react-three/fiber'
-import type { ThreeEvent } from '@react-three/fiber'
-import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN } from './layout'
-import { useStore } from '../store'
-import { audioEngine } from '../audio/engine'
+import { useMemo, useRef, useEffect, useCallback } from "react";
+import * as THREE from "three";
+import * as Tone from "tone";
+import { useFrame } from "@react-three/fiber";
+import type { ThreeEvent } from "@react-three/fiber";
+import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN } from "./layout";
+import { useStore } from "../store";
+import { audioEngine } from "../audio/engine";
+
+// PC keyboard → MIDI mapping.
+//   ZXCV row  z.../  : C3..E4 white keys
+//   ASDF row  s..;   : sharps for the ZXCV row (s=C#3, ;=D#4)
+//   QWERTY    q...]  : C4..G5 white keys
+//   Digit row 1...=  : chromatic continuation A5..G#6 (so 2=A#5)
+// Some pitches are reachable from multiple keys (e.g. q/, both = C4); that
+// overlap is intentional and harmless — distinct keys trigger separate voices.
+const PC_KEY_NOTES: Record<string, number> = {
+  // Bottom row — bottom octave white keys
+  KeyZ: 48,
+  KeyX: 50,
+  KeyC: 52,
+  KeyV: 53,
+  KeyB: 55,
+  KeyN: 57,
+  KeyM: 59,
+  Comma: 60,
+  Period: 62,
+  Slash: 64,
+  // Home row — sharps for the bottom octave (skip 'f' for E#, 'k' for B#)
+  KeyS: 49,
+  KeyD: 51,
+  KeyG: 54,
+  KeyH: 56,
+  KeyJ: 58,
+  KeyL: 61,
+  Semicolon: 63,
+  // Top row — top octave white keys
+  KeyQ: 60,
+  KeyW: 62,
+  KeyE: 64,
+  KeyR: 65,
+  KeyT: 67,
+  KeyY: 69,
+  KeyU: 71,
+  KeyI: 72,
+  KeyO: 74,
+  KeyP: 76,
+  BracketLeft: 77,
+  BracketRight: 79,
+  // Digit row — chromatic above the top row
+  Digit2: 61,
+  Digit3: 63,
+  Digit5: 66,
+  Digit6: 68,
+  Digit7: 70,
+  Digit9: 73,
+  Digit0: 75,
+  Equal: 78,
+};
 
 /**
  * Flat top-down keyboard. Each key is a thin box in the XY plane viewed
@@ -20,20 +71,22 @@ import { audioEngine } from '../audio/engine'
  * capture is released on pointerdown so drag-over reaches sibling keys.
  */
 export function Keyboard() {
-  const settings = useStore((s) => s.settings)
-  const setLoadStatus = useStore((s) => s.setLoadStatus)
+  const settings = useStore((s) => s.settings);
+  const setLoadStatus = useStore((s) => s.setLoadStatus);
 
-  const glow = useMemo(() => new Float32Array(KEY_COUNT), [])
-  const held = useMemo(() => new Uint8Array(KEY_COUNT), [])
+  const glow = useMemo(() => new Float32Array(KEY_COUNT), []);
+  const held = useMemo(() => new Uint8Array(KEY_COUNT), []);
 
-  const meshRefs = useRef<(THREE.Mesh | null)[]>([])
-  const matRefs = useRef<(THREE.MeshStandardMaterial | null)[]>([])
+  const meshRefs = useRef<(THREE.Mesh | null)[]>([]);
+  const matRefs = useRef<(THREE.MeshStandardMaterial | null)[]>([]);
 
   // pointerId → currently-playing note for that pointer
-  const activePointers = useRef<Map<number, { midi: number; release: () => void }>>(new Map())
+  const activePointers = useRef<
+    Map<number, { midi: number; release: () => void }>
+  >(new Map());
   // pointerId → midi the user wants to play once async audio init resolves
   // (cleared on pointerup, so releases during loading don't leak a stuck note)
-  const pendingMidi = useRef<Map<number, number>>(new Map())
+  const pendingMidi = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {
     // held[] is a reference count of active voices on each pitch, not a flag.
@@ -41,156 +94,237 @@ export function Keyboard() {
     // arrive in either order within a tick), set/clear semantics would lose
     // the new note's "down" state. Counting handles overlap correctly.
     const off = audioEngine.addKeyListener((ev) => {
-      const idx = ev.midi - MIDI_MIN
-      if (idx < 0 || idx >= KEY_COUNT) return
-      if (ev.type === 'on') {
-        glow[idx] = Math.max(glow[idx], 0.5 + ev.velocity * 0.6)
-        held[idx]++
+      const idx = ev.midi - MIDI_MIN;
+      if (idx < 0 || idx >= KEY_COUNT) return;
+      if (ev.type === "on") {
+        glow[idx] = Math.max(glow[idx], 0.5 + ev.velocity * 0.6);
+        held[idx]++;
       } else {
-        held[idx] = Math.max(0, held[idx] - 1)
+        held[idx] = Math.max(0, held[idx] - 1);
       }
-    })
-    return off
-  }, [glow, held])
+    });
+    return off;
+  }, [glow, held]);
 
   // Window-level release so dragging off the canvas still stops the note.
   useEffect(() => {
     const onUp = (e: PointerEvent) => {
-      const id = e.pointerId
-      const entry = activePointers.current.get(id)
+      const id = e.pointerId;
+      const entry = activePointers.current.get(id);
       if (entry) {
-        entry.release()
-        activePointers.current.delete(id)
+        entry.release();
+        activePointers.current.delete(id);
       }
-      pendingMidi.current.delete(id)
-    }
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
+      pendingMidi.current.delete(id);
+    };
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-    }
-  }, [])
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
 
   const ensureAudio = useCallback(async () => {
-    if (audioEngine.isReady()) return true
-    const status = useStore.getState().loadStatus
-    if (status.state === 'loading') {
+    if (audioEngine.isReady()) return true;
+    const status = useStore.getState().loadStatus;
+    if (status.state === "loading") {
       // wait for the in-flight load to settle
-      while (useStore.getState().loadStatus.state === 'loading') {
-        await new Promise((r) => setTimeout(r, 50))
+      while (useStore.getState().loadStatus.state === "loading") {
+        await new Promise((r) => setTimeout(r, 50));
       }
-      return audioEngine.isReady()
+      return audioEngine.isReady();
     }
-    setLoadStatus({ state: 'loading', loaded: 0, total: 1 })
+    setLoadStatus({ state: "loading", loaded: 0, total: 1 });
     try {
       await audioEngine.init((p) =>
-        setLoadStatus({ state: 'loading', loaded: p.loaded, total: p.total }),
-      )
-      setLoadStatus({ state: 'ready' })
-      return true
+        setLoadStatus({ state: "loading", loaded: p.loaded, total: p.total }),
+      );
+      setLoadStatus({ state: "ready" });
+      return true;
     } catch {
-      setLoadStatus({ state: 'idle' })
-      return false
+      setLoadStatus({ state: "idle" });
+      return false;
     }
-  }, [setLoadStatus])
+  }, [setLoadStatus]);
 
   const triggerForPointer = useCallback((pointerId: number, midi: number) => {
-    const prev = activePointers.current.get(pointerId)
+    const prev = activePointers.current.get(pointerId);
     if (prev) {
-      if (prev.midi === midi) return // same key, no retrigger
-      prev.release()
-      activePointers.current.delete(pointerId)
+      if (prev.midi === midi) return; // same key, no retrigger
+      prev.release();
+      activePointers.current.delete(pointerId);
     }
-    const handle = audioEngine.triggerKey(midi, 0.78)
-    if (!handle) return
-    activePointers.current.set(pointerId, { midi, release: handle.release })
-  }, [])
+    const handle = audioEngine.triggerKey(midi, 0.78);
+    if (!handle) return;
+    activePointers.current.set(pointerId, { midi, release: handle.release });
+  }, []);
 
   const onPointerDown = useCallback(
     async (e: ThreeEvent<PointerEvent>, midi: number) => {
-      e.stopPropagation()
-      const id = e.pointerId
+      e.stopPropagation();
+      const id = e.pointerId;
 
       // Release implicit pointer capture (set automatically for touch) so
       // pointerEnter on sibling keys fires while dragging.
-      const target = e.nativeEvent.target as Element | null
-      if (target && typeof target.hasPointerCapture === 'function' && target.hasPointerCapture(id)) {
+      const target = e.nativeEvent.target as Element | null;
+      if (
+        target &&
+        typeof target.hasPointerCapture === "function" &&
+        target.hasPointerCapture(id)
+      ) {
         try {
-          target.releasePointerCapture(id)
+          target.releasePointerCapture(id);
         } catch {
           /* ignored */
         }
       }
 
       // Unlock the AudioContext within the user gesture
-      if (Tone.getContext().state !== 'running') {
+      if (Tone.getContext().state !== "running") {
         try {
-          await Tone.start()
+          await Tone.start();
         } catch {
           /* ignored */
         }
       }
 
       if (audioEngine.isReady()) {
-        triggerForPointer(id, midi)
-        return
+        triggerForPointer(id, midi);
+        return;
       }
 
       // Audio not ready — record this pointer's intent and await loading.
       // pointerEnter may update the desired midi during the wait; pointerup
       // will clear the entry, in which case we trigger nothing.
-      pendingMidi.current.set(id, midi)
-      const ready = await ensureAudio()
-      if (!pendingMidi.current.has(id)) return // released during loading
-      const targetMidi = pendingMidi.current.get(id)!
-      pendingMidi.current.delete(id)
-      if (!ready) return
-      triggerForPointer(id, targetMidi)
+      pendingMidi.current.set(id, midi);
+      const ready = await ensureAudio();
+      if (!pendingMidi.current.has(id)) return; // released during loading
+      const targetMidi = pendingMidi.current.get(id)!;
+      pendingMidi.current.delete(id);
+      if (!ready) return;
+      triggerForPointer(id, targetMidi);
     },
     [ensureAudio, triggerForPointer],
-  )
+  );
 
   const onPointerEnter = useCallback(
     (e: ThreeEvent<PointerEvent>, midi: number) => {
-      const id = e.pointerId
+      const id = e.pointerId;
       // While loading, just remember which key the pointer is currently over.
       if (pendingMidi.current.has(id)) {
-        pendingMidi.current.set(id, midi)
-        return
+        pendingMidi.current.set(id, midi);
+        return;
       }
       // Otherwise, if the pointer already has an active note, switch keys (slide).
       if (activePointers.current.has(id)) {
-        triggerForPointer(id, midi)
+        triggerForPointer(id, midi);
       }
     },
     [triggerForPointer],
-  )
+  );
+
+  // PC keyboard input. Same lifecycle as touch: hold to sustain, release to stop,
+  // and a key pressed during sample loading is honoured (or cancelled) once ready.
+  useEffect(() => {
+    const pressed = new Map<string, () => void>();
+    const pending = new Set<string>();
+
+    const isEditable = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el.isContentEditable
+      );
+    };
+
+    const onDown = async (e: KeyboardEvent) => {
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditable(e.target)) return;
+      const midi = PC_KEY_NOTES[e.code];
+      if (midi === undefined) return;
+      e.preventDefault();
+      if (pressed.has(e.code) || pending.has(e.code)) return;
+
+      if (Tone.getContext().state !== "running") {
+        try {
+          await Tone.start();
+        } catch {
+          /* ignored */
+        }
+      }
+
+      if (audioEngine.isReady()) {
+        const handle = audioEngine.triggerKey(midi, 0.78);
+        if (handle) pressed.set(e.code, handle.release);
+        return;
+      }
+
+      pending.add(e.code);
+      const ready = await ensureAudio();
+      if (!pending.has(e.code)) return; // released during loading
+      pending.delete(e.code);
+      if (!ready) return;
+      const handle = audioEngine.triggerKey(midi, 0.78);
+      if (handle) pressed.set(e.code, handle.release);
+    };
+
+    const onUp = (e: KeyboardEvent) => {
+      const release = pressed.get(e.code);
+      if (release) {
+        release();
+        pressed.delete(e.code);
+      }
+      pending.delete(e.code);
+    };
+
+    const releaseAll = () => {
+      for (const r of pressed.values()) r();
+      pressed.clear();
+      pending.clear();
+    };
+
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    // window blur / tab switch: drop everything so keys don't get stuck
+    window.addEventListener("blur", releaseAll);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", releaseAll);
+      releaseAll();
+    };
+  }, [ensureAudio]);
 
   useFrame((_, delta) => {
-    const brightness = settings.keyboardBrightness
+    const brightness = settings.keyboardBrightness;
     for (let i = 0; i < KEY_COUNT; i++) {
-      const decay = settings.keyGlowDecay
-      const target = held[i] ? Math.max(glow[i], 0.6) : 0
-      const k1 = 1 - Math.exp(-delta / Math.max(0.01, decay))
-      glow[i] += (target - glow[i]) * k1
+      const decay = settings.keyGlowDecay;
+      const target = held[i] ? Math.max(glow[i], 0.6) : 0;
+      const k1 = 1 - Math.exp(-delta / Math.max(0.01, decay));
+      glow[i] += (target - glow[i]) * k1;
 
-      const mat = matRefs.current[i]
-      const k = KEYBOARD_LAYOUT.keys[i]
-      if (!mat) continue
+      const mat = matRefs.current[i];
+      const k = KEYBOARD_LAYOUT.keys[i];
+      if (!mat) continue;
 
-      const baseColor = k.isBlack ? settings.blackKeyColor : settings.whiteKeyColor
-      mat.color.set(baseColor).multiplyScalar(brightness)
-      const e = glow[i]
+      const baseColor = k.isBlack
+        ? settings.blackKeyColor
+        : settings.whiteKeyColor;
+      mat.color.set(baseColor).multiplyScalar(brightness);
+      const e = glow[i];
       if (e > 0.001) {
-        mat.emissive.set(settings.keyGlowColor)
+        mat.emissive.set(settings.keyGlowColor);
         // brightness also scales the glow so darkening the keyboard dims its emission too
-        mat.emissiveIntensity = e * settings.keyGlowIntensity * brightness
+        mat.emissiveIntensity = e * settings.keyGlowIntensity * brightness;
       } else {
-        mat.emissiveIntensity = 0
+        mat.emissiveIntensity = 0;
       }
     }
-  })
+  });
 
   return (
     <group position={[0, settings.keyboardY, 0]}>
@@ -212,5 +346,5 @@ export function Keyboard() {
         </mesh>
       ))}
     </group>
-  )
+  );
 }
