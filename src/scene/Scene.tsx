@@ -6,6 +6,7 @@ import { useStore } from '../store'
 import { Keyboard } from '../keyboard/Keyboard'
 import { FallingNotes } from '../notes/FallingNotes'
 import { LandingFlashes } from '../notes/LandingFlashes'
+import { HitParticles } from '../notes/HitParticles'
 import { WHITE_KEY_LENGTH } from '../keyboard/layout'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong, togglePlayback } from '../audio/playback'
@@ -47,6 +48,7 @@ function SceneContents() {
       <Keyboard />
       <FallingNotes />
       <LandingFlashes />
+      <HitParticles />
     </>
   )
 }

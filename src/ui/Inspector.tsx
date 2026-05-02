@@ -67,6 +67,20 @@ export function Inspector() {
         <SliderRow label="Halo" value={s.flashHaloWidth} min={0} max={2} step={0.05} onChange={(v) => update({ flashHaloWidth: v })} />
         <ColorRow label="Color" value={s.flashColor} onChange={(v) => update({ flashColor: v })} />
 
+        <SectionTitle>Particles</SectionTitle>
+        <SwitchRow label="Enabled" value={s.particlesEnabled} onChange={(v) => update({ particlesEnabled: v })} />
+        <SliderRow label="Intensity" value={s.particleIntensity} min={0} max={1} step={0.01} onChange={(v) => update({ particleIntensity: v })} />
+        <SliderRow label="Size" value={s.particleSize} min={0} max={1.5} step={0.01} onChange={(v) => update({ particleSize: v })} />
+        <SliderRow label="Rate" value={s.particleRate} min={0} max={40} step={0.1} onChange={(v) => update({ particleRate: v })} />
+        <SliderRow label="Speed" value={s.particleSpeed} min={0} max={3} step={0.05} onChange={(v) => update({ particleSpeed: v })} />
+        <SliderRow label="Lifetime" value={s.particleLifetime} min={0.3} max={6} step={0.1} onChange={(v) => update({ particleLifetime: v })} />
+        <ColorRow label="Color" value={s.particleColor} onChange={(v) => update({ particleColor: v })} />
+        <SliderRow label="Wind" value={s.particleWind} min={0} max={3} step={0.05} onChange={(v) => update({ particleWind: v })} />
+        <SliderRow label="Wind Scale" value={s.particleWindScale} min={0.05} max={1.5} step={0.01} onChange={(v) => update({ particleWindScale: v })} />
+        <SliderRow label="Wind Speed" value={s.particleWindSpeed} min={0} max={3} step={0.05} onChange={(v) => update({ particleWindSpeed: v })} />
+        <SliderRow label="Halo Intensity" value={s.particleHaloIntensity} min={0} max={1} step={0.01} onChange={(v) => update({ particleHaloIntensity: v })} />
+        <SliderRow label="Halo Size" value={s.particleHaloSize} min={0} max={5} step={0.1} onChange={(v) => update({ particleHaloSize: v })} />
+
         <SectionTitle>Bloom</SectionTitle>
         <SliderRow label="Intensity" value={s.bloomIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ bloomIntensity: v })} />
         <SliderRow label="Threshold" value={s.bloomThreshold} min={0} max={1} step={0.01} onChange={(v) => update({ bloomThreshold: v })} />

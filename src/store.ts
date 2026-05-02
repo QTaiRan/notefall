@@ -27,6 +27,20 @@ export type Settings = {
   // Softness of the core falloff — larger = wider halo edge around the bright spot
   flashHaloWidth: number
   flashColor: string
+  // Particles drifting up from the keyboard while a note is held
+  particlesEnabled: boolean
+  particleIntensity: number
+  particleSize: number
+  particleRate: number
+  particleSpeed: number
+  particleLifetime: number
+  particleColor: string
+  // Wind field that drives clustered, candle-flame-like sway
+  particleWind: number       // strength (how far particles get pushed)
+  particleWindScale: number  // gust size — larger = broader cells = more cohesive cluster motion
+  particleWindSpeed: number  // how fast the field evolves over time
+  particleHaloIntensity: number // brightness of the soft glow around each particle's core
+  particleHaloSize: number      // how far that glow extends past the core
   // Effects (Bloom)
   bloomIntensity: number
   bloomThreshold: number
@@ -67,6 +81,18 @@ export const defaultSettings: Settings = {
   flashWidth: 2.5,
   flashHaloWidth: 0.5,
   flashColor: '#ffffff',
+  particlesEnabled: true,
+  particleIntensity: 0.15,
+  particleSize: 0.3,
+  particleRate: 20.0,
+  particleSpeed: 0.8,
+  particleLifetime: 2.5,
+  particleColor: '#5ad7ff',
+  particleWind: 1.0,
+  particleWindScale: 0.3,
+  particleWindSpeed: 1.0,
+  particleHaloIntensity: 0.2,
+  particleHaloSize: 1.5,
   bloomIntensity: 1.2,
   bloomThreshold: 0.2,
   bloomRadius: 0.7,
