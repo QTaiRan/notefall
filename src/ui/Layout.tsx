@@ -24,6 +24,12 @@ export function Layout() {
     audioEngine.setPedalEnabled(settings.pedalEnabled)
   }, [settings.pedalEnabled])
   useEffect(() => {
+    audioEngine.setReverbMix(settings.reverbMix)
+  }, [settings.reverbMix])
+  useEffect(() => {
+    audioEngine.setReverbSize(settings.reverbSize)
+  }, [settings.reverbSize])
+  useEffect(() => {
     audioEngine.setLoop(loop)
   }, [loop])
 

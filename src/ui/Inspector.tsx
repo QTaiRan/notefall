@@ -18,7 +18,7 @@ export function Inspector() {
           Reset
         </Button>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 pb-6">
+      <div className="scroll-thin flex-1 overflow-y-auto px-3 pb-6">
         <SectionTitle>Camera</SectionTitle>
         <SliderRow label="FOV" value={s.cameraFov} min={20} max={80} step={1} onChange={(v) => update({ cameraFov: v })} />
         <SliderRow label="Position X" value={s.cameraPos[0]} min={-10} max={10} step={0.1} onChange={(v) => update({ cameraPos: [v, s.cameraPos[1], s.cameraPos[2]] })} />
@@ -67,6 +67,10 @@ export function Inspector() {
         <SliderRow label="Volume (dB)" value={s.volume} min={-40} max={6} step={0.5} onChange={(v) => update({ volume: v })} />
         <SliderRow label="Speed" value={s.playbackRate} min={0.25} max={2} step={0.05} onChange={(v) => update({ playbackRate: v })} />
         <SwitchRow label="Pedal Enabled" value={s.pedalEnabled} onChange={(v) => update({ pedalEnabled: v })} />
+
+        <SectionTitle>Reverb</SectionTitle>
+        <SliderRow label="Mix" value={s.reverbMix} min={0} max={1} step={0.01} onChange={(v) => update({ reverbMix: v })} />
+        <SliderRow label="Size (s)" value={s.reverbSize} min={0.3} max={5} step={0.1} onChange={(v) => update({ reverbSize: v })} />
 
         <div className="mt-4 px-2 text-[10px] text-neutral-600">
           Default colors: {defaultSettings.noteColor}

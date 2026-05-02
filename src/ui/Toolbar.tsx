@@ -31,7 +31,10 @@ export function Toolbar() {
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-950 px-3">
       <div className="flex items-center gap-2">
-        <span className="mr-2 text-sm font-semibold tracking-wide text-neutral-200">notefall</span>
+        <span className="flex items-baseline gap-1.5 mr-2">
+          <span className="text-sm font-semibold tracking-wide text-neutral-200">notefall</span>
+          <span className="font-mono text-[10px] text-neutral-500">v{__APP_VERSION__}</span>
+        </span>
         <Button
           onPress={onOpenFile}
           className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"

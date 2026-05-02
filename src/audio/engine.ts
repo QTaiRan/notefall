@@ -40,6 +40,8 @@ export class AudioEngine {
   private pedalEnabled = true
   private volumeDb = 0
   private loop = false
+  private reverbMix = 0
+  private reverbSize = 2.0
 
   private noteIdx = 0
   private pedalIdx = 0
@@ -62,6 +64,8 @@ export class AudioEngine {
     if (this.piano) return
     this.piano = await createPiano(onProgress)
     this.piano.setVolumeDb(this.volumeDb)
+    this.piano.setReverbSize(this.reverbSize)
+    this.piano.setReverbMix(this.reverbMix)
   }
 
   isReady(): boolean {
@@ -71,6 +75,16 @@ export class AudioEngine {
   setVolumeDb(db: number): void {
     this.volumeDb = db
     this.piano?.setVolumeDb(db)
+  }
+
+  setReverbMix(mix: number): void {
+    this.reverbMix = mix
+    this.piano?.setReverbMix(mix)
+  }
+
+  setReverbSize(seconds: number): void {
+    this.reverbSize = seconds
+    this.piano?.setReverbSize(seconds)
   }
 
   setRate(rate: number): void {

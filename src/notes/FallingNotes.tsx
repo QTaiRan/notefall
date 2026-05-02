@@ -6,7 +6,10 @@ import { audioEngine } from '../audio/engine'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
 
 const MAX_INSTANCES = 4096
-const FALL_DISTANCE = 3.5
+// Buffer in world units between the visible top edge of the camera frustum
+// and the note spawn line — keeps notes off-screen when they're created so
+// they can slide in from above instead of popping into view mid-screen.
+const SPAWN_BUFFER = 1.0
 
 const VERTEX_SHADER = /* glsl */ `
   attribute vec2 instanceSize;
@@ -124,6 +127,15 @@ export function FallingNotes() {
     const widthScale = settings.noteWidthScale
     // notes sit just in front of the black keys (which are at z = 0.04)
     const noteZ = 0.05
+
+    // Compute how far above the keyboard a note spawns so that the spawn line
+    // sits comfortably outside the visible frustum. Approximate the visible
+    // top from camera distance + FOV; assumes the camera looks roughly toward
+    // the keyboard plane (true for our setup).
+    const camDistance = Math.abs(settings.cameraPos[2])
+    const halfVisHeight = camDistance * Math.tan((settings.cameraFov * Math.PI) / 360)
+    const visibleTop = settings.cameraLookAt[1] + halfVisHeight
+    const FALL_DISTANCE = Math.max(0.5, visibleTop - hitY) + SPAWN_BUFFER
 
     let count = 0
     const notes = song?.notes ?? []

@@ -36,6 +36,8 @@ export type Settings = {
   volume: number
   playbackRate: number
   pedalEnabled: boolean
+  reverbMix: number
+  reverbSize: number
 }
 
 export const defaultSettings: Settings = {
@@ -64,6 +66,8 @@ export const defaultSettings: Settings = {
   volume: -6,
   playbackRate: 1.0,
   pedalEnabled: true,
+  reverbMix: 0.5,
+  reverbSize: 1.0,
 }
 
 export type TransportState = 'stopped' | 'playing' | 'paused'
