@@ -158,12 +158,15 @@ export function FallingNotes() {
         // into the keyboard area (where the keys' depth buffer hides it).
         const headY = hitY + (headT / fall) * FALL_DISTANCE
         const tailY = hitY + (tailT / fall) * FALL_DISTANCE
-        // For 'down', head is the lower edge (closer to keyboard).
-        bottomY = headY
         const visualLength = Math.max(minLength, tailY - headY)
-        topY = bottomY + visualLength
-        // Skip once the entire visual rect is below the hit line — the
-        // keyboard would hide it completely anyway.
+        const naturalTopY = headY + visualLength
+        // Clamp the visible bottom at the keyboard's front edge. For long
+        // notes the head naturally descends well past the keyboard; without
+        // this the unhidden strip below the keyboard would leak the note.
+        bottomY = Math.max(headY, settings.keyboardY)
+        topY = naturalTopY
+        // Skip once the entire visual rect is at or below the hit line —
+        // the backdrop would hide it completely anyway.
         if (topY <= hitY) continue
       } else {
         // Past notes rise from the keyboard upward (history trail).
