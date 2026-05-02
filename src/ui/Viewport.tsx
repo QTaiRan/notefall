@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Scene } from '../scene/Scene'
+import { SeekBar } from './SeekBar'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { parseMidi } from '../midi/parse'
@@ -61,8 +62,14 @@ export function Viewport() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [dragOver, setDragOver] = useState(false)
+  const [hovering, setHovering] = useState(false)
+  const transport = useStore((s) => s.transport)
   const setSong = useStore((s) => s.setSong)
   const setTransport = useStore((s) => s.setTransport)
+
+  // Show transport controls on hover; also keep them visible whenever the
+  // song is not actively playing (so the user can always see play/seek).
+  const controlsVisible = hovering || transport !== 'playing'
 
   useEffect(() => {
     const el = wrapRef.current
@@ -110,10 +117,19 @@ export function Viewport() {
       <div
         className="relative shadow-2xl"
         style={{ width: size.w, height: size.h, touchAction: 'none' }}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
       >
         <Scene />
         <PausedIndicator />
         <FastForwardIndicator />
+        <div
+          className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-opacity duration-200 ${
+            controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+          }`}
+        >
+          <SeekBar />
+        </div>
         {dragOver && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-sky-500/10 ring-2 ring-inset ring-sky-400">
             <span className="rounded bg-neutral-950/80 px-3 py-1 text-sm text-sky-300">

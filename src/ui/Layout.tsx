@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Toolbar } from './Toolbar'
 import { Inspector } from './Inspector'
-import { SeekBar } from './SeekBar'
 import { Viewport } from './Viewport'
 import { LoadingOverlay } from './LoadingOverlay'
 import { useStore } from '../store'
@@ -11,7 +10,6 @@ export function Layout() {
   const settings = useStore((s) => s.settings)
   const transport = useStore((s) => s.transport)
   const loop = useStore((s) => s.loop)
-  const [currentTime, setCurrentTime] = useState(0)
 
   // sync engine settings
   useEffect(() => {
@@ -33,14 +31,14 @@ export function Layout() {
     audioEngine.setLoop(loop)
   }, [loop])
 
-  // poll engine time for UI display (the 3D scene reads it directly)
+  // sync transport state if engine auto-stopped at end-of-song
   useEffect(() => {
+    if (transport !== 'playing') return
     let raf = 0
     const loop = () => {
-      setCurrentTime(audioEngine.currentSongTime())
-      // also sync transport state if engine auto-stopped
-      if (transport === 'playing' && !audioEngine.isPlaying()) {
+      if (!audioEngine.isPlaying()) {
         useStore.getState().setTransport('stopped')
+        return
       }
       raf = requestAnimationFrame(loop)
     }
@@ -55,7 +53,6 @@ export function Layout() {
         <Viewport />
         <Inspector />
       </div>
-      <SeekBar currentTime={currentTime} />
       <LoadingOverlay />
     </div>
   )

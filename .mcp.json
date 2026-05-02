@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "react-aria": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@react-aria/mcp@latest"
+      ],
+      "env": {}
+    }
+  }
+}
