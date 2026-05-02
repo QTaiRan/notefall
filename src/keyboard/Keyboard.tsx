@@ -358,17 +358,6 @@ export function Keyboard() {
 
   return (
     <group position={[0, settings.keyboardY, 0]}>
-      {/* Opaque backdrop sitting just behind the keys: notes (rendered at
-          z = -0.1) would otherwise show through the ~4% gap between adjacent
-          white keys (E↔F and B↔C, where there's no black key to cover the
-          slit). Painted in the scene background colour so the gaps look the
-          same as before notes were moved behind the keyboard. */}
-      <mesh position={[0, WHITE_KEY_LENGTH / 2, -0.05]}>
-        <planeGeometry
-          args={[KEYBOARD_LAYOUT.totalWidth + 0.5, WHITE_KEY_LENGTH]}
-        />
-        <meshBasicMaterial color={settings.backgroundColor} toneMapped={false} />
-      </mesh>
       {KEYBOARD_LAYOUT.keys.map((k, i) => (
         <mesh
           key={k.midi}

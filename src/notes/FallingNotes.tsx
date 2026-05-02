@@ -15,10 +15,13 @@ const VERTEX_SHADER = /* glsl */ `
   attribute vec2 instanceSize;
   varying vec2 vUv;
   varying vec2 vSize;
+  varying float vWorldY;
   void main() {
     vUv = uv;
     vSize = instanceSize;
-    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+    vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vWorldY = worldPos.y;
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
   }
 `
 
@@ -26,10 +29,15 @@ const FRAGMENT_SHADER = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
   varying vec2 vSize;
+  varying float vWorldY;
   uniform vec3 uColor;
   uniform float uEmissive;
   uniform float uOpacity;
   uniform float uRadius;
+  // World-space y of the keyboard's hit line. Pixels below it are clipped
+  // so notes appear to "slide behind the keyboard". Per-pixel world-space
+  // check, so it has no perspective parallax.
+  uniform float uHitY;
 
   float sdRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + vec2(r);
@@ -37,6 +45,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   }
 
   void main() {
+    if (vWorldY < uHitY) discard;
     // Reject uninitialised instances (vSize=0) explicitly — the SDF degenerates
     // to d=0 at the origin and would otherwise render a bright square.
     if (vSize.x < 0.0001 || vSize.y < 0.0001) discard;
@@ -79,6 +88,7 @@ export function FallingNotes() {
         uEmissive: { value: settings.noteEmissive },
         uOpacity: { value: settings.noteOpacity },
         uRadius: { value: settings.noteCornerRadius },
+        uHitY: { value: 0 },
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
@@ -126,10 +136,12 @@ export function FallingNotes() {
     const fall = settings.fallDurationSec
     const widthScale = settings.noteWidthScale
     const minLength = Math.max(0.01, settings.noteMinLength)
-    // Notes sit BEHIND the keyboard (z < 0) so the keys' opaque depth buffer
-    // occludes the portion of a note that has crossed the hit line. This is
-    // what produces the "slide under the keyboard" effect on landing.
-    const noteZ = -0.1
+    // Sit at the same z plane as the keys (slightly in front so they layer
+    // cleanly). Hit-line clipping happens per-pixel in the fragment shader,
+    // so the note's bottom can extend below hitY in geometry without showing
+    // visually — and there's no perspective parallax between note and key.
+    const noteZ = 0.05
+    material.uniforms.uHitY.value = hitY
 
     // Compute how far above the keyboard a note spawns so that the spawn line
     // sits comfortably outside the visible frustum. Approximate the visible
@@ -150,23 +162,17 @@ export function FallingNotes() {
       if (isDown) {
         // Future notes fall from above onto the keyboard.
         // headT positive = head still in the future; negative = head has crossed
-        // the hit line and the visual is sliding behind the keyboard.
+        // the hit line. The fragment shader clips pixels with worldY < hitY,
+        // so geometry below the hit line is invisible.
         const headT = n.time - t
         const tailT = headT + n.duration
         if (headT > fall) break // sorted by time → no later notes are visible yet
-        // Don't clamp progress — let head go below the hit line so it slides
-        // into the keyboard area (where the keys' depth buffer hides it).
         const headY = hitY + (headT / fall) * FALL_DISTANCE
         const tailY = hitY + (tailT / fall) * FALL_DISTANCE
         const visualLength = Math.max(minLength, tailY - headY)
-        const naturalTopY = headY + visualLength
-        // Clamp the visible bottom at the keyboard's front edge. For long
-        // notes the head naturally descends well past the keyboard; without
-        // this the unhidden strip below the keyboard would leak the note.
-        bottomY = Math.max(headY, settings.keyboardY)
-        topY = naturalTopY
-        // Skip once the entire visual rect is at or below the hit line —
-        // the backdrop would hide it completely anyway.
+        bottomY = headY
+        topY = bottomY + visualLength
+        // Skip once the entire visual rect is at or below the hit line.
         if (topY <= hitY) continue
       } else {
         // Past notes rise from the keyboard upward (history trail).
