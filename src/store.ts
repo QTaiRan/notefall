@@ -93,6 +93,10 @@ type AppState = {
   loop: boolean
   setLoop: (b: boolean) => void
 
+  // True while the user is holding the falling-notes area to fast-forward.
+  fastForward: boolean
+  setFastForward: (b: boolean) => void
+
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
@@ -113,6 +117,9 @@ export const useStore = create<AppState>((set) => ({
 
   loop: false,
   setLoop: (loop) => set({ loop }),
+
+  fastForward: false,
+  setFastForward: (fastForward) => set({ fastForward }),
 
   settings: defaultSettings,
   updateSettings: (patch) =>

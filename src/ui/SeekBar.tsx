@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button, Slider, SliderTrack, SliderThumb } from 'react-aria-components'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
+import { pauseSong, playSong } from '../audio/playback'
 
 function fmt(t: number): string {
   if (!isFinite(t)) return '00:00'
@@ -17,9 +18,7 @@ function fmt(t: number): string {
 export function SeekBar({ currentTime }: { currentTime: number }) {
   const song = useStore((s) => s.song)
   const transport = useStore((s) => s.transport)
-  const setTransport = useStore((s) => s.setTransport)
   const loadStatus = useStore((s) => s.loadStatus)
-  const setLoadStatus = useStore((s) => s.setLoadStatus)
   const loop = useStore((s) => s.loop)
   const setLoop = useStore((s) => s.setLoop)
 
@@ -37,22 +36,6 @@ export function SeekBar({ currentTime }: { currentTime: number }) {
     setDragValue(null)
   }
 
-  const onPlay = async () => {
-    if (!song) return
-    if (loadStatus.state !== 'ready') {
-      setLoadStatus({ state: 'loading', loaded: 0, total: 1 })
-      await audioEngine.init((p) => {
-        setLoadStatus({ state: 'loading', loaded: p.loaded, total: p.total })
-      })
-      setLoadStatus({ state: 'ready' })
-    }
-    await audioEngine.play()
-    setTransport('playing')
-  }
-  const onPause = () => {
-    audioEngine.pause()
-    setTransport('paused')
-  }
   const onRewind = () => {
     audioEngine.seek(0)
     useStore.getState().setCurrentTime(0)
@@ -76,7 +59,7 @@ export function SeekBar({ currentTime }: { currentTime: number }) {
           </Button>
           <Button
             isDisabled={!song || loadStatus.state === 'loading'}
-            onPress={transport === 'playing' ? onPause : onPlay}
+            onPress={transport === 'playing' ? pauseSong : playSong}
             aria-label={transport === 'playing' ? 'Pause' : 'Play'}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-500 text-neutral-950 outline-none hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800 disabled:text-neutral-600"
           >
