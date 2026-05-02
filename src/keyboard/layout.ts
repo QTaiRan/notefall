@@ -7,10 +7,16 @@ export const MIDI_MIN = 21
 export const MIDI_MAX = 108
 export const KEY_COUNT = MIDI_MAX - MIDI_MIN + 1 // 88
 
+// Proportions follow a real grand piano (mid-spec):
+//   white key 23.75 × 147.5 mm  → aspect 6.21
+//   black key 13.85 × 95 mm     → aspect 6.86, width = 0.583 × white
+// World units are scaled so the full 88-key span keeps the existing camera
+// framing (52 × 0.23 ≈ 11.96), with the other three dimensions derived
+// proportionally from the real-world ratios above.
 export const WHITE_KEY_WIDTH = 0.23
-export const WHITE_KEY_LENGTH = 1.6
-export const BLACK_KEY_WIDTH = 0.13
-export const BLACK_KEY_LENGTH = 1.0
+export const WHITE_KEY_LENGTH = 1.43
+export const BLACK_KEY_WIDTH = 0.134
+export const BLACK_KEY_LENGTH = 0.92
 export const KEY_THICKNESS = 0.06
 
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10])

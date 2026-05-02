@@ -3,7 +3,14 @@ import * as THREE from "three";
 import * as Tone from "tone";
 import { useFrame } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
-import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN } from "./layout";
+import {
+  KEYBOARD_LAYOUT,
+  KEY_COUNT,
+  MIDI_MAX,
+  MIDI_MIN,
+  WHITE_KEY_LENGTH,
+  WHITE_KEY_WIDTH,
+} from "./layout";
 import { useStore } from "../store";
 import { audioEngine } from "../audio/engine";
 
@@ -326,6 +333,29 @@ export function Keyboard() {
     }
   });
 
+  // X positions of the B→C octave boundaries (right edge of each B key).
+  const octaveDividerXs = useMemo(() => {
+    const xs: number[] = [];
+    for (let midi = MIDI_MIN; midi <= MIDI_MAX; midi++) {
+      // pitch class 11 = B
+      if (((midi % 12) + 12) % 12 !== 11) continue;
+      const k = KEYBOARD_LAYOUT.keys[midi - MIDI_MIN];
+      xs.push(k.x + WHITE_KEY_WIDTH / 2);
+    }
+    return xs;
+  }, []);
+
+  // Length of each divider: from the back edge of the keyboard up to the top
+  // of the visible camera frustum (matches the FallingNotes spawn region).
+  const camDistance = Math.abs(settings.cameraPos[2]);
+  const halfVisHeight =
+    camDistance * Math.tan((settings.cameraFov * Math.PI) / 360);
+  const visibleTopWorld = settings.cameraLookAt[1] + halfVisHeight;
+  const dividerLength = Math.max(
+    0,
+    visibleTopWorld - (settings.keyboardY + WHITE_KEY_LENGTH),
+  );
+
   return (
     <group position={[0, settings.keyboardY, 0]}>
       {KEYBOARD_LAYOUT.keys.map((k, i) => (
@@ -345,6 +375,22 @@ export function Keyboard() {
           />
         </mesh>
       ))}
+      {dividerLength > 0 &&
+        octaveDividerXs.map((x, i) => (
+          <mesh
+            key={`octave-divider-${i}`}
+            position={[x, WHITE_KEY_LENGTH + dividerLength / 2, 0.02]}
+          >
+            <planeGeometry args={[0.008, dividerLength]} />
+            <meshBasicMaterial
+              color="#3a3a3a"
+              transparent
+              opacity={0.45}
+              toneMapped={false}
+              depthWrite={false}
+            />
+          </mesh>
+        ))}
     </group>
   );
 }
