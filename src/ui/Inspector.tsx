@@ -60,6 +60,13 @@ export function Inspector() {
         <SliderRow label="Corner Radius" value={s.noteCornerRadius} min={0} max={0.2} step={0.005} onChange={(v) => update({ noteCornerRadius: v })} />
         <SliderRow label="Min Length" value={s.noteMinLength} min={0} max={0.6} step={0.01} onChange={(v) => update({ noteMinLength: v })} />
 
+        <SectionTitle>Flash</SectionTitle>
+        <SliderRow label="Intensity" value={s.flashIntensity} min={0} max={2} step={0.05} onChange={(v) => update({ flashIntensity: v })} />
+        <SliderRow label="Size" value={s.flashSize} min={0.3} max={5} step={0.05} onChange={(v) => update({ flashSize: v })} />
+        <SliderRow label="Width" value={s.flashWidth} min={0.3} max={5} step={0.05} onChange={(v) => update({ flashWidth: v })} />
+        <SliderRow label="Halo" value={s.flashHaloWidth} min={0} max={2} step={0.05} onChange={(v) => update({ flashHaloWidth: v })} />
+        <ColorRow label="Color" value={s.flashColor} onChange={(v) => update({ flashColor: v })} />
+
         <SectionTitle>Bloom</SectionTitle>
         <SliderRow label="Intensity" value={s.bloomIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ bloomIntensity: v })} />
         <SliderRow label="Threshold" value={s.bloomThreshold} min={0} max={1} step={0.01} onChange={(v) => update({ bloomThreshold: v })} />

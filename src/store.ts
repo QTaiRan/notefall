@@ -20,6 +20,13 @@ export type Settings = {
   noteWidthScale: number
   // Minimum visible length so very short notes do not collapse into a line
   noteMinLength: number
+  // White flash that appears at the contact line while a note is held
+  flashIntensity: number
+  flashSize: number
+  flashWidth: number
+  // Softness of the core falloff — larger = wider halo edge around the bright spot
+  flashHaloWidth: number
+  flashColor: string
   // Effects (Bloom)
   bloomIntensity: number
   bloomThreshold: number
@@ -55,6 +62,11 @@ export const defaultSettings: Settings = {
   noteCornerRadius: 0.05,
   noteWidthScale: 1.0,
   noteMinLength: 0.15,
+  flashIntensity: 0.8,
+  flashSize: 2.5,
+  flashWidth: 2.5,
+  flashHaloWidth: 0.5,
+  flashColor: '#ffffff',
   bloomIntensity: 1.2,
   bloomThreshold: 0.2,
   bloomRadius: 0.7,

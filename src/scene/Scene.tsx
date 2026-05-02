@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { Keyboard } from '../keyboard/Keyboard'
 import { FallingNotes } from '../notes/FallingNotes'
+import { LandingFlashes } from '../notes/LandingFlashes'
 import { WHITE_KEY_LENGTH } from '../keyboard/layout'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong, togglePlayback } from '../audio/playback'
@@ -45,6 +46,7 @@ function SceneContents() {
       <PlayToggleArea />
       <Keyboard />
       <FallingNotes />
+      <LandingFlashes />
     </>
   )
 }
