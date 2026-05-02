@@ -126,8 +126,10 @@ export function FallingNotes() {
     const fall = settings.fallDurationSec
     const widthScale = settings.noteWidthScale
     const minLength = Math.max(0.01, settings.noteMinLength)
-    // notes sit just in front of the black keys (which are at z = 0.04)
-    const noteZ = 0.05
+    // Notes sit BEHIND the keyboard (z < 0) so the keys' opaque depth buffer
+    // occludes the portion of a note that has crossed the hit line. This is
+    // what produces the "slide under the keyboard" effect on landing.
+    const noteZ = -0.1
 
     // Compute how far above the keyboard a note spawns so that the spawn line
     // sits comfortably outside the visible frustum. Approximate the visible
@@ -142,37 +144,46 @@ export function FallingNotes() {
     const notes = song?.notes ?? []
     for (let i = 0; i < notes.length; i++) {
       const n = notes[i]
-      let headProgress: number
-      let tailProgress: number
+      let topY: number
+      let bottomY: number
 
       if (isDown) {
         // Future notes fall from above onto the keyboard.
-        // headT = time until head hits the keyboard (positive = future).
+        // headT positive = head still in the future; negative = head has crossed
+        // the hit line and the visual is sliding behind the keyboard.
         const headT = n.time - t
         const tailT = headT + n.duration
         if (headT > fall) break // sorted by time → no later notes are visible yet
-        if (tailT < 0) continue // already past
-        headProgress = Math.max(0, headT) / fall
-        tailProgress = Math.max(0, tailT) / fall
+        // Don't clamp progress — let head go below the hit line so it slides
+        // into the keyboard area (where the keys' depth buffer hides it).
+        const headY = hitY + (headT / fall) * FALL_DISTANCE
+        const tailY = hitY + (tailT / fall) * FALL_DISTANCE
+        // For 'down', head is the lower edge (closer to keyboard).
+        bottomY = headY
+        const visualLength = Math.max(minLength, tailY - headY)
+        topY = bottomY + visualLength
+        // Skip once the entire visual rect is below the hit line — the
+        // keyboard would hide it completely anyway.
+        if (topY <= hitY) continue
       } else {
         // Past notes rise from the keyboard upward (history trail).
-        // headT = time since the head emerged.
         const headT = t - n.time
         const tailT = headT - n.duration
-        if (headT < 0) break // sorted by time → all later notes haven't started
-        if (tailT > fall) continue // fully exited the visible strip
-        headProgress = Math.min(1, headT / fall)
-        tailProgress = Math.max(0, Math.min(1, tailT / fall))
+        if (headT < 0) break // not yet emerged
+        const headY = hitY + (headT / fall) * FALL_DISTANCE
+        const tailY = hitY + (tailT / fall) * FALL_DISTANCE
+        // For 'up', head is the upper edge (rising away from keyboard).
+        topY = headY
+        const visualLength = Math.max(minLength, headY - tailY)
+        bottomY = topY - visualLength
+        // Skip once the visual rect has fully risen above the visible top.
+        if (bottomY >= visibleTop) continue
+        // Skip while head hasn't crossed the hit line yet (entirely hidden).
+        if (topY <= hitY) continue
       }
 
-      // Both progress values are in [0, 1]; positive offset = above the keyboard.
-      const headY = hitY + headProgress * FALL_DISTANCE
-      const tailY = hitY + tailProgress * FALL_DISTANCE
-      // Anchor the end nearest the keyboard so the visual landing time stays
-      // accurate, then enforce the minimum length upward.
-      const bottomY = Math.min(headY, tailY)
-      const length = Math.max(minLength, Math.abs(tailY - headY))
-      const centerY = bottomY + length / 2
+      const length = topY - bottomY
+      const centerY = (topY + bottomY) / 2
 
       const idx = n.midi - MIDI_MIN
       if (idx < 0 || idx >= KEY_COUNT) continue
@@ -204,15 +215,17 @@ export function FallingNotes() {
         const noteDuration = (ln.endTime ?? liveNow) - ln.startTime
         const tailT = headT - noteDuration
         if (headT < 0) continue
-        if (tailT > fall) continue
 
-        const headProgress = Math.min(1, headT / fall)
-        const tailProgress = Math.max(0, Math.min(1, tailT / fall))
-        const headY = hitY + headProgress * FALL_DISTANCE
-        const tailY = hitY + tailProgress * FALL_DISTANCE
-        const bottomY = Math.min(headY, tailY)
-        const length = Math.max(minLength, Math.abs(headY - tailY))
-        const centerY = bottomY + length / 2
+        const headY = hitY + (headT / fall) * FALL_DISTANCE
+        const tailY = hitY + (tailT / fall) * FALL_DISTANCE
+        const topY = headY
+        const visualLength = Math.max(minLength, headY - tailY)
+        const bottomY = topY - visualLength
+        if (bottomY >= visibleTop) continue
+        if (topY <= hitY) continue
+
+        const length = topY - bottomY
+        const centerY = (topY + bottomY) / 2
 
         const idx = ln.midi - MIDI_MIN
         if (idx < 0 || idx >= KEY_COUNT) continue
