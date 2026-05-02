@@ -6,8 +6,18 @@ type ActiveNote = {
   id: number
   midi: number
   endTime: number
-  stop: () => void
+  stop: (time?: number) => void
 }
+
+/**
+ * Buffer in seconds added when calling `stop` so it always lands after the
+ * scheduled `start` time (which uses a 15 ms lookahead). Without this,
+ * `voice.stop()` defaults to `ctx.currentTime` and — if the note's start was
+ * scheduled in the future — the source is cancelled before it ever plays.
+ * Symptom: silently dropped notes at high playback speed when many notes
+ * collapse into a single frame.
+ */
+const STOP_BUFFER = 0.02
 
 /** Note triggered live by the user (touch/click), independent of song timeline. */
 export type LiveNote = {
@@ -50,7 +60,7 @@ export class AudioEngine {
   // notes currently sounding (key still held)
   private active = new Map<number, ActiveNote>()
   // notes whose key was released but pedal is holding the dampers up
-  private pedalHeld: Array<{ midi: number; stop: () => void }> = []
+  private pedalHeld: Array<{ midi: number; stop: (time?: number) => void }> = []
 
   private listeners = new Set<KeyEventListener>()
 
@@ -184,11 +194,12 @@ export class AudioEngine {
       release: () => {
         if (note.endTime !== null) return
         note.endTime = performance.now() / 1000
+        const stopTime = (this.piano?.context.currentTime ?? 0) + STOP_BUFFER
         // pedal sustain applies equally to user-triggered notes
         if (this.pedalEnabled && this.pedalDown) {
           this.pedalHeld.push({ midi, stop: stopFn })
         } else {
-          stopFn()
+          stopFn(stopTime)
         }
         this.liveStops.delete(id)
         this.emit({ type: 'off', midi, songTime: this.currentSongTime() })
@@ -217,7 +228,8 @@ export class AudioEngine {
   }
 
   private flushPedalHeld(): void {
-    for (const h of this.pedalHeld) h.stop()
+    const stopTime = (this.piano?.context.currentTime ?? 0) + STOP_BUFFER
+    for (const h of this.pedalHeld) h.stop(stopTime)
     this.pedalHeld = []
   }
 
@@ -300,12 +312,13 @@ export class AudioEngine {
     }
 
     // process note offs (any active note whose end has passed)
+    const stopTime = this.piano.context.currentTime + STOP_BUFFER
     for (const a of this.active.values()) {
       if (a.endTime <= songTime) {
         if (this.pedalEnabled && this.pedalDown) {
           this.pedalHeld.push({ midi: a.midi, stop: a.stop })
         } else {
-          a.stop()
+          a.stop(stopTime)
         }
         this.emit({ type: 'off', midi: a.midi, songTime })
         this.active.delete(a.id)

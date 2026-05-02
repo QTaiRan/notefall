@@ -36,14 +36,18 @@ export function Keyboard() {
   const pendingMidi = useRef<Map<number, number>>(new Map())
 
   useEffect(() => {
+    // held[] is a reference count of active voices on each pitch, not a flag.
+    // When the same midi is retriggered (note A's off and note B's on may
+    // arrive in either order within a tick), set/clear semantics would lose
+    // the new note's "down" state. Counting handles overlap correctly.
     const off = audioEngine.addKeyListener((ev) => {
       const idx = ev.midi - MIDI_MIN
       if (idx < 0 || idx >= KEY_COUNT) return
       if (ev.type === 'on') {
         glow[idx] = Math.max(glow[idx], 0.5 + ev.velocity * 0.6)
-        held[idx] = 1
+        held[idx]++
       } else {
-        held[idx] = 0
+        held[idx] = Math.max(0, held[idx] - 1)
       }
     })
     return off
