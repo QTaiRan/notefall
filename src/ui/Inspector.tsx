@@ -81,6 +81,23 @@ export function Inspector() {
         <SliderRow label="Halo Intensity" value={s.particleHaloIntensity} min={0} max={1} step={0.01} onChange={(v) => update({ particleHaloIntensity: v })} />
         <SliderRow label="Halo Size" value={s.particleHaloSize} min={0} max={5} step={0.1} onChange={(v) => update({ particleHaloSize: v })} />
 
+        <SectionTitle>Hit Line</SectionTitle>
+        <SwitchRow label="Enabled" value={s.hitLineEnabled} onChange={(v) => update({ hitLineEnabled: v })} />
+        <ColorRow label="Color" value={s.hitLineColor} onChange={(v) => update({ hitLineColor: v })} />
+        <SliderRow label="Bar Intensity" value={s.hitLineIntensity} min={0} max={8} step={0.05} onChange={(v) => update({ hitLineIntensity: v })} />
+        <SliderRow label="Bar Y" value={s.hitLineBarY} min={-1} max={1} step={0.01} onChange={(v) => update({ hitLineBarY: v })} />
+        <SliderRow label="Bar Thickness" value={s.hitLineThickness} min={0} max={1} step={0.01} onChange={(v) => update({ hitLineThickness: v })} />
+        <SliderRow label="Bar Halo" value={s.hitLineBarHalo} min={0} max={6} step={0.05} onChange={(v) => update({ hitLineBarHalo: v })} />
+        <SliderRow label="Wave Intensity" value={s.hitLineWaveIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ hitLineWaveIntensity: v })} />
+        <SliderRow label="Wave Y" value={s.hitLineWaveY} min={-1} max={1} step={0.01} onChange={(v) => update({ hitLineWaveY: v })} />
+        <SliderRow label="Wave Amplitude" value={s.hitLineWaveAmplitude} min={0} max={1} step={0.01} onChange={(v) => update({ hitLineWaveAmplitude: v })} />
+        <SliderRow label="Wave Scale" value={s.hitLineWaveScale} min={0.5} max={200} step={0.5} onChange={(v) => update({ hitLineWaveScale: v })} />
+        <SliderRow label="Wave Scroll Speed" value={s.hitLineWaveScrollSpeed} min={-3} max={3} step={0.05} onChange={(v) => update({ hitLineWaveScrollSpeed: v })} />
+        <SliderRow label="Wave Morph Speed" value={s.hitLineWaveMorphSpeed} min={0} max={3} step={0.05} onChange={(v) => update({ hitLineWaveMorphSpeed: v })} />
+        <SliderRow label="Wave Thickness" value={s.hitLineWaveThickness} min={0} max={0.2} step={0.005} onChange={(v) => update({ hitLineWaveThickness: v })} />
+        <SliderRow label="Wave Halo" value={s.hitLineWaveHalo} min={0} max={3} step={0.05} onChange={(v) => update({ hitLineWaveHalo: v })} />
+        <SliderRow label="Wave Grain" value={s.hitLineWaveGrain} min={0} max={3} step={0.05} onChange={(v) => update({ hitLineWaveGrain: v })} />
+
         <SectionTitle>Bloom</SectionTitle>
         <SliderRow label="Intensity" value={s.bloomIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ bloomIntensity: v })} />
         <SliderRow label="Threshold" value={s.bloomThreshold} min={0} max={1} step={0.01} onChange={(v) => update({ bloomThreshold: v })} />

@@ -41,6 +41,22 @@ export type Settings = {
   particleWindSpeed: number  // how fast the field evolves over time
   particleHaloIntensity: number // brightness of the soft glow around each particle's core
   particleHaloSize: number      // how far that glow extends past the core
+  // Glowing laser line at the keyboard hit point — straight bar + animated wavy beam
+  hitLineEnabled: boolean
+  hitLineColor: string
+  hitLineIntensity: number   // straight-bar brightness
+  hitLineThickness: number   // straight-bar core thickness (fraction of plane height)
+  hitLineWaveIntensity: number  // wavy laser brightness
+  hitLineWaveAmplitude: number  // vertical swing of the wave (fraction of plane half-height)
+  hitLineWaveScale: number      // wave spatial frequency along the keyboard
+  hitLineWaveScrollSpeed: number // horizontal scroll rate; signed (positive = rightward, negative = leftward)
+  hitLineWaveMorphSpeed: number  // in-place shape evolution (no horizontal motion)
+  hitLineWaveThickness: number  // wavy laser line thickness (fraction of plane)
+  hitLineWaveGrain: number      // particulate-ness: high-freq curve tremor + brightness modulation along the line
+  hitLineBarY: number           // vertical offset of the straight bar from the hit line (world units)
+  hitLineWaveY: number          // vertical offset of the wave's center from the hit line (world units)
+  hitLineBarHalo: number        // bar halo extent — divides the gaussian falloff so larger = wider
+  hitLineWaveHalo: number       // wave halo extent — same idea, around the wavy laser line
   // Effects (Bloom)
   bloomIntensity: number
   bloomThreshold: number
@@ -93,6 +109,21 @@ export const defaultSettings: Settings = {
   particleWindSpeed: 1.0,
   particleHaloIntensity: 0.2,
   particleHaloSize: 1.5,
+  hitLineEnabled: true,
+  hitLineColor: '#5ad7ff',
+  hitLineIntensity: 2.5,
+  hitLineThickness: 0.3,
+  hitLineWaveIntensity: 1.0,
+  hitLineWaveAmplitude: 0.2,
+  hitLineWaveScale: 60.0,
+  hitLineWaveScrollSpeed: -0.5,
+  hitLineWaveMorphSpeed: 0.7,
+  hitLineWaveThickness: 0.04,
+  hitLineWaveGrain: 0.8,
+  hitLineBarY: 0,
+  hitLineWaveY: 0,
+  hitLineBarHalo: 2.0,
+  hitLineWaveHalo: 0.8,
   bloomIntensity: 1.2,
   bloomThreshold: 0.2,
   bloomRadius: 0.7,
@@ -100,7 +131,7 @@ export const defaultSettings: Settings = {
   backgroundColor: '#05060a',
   whiteKeyColor: '#f5f5f5',
   blackKeyColor: '#161616',
-  keyboardBrightness: 1.0,
+  keyboardBrightness: 0.8,
   keyGlowColor: '#5ad7ff',
   keyGlowIntensity: 1.5,
   keyGlowDecay: 0.05,
