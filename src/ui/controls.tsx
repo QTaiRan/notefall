@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import {
   Slider,
   SliderOutput,
@@ -24,6 +24,53 @@ import {
 } from 'react-aria-components'
 import type { Key } from 'react-aria-components'
 
+/**
+ * Returns a ref to attach to a SliderTrack — when the user Cmd/Ctrl+clicks
+ * inside it, the slider snaps to `defaultValue` instead of jumping to the
+ * click position.
+ *
+ * Implementation: registers a NATIVE pointerdown listener in the capture
+ * phase + stopImmediatePropagation, so react-aria's own pointerdown
+ * (which would jump-to-click) never sees the event. React's synthetic
+ * onPointerDownCapture isn't strong enough here — react-aria attaches its
+ * handlers via direct DOM listeners that React can't pre-empt.
+ */
+function useResetOnModifierClick<T>(defaultValue: T | undefined, onChange: (v: T) => void) {
+  const ref = useRef<HTMLDivElement>(null)
+  // Keep latest values in a ref so the listener (registered once) sees fresh
+  // closures without re-attaching on every render.
+  const latest = useRef({ defaultValue, onChange })
+  latest.current = { defaultValue, onChange }
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const downHandler = (e: PointerEvent) => {
+      const { defaultValue, onChange } = latest.current
+      if (defaultValue === undefined) return
+      if (!(e.metaKey || e.ctrlKey)) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      onChange(defaultValue)
+    }
+    // On macOS, Ctrl+click is interpreted as a secondary click and fires a
+    // contextmenu event. Suppress it specifically when the ctrl modifier
+    // was held (which is exactly our reset gesture); plain right-clicks
+    // without ctrl still get their context menu.
+    const ctxHandler = (e: MouseEvent) => {
+      if (latest.current.defaultValue !== undefined && e.ctrlKey) {
+        e.preventDefault()
+      }
+    }
+    el.addEventListener('pointerdown', downHandler, true)
+    el.addEventListener('contextmenu', ctxHandler)
+    return () => {
+      el.removeEventListener('pointerdown', downHandler, true)
+      el.removeEventListener('contextmenu', ctxHandler)
+    }
+  }, [])
+  return ref
+}
+
 type SliderRowProps = {
   label: string
   value: number
@@ -32,9 +79,12 @@ type SliderRowProps = {
   step?: number
   onChange: (v: number) => void
   format?: (v: number) => string
+  /** Double-clicking the label / value row resets to this. */
+  defaultValue?: number
 }
 
-export function SliderRow({ label, value, min, max, step = 0.01, onChange, format }: SliderRowProps) {
+export function SliderRow({ label, value, min, max, step = 0.01, onChange, format, defaultValue }: SliderRowProps) {
+  const trackRef = useResetOnModifierClick(defaultValue, onChange)
   return (
     <Slider
       value={value}
@@ -44,13 +94,16 @@ export function SliderRow({ label, value, min, max, step = 0.01, onChange, forma
       onChange={(v) => onChange(typeof v === 'number' ? v : v[0])}
       className="flex flex-col gap-1 py-1"
     >
-      <div className="flex items-center justify-between text-xs">
+      <div className="flex items-center justify-between text-xs select-none">
         <Label className="text-neutral-400">{label}</Label>
         <SliderOutput className="text-neutral-200 tabular-nums">
           {format ? format(value) : value.toFixed(step < 1 ? 2 : 0)}
         </SliderOutput>
       </div>
-      <SliderTrack className="relative flex h-4 w-full cursor-pointer items-center">
+      <SliderTrack
+        ref={trackRef}
+        className="relative flex h-4 w-full cursor-pointer items-center"
+      >
         {({ state, isHovered }) => {
           const expanded = isHovered || state.isThumbDragging(0)
           return (
@@ -84,16 +137,35 @@ type SwitchRowProps = {
   label: string
   value: boolean
   onChange: (v: boolean) => void
+  /** Double-clicking the label resets to this. */
+  defaultValue?: boolean
 }
 
-export function SwitchRow({ label, value, onChange }: SwitchRowProps) {
+export function SwitchRow({ label, value, onChange, defaultValue }: SwitchRowProps) {
   return (
     <Switch
       isSelected={value}
       onChange={onChange}
       className="group relative flex items-center justify-between gap-2 py-1.5 text-xs cursor-pointer"
     >
-      <span className="text-neutral-400">{label}</span>
+      <span
+        className="text-neutral-400 select-none"
+        // Stop the propagating click so the toggle doesn't flip on the
+        // double-click; then apply the default. preventDefault for good
+        // measure since react-aria's Switch listens for label-like clicks.
+        onDoubleClick={
+          defaultValue !== undefined
+            ? (e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onChange(defaultValue)
+              }
+            : undefined
+        }
+        title={defaultValue !== undefined ? 'Double-click to reset' : undefined}
+      >
+        {label}
+      </span>
       <span className="relative inline-block h-4 w-7 rounded-full bg-neutral-700 transition group-data-[selected]:bg-sky-500">
         <span className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white transition group-data-[selected]:translate-x-3" />
       </span>
@@ -105,12 +177,21 @@ type ColorRowProps = {
   label: string
   value: string
   onChange: (v: string) => void
+  /** Double-clicking the label resets to this. */
+  defaultValue?: string
 }
 
-export function ColorRow({ label, value, onChange }: ColorRowProps) {
+export function ColorRow({ label, value, onChange, defaultValue }: ColorRowProps) {
+  const reset = defaultValue !== undefined ? () => onChange(defaultValue) : undefined
   return (
     <div className="flex items-center justify-between py-1 text-xs">
-      <span className="text-neutral-400">{label}</span>
+      <span
+        className={`text-neutral-400 select-none ${reset ? 'cursor-pointer' : ''}`}
+        onDoubleClick={reset}
+        title={reset ? 'Double-click to reset' : undefined}
+      >
+        {label}
+      </span>
       <ColorPicker
         value={value}
         onChange={(color) => onChange(color.toString('hex'))}
@@ -158,12 +239,21 @@ type SelectRowProps<T extends string> = {
   value: T
   options: { value: T; label: string }[]
   onChange: (v: T) => void
+  /** Double-clicking the label resets to this. */
+  defaultValue?: T
 }
 
-export function SelectRow<T extends string>({ label, value, options, onChange }: SelectRowProps<T>) {
+export function SelectRow<T extends string>({ label, value, options, onChange, defaultValue }: SelectRowProps<T>) {
+  const reset = defaultValue !== undefined ? () => onChange(defaultValue) : undefined
   return (
     <div className="flex items-center justify-between py-1 text-xs">
-      <span className="text-neutral-400">{label}</span>
+      <span
+        className={`text-neutral-400 select-none ${reset ? 'cursor-pointer' : ''}`}
+        onDoubleClick={reset}
+        title={reset ? 'Double-click to reset' : undefined}
+      >
+        {label}
+      </span>
       <Select
         selectedKey={value}
         onSelectionChange={(k: Key | null) => k && onChange(String(k) as T)}
@@ -207,6 +297,8 @@ type VerticalSliderBandsProps = {
   onChange: (index: number, value: number) => void
   /** Pixel height of the slider track. */
   trackHeight?: number
+  /** Per-band default — double-clicking the band's readout resets it. */
+  defaultValues?: number[]
 }
 
 /**
@@ -227,64 +319,99 @@ export function VerticalSliderBands({
   step = 0.5,
   onChange,
   trackHeight = 96,
+  defaultValues,
 }: VerticalSliderBandsProps) {
-  const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1))
   return (
     <div className="flex items-stretch justify-between gap-1 py-2">
       {labels.map((label, i) => (
-        <div key={label} className="flex flex-1 flex-col items-center gap-1">
-          <span className="text-[9px] tabular-nums text-neutral-400">
-            {fmt(values[i] ?? 0)}
-          </span>
-          <Slider
-            orientation="vertical"
-            value={values[i] ?? 0}
-            minValue={min}
-            maxValue={max}
-            step={step}
-            onChange={(v) => onChange(i, typeof v === 'number' ? v : v[0])}
-          >
-            <SliderTrack
-              className="relative w-2 cursor-pointer"
-              style={{ height: trackHeight }}
-            >
-              {({ state, isHovered }) => {
-                const percent = state.getThumbPercent(0)
-                const expanded = isHovered || state.isThumbDragging(0)
-                // Fill from the 50% line out to the thumb position.
-                // percent: 0 = bottom (min), 1 = top (max), 0.5 = center.
-                const fillStyle: CSSProperties =
-                  percent >= 0.5
-                    ? { bottom: '50%', height: `${(percent - 0.5) * 100}%` }
-                    : { top: '50%', height: `${(0.5 - percent) * 100}%` }
-                return (
-                  <>
-                    <div
-                      className={`absolute inset-0 rounded-full transition-colors duration-150 ${
-                        expanded ? 'bg-neutral-700' : 'bg-neutral-800'
-                      }`}
-                    />
-                    {/* Center reference line (0 dB) */}
-                    <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-neutral-600" />
-                    <div
-                      className={`absolute inset-x-0 rounded-full transition-colors duration-150 ${
-                        expanded ? 'bg-sky-400' : 'bg-sky-500/80'
-                      }`}
-                      style={fillStyle}
-                    />
-                    <SliderThumb
-                      className={`left-1/2 h-3 w-3 rounded-full bg-white shadow ring-1 ring-neutral-900 outline-none transition-all duration-150 ${
-                        expanded ? 'scale-100 opacity-100' : 'scale-0 opacity-0'
-                      } data-[dragging]:scale-125 focus-visible:scale-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sky-400`}
-                    />
-                  </>
-                )
-              }}
-            </SliderTrack>
-          </Slider>
-          <span className="text-[9px] text-neutral-500">{label}</span>
-        </div>
+        <Band
+          key={label}
+          label={label}
+          value={values[i] ?? 0}
+          min={min}
+          max={max}
+          step={step}
+          trackHeight={trackHeight}
+          defaultValue={defaultValues?.[i]}
+          onChange={(v) => onChange(i, v)}
+        />
       ))}
+    </div>
+  )
+}
+
+type BandProps = {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  trackHeight: number
+  defaultValue?: number
+  onChange: (v: number) => void
+}
+
+/**
+ * Single column inside VerticalSliderBands. Split out so each band can own
+ * its own ref + reset listener (the modifier-click hook needs a stable ref
+ * per element, which doesn't compose with the .map() in the parent).
+ */
+function Band({ label, value, min, max, step, trackHeight, defaultValue, onChange }: BandProps) {
+  const trackRef = useResetOnModifierClick(defaultValue, onChange)
+  const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1))
+  return (
+    <div className="flex flex-1 flex-col items-center gap-1">
+      <span className="text-[9px] tabular-nums text-neutral-400 select-none">
+        {fmt(value)}
+      </span>
+      <Slider
+        orientation="vertical"
+        value={value}
+        minValue={min}
+        maxValue={max}
+        step={step}
+        onChange={(v) => onChange(typeof v === 'number' ? v : v[0])}
+      >
+        <SliderTrack
+          ref={trackRef}
+          className="relative w-2 cursor-pointer"
+          style={{ height: trackHeight }}
+        >
+          {({ state, isHovered }) => {
+            const percent = state.getThumbPercent(0)
+            const expanded = isHovered || state.isThumbDragging(0)
+            // Fill from the 50% line out to the thumb position.
+            // percent: 0 = bottom (min), 1 = top (max), 0.5 = center.
+            const fillStyle: CSSProperties =
+              percent >= 0.5
+                ? { bottom: '50%', height: `${(percent - 0.5) * 100}%` }
+                : { top: '50%', height: `${(0.5 - percent) * 100}%` }
+            return (
+              <>
+                <div
+                  className={`absolute inset-0 rounded-full transition-colors duration-150 ${
+                    expanded ? 'bg-neutral-700' : 'bg-neutral-800'
+                  }`}
+                />
+                {/* Center reference line (0 dB) */}
+                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-neutral-600" />
+                <div
+                  className={`absolute inset-x-0 rounded-full transition-colors duration-150 ${
+                    expanded ? 'bg-sky-400' : 'bg-sky-500/80'
+                  }`}
+                  style={fillStyle}
+                />
+                <SliderThumb
+                  className={`left-1/2 h-3 w-3 rounded-full bg-white shadow ring-1 ring-neutral-900 outline-none transition-all duration-150 ${
+                    expanded ? 'scale-100 opacity-100' : 'scale-0 opacity-0'
+                  } data-[dragging]:scale-125 focus-visible:scale-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sky-400`}
+                />
+              </>
+            )
+          }}
+        </SliderTrack>
+      </Slider>
+      <span className="text-[9px] text-neutral-500">{label}</span>
     </div>
   )
 }

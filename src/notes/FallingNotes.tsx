@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
+import { useCustomTexture } from './customTexture'
 
 const MAX_INSTANCES = 4096
 // Buffer in world units between the visible top edge of the camera frustum
@@ -35,6 +36,7 @@ const VERTEX_SHADER = /* glsl */ `
 const TEXTURE_SOLID = 0
 const TEXTURE_LIQUID = 1
 const TEXTURE_GEM = 2
+const TEXTURE_CUSTOM = 3
 
 const FRAGMENT_SHADER = /* glsl */ `
   precision highp float;
@@ -52,10 +54,19 @@ const FRAGMENT_SHADER = /* glsl */ `
   // (CPU side) for the value mapping.
   uniform int uTextureMode;
   uniform float uTextureScale;
-  uniform float uTextureSpeed;
+  // X/Y animation speed. Custom uses both axes for UV scroll; liquid and
+  // gem use only Y as their generic time multiplier (their patterns have
+  // no inherent direction).
+  uniform vec2 uAnimSpeed;
   uniform float uTextureContrast;
+  uniform vec3 uRimColor;
   uniform float uRimWidth;
   uniform float uRimIntensity;
+  // 'custom' preset — user image. uHasCustomTexture is 1 when a real texture
+  // is bound, 0 otherwise (so the shader can fall back to the tint colour
+  // and not display the placeholder 1x1 default).
+  uniform sampler2D uCustomTexture;
+  uniform float uHasCustomTexture;
 
   float sdRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + vec2(r);
@@ -105,7 +116,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     vec2 uv = p * uTextureScale + vSeed * 100.0;
     vec2 i = floor(uv);
     vec2 f = fract(uv);
-    float t = uTime * uTextureSpeed;
+    float t = uTime * uAnimSpeed.y;
 
     // 3x3 neighborhood is mandatory for correct Voronoi (a pixel's nearest
     // site can live in a diagonal neighbor). Tracks the smallest and 2nd-
@@ -174,25 +185,52 @@ const FRAGMENT_SHADER = /* glsl */ `
     float edgeStrength = max(facet, facet2) * mix(0.15, 1.0, edgeHash);
     edgeStrength = max(edgeStrength, spark);
 
-    // SDF rim — same treatment as 'liquid' for visual consistency.
-    float rim = smoothstep(uRimWidth, 0.0, abs(d));
-
     vec3 base = uColor * (facet * 1.4 + 0.12);
     // Sparkle flashes the facet toward pure white — the hallmark of a real
     // gem reflection.
     base = mix(base, vec3(1.0), spark * 0.9);
     // Edges blend toward white where they actually catch light.
     base = mix(base, vec3(1.0), edgeMask * edgeStrength * 0.9);
-    vec3 rimCol = mix(uColor, vec3(1.0), 0.7) * rim * uRimIntensity;
-    return base + rimCol;
+    return base;
   }
 
-  // 'liquid': domain-warped FBM (molten metal flow) + bright SDF rim.
+  // 'custom': user-uploaded image.
+  // - Both axes use vUv * vSize * uTextureScale so the image maps to a
+  //   world-space tile of size 1/uTextureScale. This means:
+  //     * Low scale = each tile is large → image is ZOOMED IN (only a
+  //       portion fits on the note, no stretching).
+  //     * High scale = each tile is small → image REPEATS many times.
+  //   Both axes scale uniformly so the source image's aspect ratio is
+  //   preserved (no squashing).
+  // - uAnimSpeed (X, Y) scrolls the UV per axis independently.
+  // - Per-note seed offsets the tile origin so each note starts at a
+  //   different point in the pattern.
+  // - Contrast pushes pixel values away from mid gray (1 = identity).
+  // - Tinted by uColor (set Color = white for pass-through).
+  // Texture wrap is RepeatWrapping in customTexture.ts so values outside
+  // [0,1] tile naturally.
+  vec3 textureCustom(vec2 p, float d) {
+    // Express position AND time in the same world-space units, then convert
+    // both to UV by the same scale factor. Without this, increasing scale
+    // (smaller tiles) makes the same uAnimSpeed produce slower-looking motion
+    // and vice-versa — the user would have to retune speed every time they
+    // changed scale. Now uAnimSpeed reads as "world units per second" and
+    // the perceived motion stays constant across scales.
+    vec2 uv = (vUv * vSize + uTime * uAnimSpeed) * uTextureScale + vSeed * 100.0;
+    vec3 sampled = texture2D(uCustomTexture, uv).rgb;
+    sampled = clamp((sampled - 0.5) * uTextureContrast + 0.5, 0.0, 1.0);
+    // When no image is bound yet, fall back to the tint color so the user
+    // doesn't see a black rectangle while picking a file.
+    return mix(uColor, sampled * uColor, uHasCustomTexture);
+  }
+
+  // 'liquid': domain-warped FBM (molten metal flow). Rim is composited in
+  // main() so it isn't subject to uEmissive.
   vec3 textureLiquid(vec2 p, float d) {
     // Per-note offset so each note samples a different region of the noise
     // field — otherwise every note shows the same flow pattern.
     vec2 uv = p * uTextureScale + vSeed * 100.0;
-    float t = uTime * uTextureSpeed;
+    float t = uTime * uAnimSpeed.y;
     // Domain warp — feeding noise into noise's input gives the swirling
     // "lava lamp" / molten gold look.
     vec2 q = vec2(fbm(uv + vec2(0.0, t * 0.4)),
@@ -200,12 +238,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     float pattern = fbm(uv + 4.0 * q + vec2(0.0, t * 0.6));
     // Push contrast — bright streaks become "highlights", dark areas darken.
     float lit = pow(clamp(pattern, 0.0, 1.0), max(0.1, uTextureContrast));
-    // Rim from SDF distance. d < 0 inside; |d| is distance to the nearest edge.
-    float rim = smoothstep(uRimWidth, 0.0, abs(d));
-    vec3 base = uColor * (lit * 1.4 + 0.18);
-    // White-ish rim approximating polished glass / metal edge highlight.
-    vec3 rimCol = mix(uColor, vec3(1.0), 0.7) * rim * uRimIntensity;
-    return base + rimCol;
+    return uColor * (lit * 1.4 + 0.18);
   }
 
   void main() {
@@ -220,18 +253,28 @@ const FRAGMENT_SHADER = /* glsl */ `
     float aa = max(fwidth(d), 0.0001);
     float alpha = clamp(-d / aa + 0.5, 0.0, 1.0);
 
-    vec3 col;
+    // Texture functions return JUST the fill — rim is composited below so
+    // the user's Rim Color / Intensity are not magnified by the note's
+    // Emissive setting (which is meant to drive Bloom on the note body).
+    vec3 fill;
     if (uTextureMode == ${TEXTURE_LIQUID}) {
-      col = textureLiquid(p, d);
+      fill = textureLiquid(p, d);
     } else if (uTextureMode == ${TEXTURE_GEM}) {
-      col = textureGem(p, d);
+      fill = textureGem(p, d);
+    } else if (uTextureMode == ${TEXTURE_CUSTOM}) {
+      fill = textureCustom(p, d);
     } else {
-      // 'solid' — flat tint, the legacy look.
-      col = uColor;
+      // 'solid' — flat tint.
+      fill = uColor;
     }
-    // Emissive boost feeds Bloom uniformly across all presets.
-    col *= (1.0 + uEmissive);
-    gl_FragColor = vec4(col, alpha * uOpacity);
+    // Emissive boost feeds Bloom — applies only to the fill so rim stays
+    // strictly user-controlled via its own Color + Intensity.
+    fill *= (1.0 + uEmissive);
+
+    float rim = smoothstep(uRimWidth, 0.0, abs(d));
+    vec3 rimCol = uRimColor * rim * uRimIntensity;
+
+    gl_FragColor = vec4(fill + rimCol, alpha * uOpacity);
   }
 `
 
@@ -239,11 +282,24 @@ const TEXTURE_MODE: Record<string, number> = {
   solid: TEXTURE_SOLID,
   liquid: TEXTURE_LIQUID,
   gem: TEXTURE_GEM,
+  custom: TEXTURE_CUSTOM,
 }
+
+// 1x1 transparent placeholder so the sampler2D uniform always has a valid
+// texture bound (an unbound sampler reads black on some drivers + warns).
+// The shader uses uHasCustomTexture to ignore samples from this placeholder.
+const PLACEHOLDER_TEXTURE = new THREE.DataTexture(
+  new Uint8Array([255, 255, 255, 255]),
+  1,
+  1,
+  THREE.RGBAFormat,
+)
+PLACEHOLDER_TEXTURE.needsUpdate = true
 
 export function FallingNotes() {
   const settings = useStore((s) => s.settings)
   const song = useStore((s) => s.song)
+  const customTexture = useCustomTexture((s) => s.texture)
 
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
@@ -276,10 +332,13 @@ export function FallingNotes() {
         uTime: { value: 0 },
         uTextureMode: { value: TEXTURE_MODE[settings.noteTexture] ?? TEXTURE_SOLID },
         uTextureScale: { value: settings.noteTextureScale },
-        uTextureSpeed: { value: settings.noteTextureSpeed },
+        uAnimSpeed: { value: new THREE.Vector2(settings.noteAnimSpeedX, settings.noteAnimSpeedY) },
         uTextureContrast: { value: settings.noteTextureContrast },
+        uRimColor: { value: new THREE.Color(settings.noteRimColor) },
         uRimWidth: { value: settings.noteRimWidth },
         uRimIntensity: { value: settings.noteRimIntensity },
+        uCustomTexture: { value: PLACEHOLDER_TEXTURE },
+        uHasCustomTexture: { value: 0 },
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
@@ -298,8 +357,9 @@ export function FallingNotes() {
     material.uniforms.uRadius.value = settings.noteCornerRadius
     material.uniforms.uTextureMode.value = TEXTURE_MODE[settings.noteTexture] ?? TEXTURE_SOLID
     material.uniforms.uTextureScale.value = settings.noteTextureScale
-    material.uniforms.uTextureSpeed.value = settings.noteTextureSpeed
+    material.uniforms.uAnimSpeed.value.set(settings.noteAnimSpeedX, settings.noteAnimSpeedY)
     material.uniforms.uTextureContrast.value = settings.noteTextureContrast
+    material.uniforms.uRimColor.value.set(settings.noteRimColor)
     material.uniforms.uRimWidth.value = settings.noteRimWidth
     material.uniforms.uRimIntensity.value = settings.noteRimIntensity
   }, [
@@ -310,8 +370,10 @@ export function FallingNotes() {
     settings.noteCornerRadius,
     settings.noteTexture,
     settings.noteTextureScale,
-    settings.noteTextureSpeed,
+    settings.noteAnimSpeedX,
+    settings.noteAnimSpeedY,
     settings.noteTextureContrast,
+    settings.noteRimColor,
     settings.noteRimWidth,
     settings.noteRimIntensity,
   ])
@@ -328,6 +390,15 @@ export function FallingNotes() {
   }, [sizeAttr, seedAttr])
 
   useEffect(() => () => material.dispose(), [material])
+
+  // Bind the user-uploaded texture (or the placeholder) to the shader's
+  // sampler whenever it changes. uHasCustomTexture lets the shader ignore
+  // samples from the placeholder so a not-yet-uploaded 'custom' preset
+  // gracefully falls back to the tint colour.
+  useEffect(() => {
+    material.uniforms.uCustomTexture.value = customTexture ?? PLACEHOLDER_TEXTURE
+    material.uniforms.uHasCustomTexture.value = customTexture ? 1 : 0
+  }, [material, customTexture])
 
   useFrame(() => {
     audioEngine.tick()

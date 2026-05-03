@@ -9,8 +9,9 @@ export type FallDirection = 'down' | 'up'
  * - 'solid'  — flat tinted fill (legacy behavior)
  * - 'liquid' — molten-metal flow with bright glassy rim, FBM-driven
  * - 'gem'    — cut-crystal facets with bright cell edges, Voronoi-driven
+ * - 'custom' — user-provided image (managed via useCustomTexture store)
  */
-export type NoteTexture = 'solid' | 'liquid' | 'gem'
+export type NoteTexture = 'solid' | 'liquid' | 'gem' | 'custom'
 
 export type Settings = {
   // Layout
@@ -31,16 +32,26 @@ export type Settings = {
   noteMinLength: number
   // Surface treatment preset — see NoteTexture for the registry.
   noteTexture: NoteTexture
-  // Spatial frequency of the texture pattern (higher = denser detail).
+  // Spatial frequency of the texture pattern (higher = denser detail /
+  // more repetitions; lower = zoomed in).
   noteTextureScale: number
-  // Animation rate of the flowing pattern (1 = baseline).
-  noteTextureSpeed: number
+  // Animation speed along X. Used by 'custom' for horizontal scroll. Other
+  // presets ignore X (their patterns aren't directional).
+  noteAnimSpeedX: number
+  // Animation speed along Y. Used by 'custom' for vertical scroll. Liquid
+  // and gem use this as their generic time multiplier (flow / twinkle rate).
+  noteAnimSpeedY: number
   // Push factor on bright spots — higher = more contrast between dark and
   // highlight regions of the pattern.
   noteTextureContrast: number
-  // Bright rim around the SDF edge, in world units. 0 = no rim.
+  // Bright rim around the SDF edge — applies to every texture preset
+  // (including 'solid'). The rim is a polished outline drawn on top of the
+  // note's fill, intended for the "glassy edge" highlight regardless of
+  // the surface treatment.
+  noteRimColor: string
+  // Rim thickness in world units. 0 = no rim.
   noteRimWidth: number
-  // Rim brightness multiplier.
+  // Rim brightness multiplier on the chosen color.
   noteRimIntensity: number
   // White flash that appears at the contact line while a note is held
   flashIntensity: number
@@ -163,11 +174,13 @@ export const defaultSettings: Settings = {
   noteMinLength: 0.15,
   noteTexture: 'solid',
   noteTextureScale: 3.0,
-  noteTextureSpeed: 0.8,
+  noteAnimSpeedX: 0.0,
+  noteAnimSpeedY: 0.8,
   noteTextureContrast: 2.5,
-  noteRimWidth: 0.02,
+  noteRimColor: '#ffffff',
+  noteRimWidth: 0,
   noteRimIntensity: 1.0,
-  flashIntensity: 0.8,
+  flashIntensity: 1.0,
   flashSize: 2.5,
   flashWidth: 2.5,
   flashHaloWidth: 0.5,
@@ -199,7 +212,7 @@ export const defaultSettings: Settings = {
   hitLineWaveY: 0,
   hitLineBarHalo: 2.0,
   hitLineWaveHalo: 0.8,
-  bloomIntensity: 1.2,
+  bloomIntensity: 0.5,
   bloomThreshold: 0.2,
   bloomRadius: 0.7,
   bloomSmoothing: 0.4,
