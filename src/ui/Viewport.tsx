@@ -78,6 +78,40 @@ export function Viewport() {
   // after a stretch of no pointer movement. Pause / stop keeps them visible
   // (the user can always reach play/seek).
   const [idleHidden, setIdleHidden] = useState(false)
+  // Cursor follows idleHidden but lags both directions by ~100ms so the
+  // cursor and the controls appear/disappear at the same visual moment.
+  // The seek bar's 200ms opacity fade reads as "gone" / "showing" around
+  // its midpoint, which matches a 100ms delay on the cursor.
+  const [cursorHidden, setCursorHidden] = useState(false)
+  useEffect(() => {
+    const t = window.setTimeout(() => setCursorHidden(idleHidden), 100)
+    return () => clearTimeout(t)
+  }, [idleHidden])
+
+  // Fullscreen tracking. We fullscreen the DropZone wrapper so the Scene,
+  // indicators and SeekBar all follow into fullscreen — the surrounding
+  // Toolbar/Inspector are naturally hidden by the browser. ResizeObserver
+  // re-fires on the dimension change, so the 16:9 letterbox recomputes
+  // automatically.
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === wrapRef.current)
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+  const toggleFullscreen = async () => {
+    const el = wrapRef.current
+    if (!el) return
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+      } else if (el.requestFullscreen) {
+        await el.requestFullscreen()
+      }
+    } catch {
+      /* user-gesture or permission failure — silently ignore */
+    }
+  }
   useEffect(() => {
     const el = wrapRef.current
     if (!el || transport !== 'playing' || !isHovered) {
@@ -155,7 +189,7 @@ export function Viewport() {
             Drop a MIDI file here
           </Text>
           <div
-            className="relative shadow-2xl"
+            className={`relative shadow-2xl ${cursorHidden ? 'cursor-none' : ''}`}
             style={{ width: size.w, height: size.h, touchAction: 'none' }}
             {...hoverProps}
           >
@@ -175,7 +209,7 @@ export function Viewport() {
                   : 'invisible opacity-0 [transition-delay:0s,200ms]'
               }`}
             >
-              <SeekBar />
+              <SeekBar isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} />
             </div>
             {isDropTarget && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-sky-500/10 ring-2 ring-inset ring-sky-400">
