@@ -8,6 +8,10 @@ import { audioEngine } from '../audio/engine'
 import { parseMidi } from '../midi/parse'
 
 const ASPECT = 16 / 9
+// Auto-hide the seek bar / play controls after this many ms of no pointer
+// movement while the song is playing. Matches the rough cadence of video
+// players; long enough that brief pauses to read the timestamp don't dismiss.
+const IDLE_HIDE_MS = 2000
 
 /**
  * Centered play badge shown over the falling-notes region whenever the
@@ -70,9 +74,35 @@ export function Viewport() {
   // useHover is touch-aware: it does not fire on touch tap (unlike CSS :hover
   // which sticks until the next interaction) and is normalised across browsers.
   const { hoverProps, isHovered } = useHover({})
-  // Show transport controls on hover; also keep them visible whenever the
-  // song is not actively playing (so the user can always see play/seek).
-  const controlsVisible = isHovered || transport !== 'playing'
+  // YouTube-style idle auto-hide: while playing+hovered, hide the controls
+  // after a stretch of no pointer movement. Pause / stop keeps them visible
+  // (the user can always reach play/seek).
+  const [idleHidden, setIdleHidden] = useState(false)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || transport !== 'playing' || !isHovered) {
+      // Only the playing+hovered branch arms the timer; reset hidden flag
+      // so the next time we enter that branch we start from "visible".
+      setIdleHidden(false)
+      return
+    }
+    let timer: number | null = null
+    const arm = () => {
+      if (timer !== null) clearTimeout(timer)
+      timer = window.setTimeout(() => setIdleHidden(true), IDLE_HIDE_MS)
+    }
+    const onMove = () => {
+      setIdleHidden(false)
+      arm()
+    }
+    arm() // also start the countdown if entry happened with no movement (e.g. just pressed play)
+    el.addEventListener('pointermove', onMove)
+    return () => {
+      el.removeEventListener('pointermove', onMove)
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [transport, isHovered])
+  const controlsVisible = (isHovered && !idleHidden) || transport !== 'playing'
 
   useEffect(() => {
     const el = wrapRef.current
