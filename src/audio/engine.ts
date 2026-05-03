@@ -28,6 +28,17 @@ const STOP_BUFFER = 0.02
  */
 const TICK_INTERVAL_MS = 25
 
+/**
+ * Tail of song time we keep ticking after the last MIDI event before stopping
+ * playback (when loop is off). Lets the in-flight visuals — falling notes
+ * still rising/landing, hit-line particles (~2.5s lifetime by default),
+ * landing flashes — and the reverb wash play out instead of getting cut
+ * off. Tuned to be just longer than the longest natural decay so the player
+ * doesn't feel stuck waiting at 100%. Loop mode bypasses this so the loop
+ * point is exactly the song end with no audible gap.
+ */
+const SONG_TAIL_SECONDS = 5
+
 /** Note triggered live by the user (touch/click), independent of song timeline. */
 export type LiveNote = {
   id: number
@@ -368,8 +379,10 @@ export class AudioEngine {
       }
     }
 
-    // end of song
-    if (songTime >= this.song.duration && this.active.size === 0 && this.pedalHeld.length === 0) {
+    // end of song. Loop snaps back at the exact end; non-loop adds a tail
+    // window so the in-flight visuals + reverb finish naturally.
+    const endThreshold = this.song.duration + (this.loop ? 0 : SONG_TAIL_SECONDS)
+    if (songTime >= endThreshold && this.active.size === 0 && this.pedalHeld.length === 0) {
       if (this.loop) {
         this.seek(0)
       } else {
