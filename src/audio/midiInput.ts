@@ -19,11 +19,18 @@ export type MidiDeviceInfo = {
 class MidiInputManager {
   private access: MIDIAccess | null = null
   private listeningInputId: string | null = null
-  // midi number → release fn for whichever voice is currently sounding on
-  // that pitch. Re-triggering the same pitch while held releases the
-  // previous voice first so we don't accumulate stuck notes.
+  // Original incoming midi → release fn. Stored under the *raw* note number
+  // (not the transposed one) so noteOff still finds the active voice even
+  // if the user changes the transpose between noteOn and noteOff.
   private activeNotes = new Map<number, () => void>()
   private listeners = new Set<() => void>()
+
+  // Input pre-processing — mutated by setters from the React layer.
+  // Velocity shaping is NOT here: it lives in the engine so it applies
+  // uniformly to song playback and on-screen keyboard input as well.
+  private transpose = 0
+
+  setTranspose(n: number): void { this.transpose = Math.round(n) }
 
   isSupported(): boolean {
     return typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator
@@ -125,7 +132,7 @@ class MidiInputManager {
     } else if (status === 0x80 && data.length >= 3) {
       this.noteOff(data[1])
     } else if (status === 0xb0 && data.length >= 3) {
-      // Control Change. CC#64 = sustain pedal, threshold at 64/127.
+      // Control Change. CC#64 = sustain pedal. MIDI convention: ≥64 = down.
       const cc = data[1]
       const value = data[2]
       if (cc === 64) {
@@ -137,12 +144,18 @@ class MidiInputManager {
   }
 
   private noteOn(midi: number, velocity: number): void {
+    // Transpose the input midi. Velocity shaping happens downstream in
+    // audioEngine.triggerKey so song playback shares the same curve.
+    const transposed = midi + this.transpose
+    // Out of MIDI range after transpose → silently drop. Common when the
+    // user's keyboard already covers the extreme range and they shift it.
+    if (transposed < 0 || transposed > 127) return
     // Same-pitch retrigger: release the previous voice first to avoid the
     // stuck-note state where the second Note Off only releases one of two
     // overlapping voices.
     const existing = this.activeNotes.get(midi)
     if (existing) existing()
-    const handle = audioEngine.triggerKey(midi, velocity)
+    const handle = audioEngine.triggerKey(transposed, velocity)
     if (handle) this.activeNotes.set(midi, handle.release)
   }
 

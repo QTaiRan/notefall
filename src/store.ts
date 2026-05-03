@@ -77,6 +77,26 @@ export type Settings = {
   pedalEnabled: boolean
   reverbMix: number
   reverbSize: number
+  // Sampler release time (seconds) — how long a held note takes to fade
+  // out after stop is called. Smaller = sharper key-up cutoff.
+  releaseTime: number
+  // Sampler — applies to every note (song + live) sent to the piano.
+  samplerDetune: number      // pitch offset in cents (-100..+100)
+  // 6-band master EQ on the sampler output. Gain in dB per band, ordered
+  // low → high (80, 250, 800, 2.5k, 6k, 12k Hz).
+  eqBands: number[]
+  // Velocity shaping — applied at every note trigger (song playback + live
+  // MIDI + on-screen keyboard) so the user's dynamics preferences feel
+  // consistent across input sources.
+  velocityGamma: number      // pow(velocity, gamma): <1 = harder/brighter, >1 = softer
+  velocityFloor: number      // minimum velocity floor (0..1) — boost weak taps
+  velocityCap: number        // maximum velocity cap (0..1) — clip hard hits
+  // Pitch shift in semitones applied at every "input" stage — live MIDI
+  // input from a physical device, AND the song timeline. Falling-note
+  // positions also shift so the visualization stays aligned with the
+  // played pitch. Screen-keyboard / PC-keyboard touches are NOT shifted
+  // (the user is clicking on visible keys directly).
+  transpose: number
 }
 
 export const defaultSettings: Settings = {
@@ -140,6 +160,13 @@ export const defaultSettings: Settings = {
   pedalEnabled: true,
   reverbMix: 0.5,
   reverbSize: 1.0,
+  releaseTime: 0.3,
+  samplerDetune: 0,
+  eqBands: [0, 0, 0, 0, 0, 0],
+  velocityGamma: 1.0,
+  velocityFloor: 0,
+  velocityCap: 1,
+  transpose: 0,
 }
 
 export type TransportState = 'stopped' | 'playing' | 'paused'

@@ -79,8 +79,22 @@ export type PianoInstrument = {
   setReverbMix(mix: number): void
   /** Reverb tail length in seconds. Regenerates the impulse response. */
   setReverbSize(seconds: number): void
+  /**
+   * Release/decay time applied when a held note is stopped. Maps to smplr's
+   * `decayTime` start option. Smaller values = sharper cutoff; larger = the
+   * note rings out longer. Affects all notes triggered after the call.
+   */
+  setReleaseTime(seconds: number): void
+  /** Pitch detune in cents applied to subsequent notes. */
+  setDetune(cents: number): void
+  /** 6-band master EQ. Gain in dB (typically ±12). Bands are ordered
+   * low → high; see EQ_BAND_FREQUENCIES for centers. */
+  setEqBand(index: number, db: number): void
   dispose(): void
 }
+
+/** Band center frequencies in Hz, ordered low → high. */
+export const EQ_BAND_FREQUENCIES = [80, 250, 800, 2500, 6000, 12000] as const
 
 /**
  * Synthesise a stereo impulse response: white noise with exponential decay.
@@ -110,22 +124,47 @@ export async function createPiano(
   const context = Tone.getContext().rawContext as AudioContext
 
   // Signal chain:
-  //   piano -> masterGain -> split:
-  //                ├─ dryGain   ──────────────────> destination
-  //                └─ wetGain ──> convolver ──────> destination
-  // Master volume sits before the split so it scales the wet path equally.
+  //   piano -> masterGain -> eqLow -> eqMid -> eqHigh -> split:
+  //                                                ├─ dryGain   ──────────────────> destination
+  //                                                └─ wetGain ──> convolver ──────> destination
+  // Master volume sits before EQ + split so it scales everything equally.
+  // EQ before reverb so the reverb tail inherits the user's tone shaping.
   const masterGain = context.createGain()
   const dryGain = context.createGain()
   const wetGain = context.createGain()
   const convolver = context.createConvolver()
   convolver.buffer = createImpulseResponse(context, 2.0, 2.5)
 
+  // 6-band graphic EQ. Endpoints use shelving filters (everything below 80 Hz
+  // and above 12 kHz follows the slider), middle bands use peaking with Q=1
+  // (~octave-wide bell, smooth crossover with neighbors).
+  const eqFilters = EQ_BAND_FREQUENCIES.map((freq, i) => {
+    const node = context.createBiquadFilter()
+    node.frequency.value = freq
+    if (i === 0) {
+      node.type = 'lowshelf'
+    } else if (i === EQ_BAND_FREQUENCIES.length - 1) {
+      node.type = 'highshelf'
+    } else {
+      node.type = 'peaking'
+      node.Q.value = 1
+    }
+    node.gain.value = 0
+    return node
+  })
+
   masterGain.gain.value = 1
   dryGain.gain.value = 1
   wetGain.gain.value = 0
 
-  masterGain.connect(dryGain)
-  masterGain.connect(wetGain)
+  // Wire master → eq chain (in series) → split to dry/wet
+  masterGain.connect(eqFilters[0])
+  for (let i = 0; i < eqFilters.length - 1; i++) {
+    eqFilters[i].connect(eqFilters[i + 1])
+  }
+  const lastEq = eqFilters[eqFilters.length - 1]
+  lastEq.connect(dryGain)
+  lastEq.connect(wetGain)
   dryGain.connect(context.destination)
   wetGain.connect(convolver)
   convolver.connect(context.destination)
@@ -137,6 +176,12 @@ export async function createPiano(
   })
   await piano.load
 
+  // Per-voice options applied at start time. Held as closure variables and
+  // mutated by setters so changes reach subsequent notes without rebuilding
+  // the sampler.
+  let releaseTime = 0.3
+  let detuneCents = 0
+
   return {
     context,
     start(midi, velocity, atAudioTime, stopId) {
@@ -145,6 +190,10 @@ export async function createPiano(
         velocity: Math.max(1, Math.min(127, Math.round(velocity * 127))),
         time: atAudioTime,
         stopId,
+        // Per-note release. smplr's NoteEvent.ampRelease maps to the voice's
+        // amplitude envelope release time (seconds).
+        ampRelease: releaseTime,
+        detune: detuneCents,
       })
     },
     stopAll() {
@@ -170,6 +219,21 @@ export async function createPiano(
     setReverbSize(seconds) {
       const dur = Math.max(0.1, Math.min(8, seconds))
       convolver.buffer = createImpulseResponse(context, dur, 2.5)
+    },
+    setReleaseTime(seconds) {
+      releaseTime = Math.max(0.01, Math.min(5, seconds))
+    },
+    setDetune(cents) {
+      detuneCents = Math.max(-1200, Math.min(1200, cents))
+    },
+    setEqBand(index, db) {
+      const node = eqFilters[index]
+      if (!node) return
+      const v = Math.max(-24, Math.min(24, db))
+      const now = context.currentTime
+      node.gain.cancelScheduledValues(now)
+      // Short-time-constant ramp avoids clicks while still feeling immediate.
+      node.gain.setTargetAtTime(v, now, 0.02)
     },
     dispose() {
       piano.disconnect()

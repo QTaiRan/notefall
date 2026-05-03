@@ -1,6 +1,8 @@
 import { useStore, defaultSettings } from '../store'
-import { ColorRow, SectionTitle, SelectRow, SliderRow, SwitchRow } from './controls'
+import { ColorRow, SectionTitle, SelectRow, SliderRow, SwitchRow, VerticalSliderBands } from './controls'
 import { Button, OverlayArrow, Tooltip, TooltipTrigger } from 'react-aria-components'
+
+const EQ_LABELS = ['80', '250', '800', '2.5k', '6k', '12k']
 
 export function Inspector() {
   const s = useStore((st) => st.settings)
@@ -118,6 +120,25 @@ export function Inspector() {
         <SectionTitle>Audio</SectionTitle>
         <SliderRow label="Volume (dB)" value={s.volume} min={-40} max={6} step={0.5} onChange={(v) => update({ volume: v })} />
         <SliderRow label="Speed" value={s.playbackRate} min={0.25} max={2} step={0.05} onChange={(v) => update({ playbackRate: v })} />
+        <SliderRow label="Release (s)" value={s.releaseTime} min={0.01} max={1.5} step={0.01} onChange={(v) => update({ releaseTime: v })} />
+        <SliderRow label="Detune (¢)" value={s.samplerDetune} min={-100} max={100} step={1} onChange={(v) => update({ samplerDetune: v })} />
+        <div className="px-2 pt-1 text-[10px] text-neutral-400">EQ (Hz)</div>
+        <VerticalSliderBands
+          values={s.eqBands}
+          labels={EQ_LABELS}
+          min={-12}
+          max={12}
+          step={0.5}
+          onChange={(i, v) => {
+            const next = s.eqBands.slice()
+            next[i] = v
+            update({ eqBands: next })
+          }}
+        />
+        <SliderRow label="Velocity Curve" value={s.velocityGamma} min={0.3} max={3} step={0.05} onChange={(v) => update({ velocityGamma: v })} />
+        <SliderRow label="Velocity Floor" value={s.velocityFloor} min={0} max={1} step={0.01} onChange={(v) => update({ velocityFloor: v })} />
+        <SliderRow label="Velocity Cap" value={s.velocityCap} min={0} max={1} step={0.01} onChange={(v) => update({ velocityCap: v })} />
+        <SliderRow label="Transpose" value={s.transpose} min={-24} max={24} step={1} onChange={(v) => update({ transpose: v })} />
         <SwitchRow label="Pedal Enabled" value={s.pedalEnabled} onChange={(v) => update({ pedalEnabled: v })} />
 
         <SectionTitle>Reverb</SectionTitle>

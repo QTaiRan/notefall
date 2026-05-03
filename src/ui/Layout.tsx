@@ -5,6 +5,7 @@ import { Viewport } from './Viewport'
 import { LoadingOverlay } from './LoadingOverlay'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
+import { midiInput } from '../audio/midiInput'
 
 export function Layout() {
   const settings = useStore((s) => s.settings)
@@ -27,6 +28,31 @@ export function Layout() {
   useEffect(() => {
     audioEngine.setReverbSize(settings.reverbSize)
   }, [settings.reverbSize])
+  useEffect(() => {
+    audioEngine.setReleaseTime(settings.releaseTime)
+  }, [settings.releaseTime])
+  useEffect(() => {
+    audioEngine.setDetune(settings.samplerDetune)
+  }, [settings.samplerDetune])
+  useEffect(() => {
+    settings.eqBands.forEach((db, i) => audioEngine.setEqBand(i, db))
+  }, [settings.eqBands])
+  useEffect(() => {
+    audioEngine.setVelocityGamma(settings.velocityGamma)
+  }, [settings.velocityGamma])
+  useEffect(() => {
+    audioEngine.setVelocityFloor(settings.velocityFloor)
+  }, [settings.velocityFloor])
+  useEffect(() => {
+    audioEngine.setVelocityCap(settings.velocityCap)
+  }, [settings.velocityCap])
+  // Transpose is applied at TWO independent stages — engine handles song
+  // notes, midiInput handles live MIDI input — so the value goes to both.
+  // Screen-keyboard / PC-keyboard touches stay un-shifted.
+  useEffect(() => {
+    audioEngine.setTranspose(settings.transpose)
+    midiInput.setTranspose(settings.transpose)
+  }, [settings.transpose])
   useEffect(() => {
     audioEngine.setLoop(loop)
   }, [loop])

@@ -152,6 +152,11 @@ export function FallingNotes() {
     const visibleTop = settings.cameraLookAt[1] + halfVisHeight
     const FALL_DISTANCE = Math.max(0.5, visibleTop - hitY) + SPAWN_BUFFER
 
+    // Pitch shift in semitones — keeps the falling-note position aligned
+    // with the audio engine's transposed playback so the user sees the
+    // notes land on the keys that will actually sound.
+    const transpose = settings.transpose
+
     let count = 0
     const notes = song?.notes ?? []
     for (let i = 0; i < notes.length; i++) {
@@ -194,7 +199,7 @@ export function FallingNotes() {
       const length = topY - bottomY
       const centerY = (topY + bottomY) / 2
 
-      const idx = n.midi - MIDI_MIN
+      const idx = (n.midi + transpose) - MIDI_MIN
       if (idx < 0 || idx >= KEY_COUNT) continue
       const key = KEYBOARD_LAYOUT.keys[idx]
       const width = key.width * widthScale

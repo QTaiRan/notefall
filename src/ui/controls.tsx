@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import {
   Slider,
   SliderOutput,
@@ -193,6 +194,97 @@ export function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <div className="mt-3 mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
       {children}
+    </div>
+  )
+}
+
+type VerticalSliderBandsProps = {
+  values: number[]
+  labels: string[]
+  min: number
+  max: number
+  step?: number
+  onChange: (index: number, value: number) => void
+  /** Pixel height of the slider track. */
+  trackHeight?: number
+}
+
+/**
+ * Graphic-EQ-style row of vertical sliders. Each slider shows a value
+ * readout above and a frequency / category label below. The fill grows
+ * from a center line at value=0 in either direction so the user can see
+ * cuts and boosts symmetrically (mixer convention).
+ *
+ * Range is symmetric around 0 (e.g. min=-12, max=+12); the center-line
+ * fill assumes that. Asymmetric ranges will still work but the fill won't
+ * align with "neutral".
+ */
+export function VerticalSliderBands({
+  values,
+  labels,
+  min,
+  max,
+  step = 0.5,
+  onChange,
+  trackHeight = 96,
+}: VerticalSliderBandsProps) {
+  const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1))
+  return (
+    <div className="flex items-stretch justify-between gap-1 py-2">
+      {labels.map((label, i) => (
+        <div key={label} className="flex flex-1 flex-col items-center gap-1">
+          <span className="text-[9px] tabular-nums text-neutral-400">
+            {fmt(values[i] ?? 0)}
+          </span>
+          <Slider
+            orientation="vertical"
+            value={values[i] ?? 0}
+            minValue={min}
+            maxValue={max}
+            step={step}
+            onChange={(v) => onChange(i, typeof v === 'number' ? v : v[0])}
+          >
+            <SliderTrack
+              className="relative w-2 cursor-pointer"
+              style={{ height: trackHeight }}
+            >
+              {({ state, isHovered }) => {
+                const percent = state.getThumbPercent(0)
+                const expanded = isHovered || state.isThumbDragging(0)
+                // Fill from the 50% line out to the thumb position.
+                // percent: 0 = bottom (min), 1 = top (max), 0.5 = center.
+                const fillStyle: CSSProperties =
+                  percent >= 0.5
+                    ? { bottom: '50%', height: `${(percent - 0.5) * 100}%` }
+                    : { top: '50%', height: `${(0.5 - percent) * 100}%` }
+                return (
+                  <>
+                    <div
+                      className={`absolute inset-0 rounded-full transition-colors duration-150 ${
+                        expanded ? 'bg-neutral-700' : 'bg-neutral-800'
+                      }`}
+                    />
+                    {/* Center reference line (0 dB) */}
+                    <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-neutral-600" />
+                    <div
+                      className={`absolute inset-x-0 rounded-full transition-colors duration-150 ${
+                        expanded ? 'bg-sky-400' : 'bg-sky-500/80'
+                      }`}
+                      style={fillStyle}
+                    />
+                    <SliderThumb
+                      className={`left-1/2 h-3 w-3 rounded-full bg-white shadow ring-1 ring-neutral-900 outline-none transition-all duration-150 ${
+                        expanded ? 'scale-100 opacity-100' : 'scale-0 opacity-0'
+                      } data-[dragging]:scale-125 focus-visible:scale-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-sky-400`}
+                    />
+                  </>
+                )
+              }}
+            </SliderTrack>
+          </Slider>
+          <span className="text-[9px] text-neutral-500">{label}</span>
+        </div>
+      ))}
     </div>
   )
 }

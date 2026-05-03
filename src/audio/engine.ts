@@ -72,6 +72,17 @@ export class AudioEngine {
   private loop = false
   private reverbMix = 0
   private reverbSize = 2.0
+  private releaseTime = 0.3
+  private detuneCents = 0
+  private eqBandsDb: number[] = [0, 0, 0, 0, 0, 0]
+  // Velocity shaping applied to every triggered note (song + live + touch).
+  private velocityGamma = 1.0
+  private velocityFloor = 0
+  private velocityCap = 1
+  // Pitch shift in semitones. Applied to song notes here; live MIDI input
+  // applies its own copy in midiInput.ts before calling triggerKey, and
+  // screen-keyboard touches stay un-shifted (the user clicks visible keys).
+  private transpose = 0
 
   private noteIdx = 0
   private pedalIdx = 0
@@ -111,6 +122,9 @@ export class AudioEngine {
     this.piano.setVolumeDb(this.volumeDb)
     this.piano.setReverbSize(this.reverbSize)
     this.piano.setReverbMix(this.reverbMix)
+    this.piano.setReleaseTime(this.releaseTime)
+    this.piano.setDetune(this.detuneCents)
+    this.eqBandsDb.forEach((db, i) => this.piano!.setEqBand(i, db))
   }
 
   isReady(): boolean {
@@ -130,6 +144,47 @@ export class AudioEngine {
   setReverbSize(seconds: number): void {
     this.reverbSize = seconds
     this.piano?.setReverbSize(seconds)
+  }
+
+  setReleaseTime(seconds: number): void {
+    this.releaseTime = seconds
+    this.piano?.setReleaseTime(seconds)
+  }
+
+  setDetune(cents: number): void {
+    this.detuneCents = cents
+    this.piano?.setDetune(cents)
+  }
+
+  setEqBand(index: number, db: number): void {
+    if (index < 0 || index >= this.eqBandsDb.length) return
+    this.eqBandsDb[index] = db
+    this.piano?.setEqBand(index, db)
+  }
+
+  setVelocityGamma(g: number): void {
+    this.velocityGamma = Math.max(0.05, g)
+  }
+  setVelocityFloor(v: number): void {
+    this.velocityFloor = Math.max(0, Math.min(1, v))
+  }
+  setVelocityCap(v: number): void {
+    this.velocityCap = Math.max(0, Math.min(1, v))
+  }
+  setTranspose(semitones: number): void {
+    this.transpose = Math.round(semitones)
+  }
+  getTranspose(): number {
+    return this.transpose
+  }
+
+  /**
+   * Apply curve + clip to a 0..1 velocity. Curve first so the gamma fully
+   * shapes the dynamic range, then floor/cap as a final hard limit.
+   */
+  private shapeVelocity(velocity: number): number {
+    const curved = Math.pow(velocity, this.velocityGamma)
+    return Math.max(this.velocityFloor, Math.min(this.velocityCap, curved))
   }
 
   setRate(rate: number): void {
@@ -232,9 +287,10 @@ export class AudioEngine {
   triggerKey(midi: number, velocity = 0.75): { id: number; release: () => void } | null {
     if (!this.piano) return null
     const id = this.liveIdCounter++
-    const stopFn = this.piano.start(midi, velocity, undefined, `live${id}`)
+    const shaped = this.shapeVelocity(velocity)
+    const stopFn = this.piano.start(midi, shaped, undefined, `live${id}`)
     const startTime = performance.now() / 1000
-    const note: LiveNote = { id, midi, velocity, startTime, endTime: null }
+    const note: LiveNote = { id, midi, velocity: shaped, startTime, endTime: null }
     this.liveNotes.push(note)
     this.liveStops.set(id, stopFn)
     this.emit({ type: 'on', midi, velocity, songTime: this.currentSongTime() })
@@ -393,15 +449,21 @@ export class AudioEngine {
     const audioBase = this.piano.context.currentTime + LOOKAHEAD
     while (this.noteIdx < this.song.notes.length && this.song.notes[this.noteIdx].time <= songTime) {
       const n = this.song.notes[this.noteIdx]
+      this.noteIdx++
+      // Apply transpose to the played pitch. Out-of-range notes after
+      // shifting are silently dropped (no audio + no glow); the falling
+      // note for them is also clipped on the visualization side.
+      const playedMidi = n.midi + this.transpose
+      if (playedMidi < 0 || playedMidi > 127) continue
       // Notes that are slightly overdue still align to the same lookahead floor,
       // notes scheduled close to "on time" land precisely.
       const offset = Math.max(0, (n.time - songTime) / this.rate)
       // Unique stopId per note prevents cross-talk when the same pitch repeats
       // close enough that voices overlap in smplr's voice manager.
-      const stopFn = this.piano.start(n.midi, n.velocity, audioBase + offset, `s${n.id}`)
-      this.active.set(n.id, { id: n.id, midi: n.midi, endTime: n.time + n.duration, stop: stopFn })
-      this.emit({ type: 'on', midi: n.midi, velocity: n.velocity, songTime })
-      this.noteIdx++
+      const shaped = this.shapeVelocity(n.velocity)
+      const stopFn = this.piano.start(playedMidi, shaped, audioBase + offset, `s${n.id}`)
+      this.active.set(n.id, { id: n.id, midi: playedMidi, endTime: n.time + n.duration, stop: stopFn })
+      this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime })
     }
 
     // process note offs (any active note whose end has passed)
