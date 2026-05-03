@@ -3,6 +3,15 @@ import type { ParsedSong } from './midi/types'
 
 export type FallDirection = 'down' | 'up'
 
+/**
+ * Surface treatment applied to falling-note instances. Add new entries here
+ * AND add a matching code path inside FallingNotes' fragment shader.
+ * - 'solid'  — flat tinted fill (legacy behavior)
+ * - 'liquid' — molten-metal flow with bright glassy rim, FBM-driven
+ * - 'gem'    — cut-crystal facets with bright cell edges, Voronoi-driven
+ */
+export type NoteTexture = 'solid' | 'liquid' | 'gem'
+
 export type Settings = {
   // Layout
   keyboardY: number
@@ -20,6 +29,19 @@ export type Settings = {
   noteWidthScale: number
   // Minimum visible length so very short notes do not collapse into a line
   noteMinLength: number
+  // Surface treatment preset — see NoteTexture for the registry.
+  noteTexture: NoteTexture
+  // Spatial frequency of the texture pattern (higher = denser detail).
+  noteTextureScale: number
+  // Animation rate of the flowing pattern (1 = baseline).
+  noteTextureSpeed: number
+  // Push factor on bright spots — higher = more contrast between dark and
+  // highlight regions of the pattern.
+  noteTextureContrast: number
+  // Bright rim around the SDF edge, in world units. 0 = no rim.
+  noteRimWidth: number
+  // Rim brightness multiplier.
+  noteRimIntensity: number
   // White flash that appears at the contact line while a note is held
   flashIntensity: number
   flashSize: number
@@ -139,6 +161,12 @@ export const defaultSettings: Settings = {
   noteCornerRadius: 0.05,
   noteWidthScale: 1.0,
   noteMinLength: 0.15,
+  noteTexture: 'solid',
+  noteTextureScale: 3.0,
+  noteTextureSpeed: 0.8,
+  noteTextureContrast: 2.5,
+  noteRimWidth: 0.02,
+  noteRimIntensity: 1.0,
   flashIntensity: 0.8,
   flashSize: 2.5,
   flashWidth: 2.5,
