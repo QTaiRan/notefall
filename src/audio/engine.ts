@@ -70,8 +70,16 @@ export class AudioEngine {
   private pedalEnabled = true
   private volume = 0.5
   private loop = false
-  private reverbMix = 0
-  private reverbSize = 2.0
+  private reverbEnabled = true
+  private reverbDry = 1.0
+  private reverbWet = 1.0
+  private reverbSize = 3.0
+  private reverbDecayTime = 2.2
+  private reverbDecay = 1.0
+  private reverbPreDelay = 0.03
+  private reverbDamping = 0.4
+  private reverbHiCut = 6000
+  private reverbLowCut = 100
   private releaseTime = 0.3
   private detuneCents = 0
   private eqBandsDb: number[] = [0, 0, 0, 0, 0, 0]
@@ -121,7 +129,14 @@ export class AudioEngine {
     this.piano = await createPiano(onProgress)
     this.piano.setVolume(this.volume)
     this.piano.setReverbSize(this.reverbSize)
-    this.piano.setReverbMix(this.reverbMix)
+    this.piano.setReverbDecayTime(this.reverbDecayTime)
+    this.piano.setReverbDecay(this.reverbDecay)
+    this.piano.setReverbPreDelay(this.reverbPreDelay)
+    this.piano.setReverbDamping(this.reverbDamping)
+    this.piano.setReverbHiCut(this.reverbHiCut)
+    this.piano.setReverbLowCut(this.reverbLowCut)
+    this.piano.setReverbDry(this.reverbDry)
+    this.piano.setReverbWet(this.effectiveWet())
     this.piano.setReleaseTime(this.releaseTime)
     this.piano.setDetune(this.detuneCents)
     this.eqBandsDb.forEach((db, i) => this.piano!.setEqBand(i, db))
@@ -136,14 +151,58 @@ export class AudioEngine {
     this.piano?.setVolume(value)
   }
 
-  setReverbMix(mix: number): void {
-    this.reverbMix = mix
-    this.piano?.setReverbMix(mix)
+  setReverbEnabled(enabled: boolean): void {
+    this.reverbEnabled = enabled
+    this.piano?.setReverbWet(this.effectiveWet())
+  }
+
+  setReverbDry(level: number): void {
+    this.reverbDry = level
+    this.piano?.setReverbDry(level)
+  }
+
+  setReverbWet(level: number): void {
+    this.reverbWet = level
+    this.piano?.setReverbWet(this.effectiveWet())
+  }
+
+  private effectiveWet(): number {
+    return this.reverbEnabled ? this.reverbWet : 0
   }
 
   setReverbSize(seconds: number): void {
     this.reverbSize = seconds
     this.piano?.setReverbSize(seconds)
+  }
+
+  setReverbDecayTime(seconds: number): void {
+    this.reverbDecayTime = seconds
+    this.piano?.setReverbDecayTime(seconds)
+  }
+
+  setReverbDecay(decay: number): void {
+    this.reverbDecay = decay
+    this.piano?.setReverbDecay(decay)
+  }
+
+  setReverbPreDelay(seconds: number): void {
+    this.reverbPreDelay = seconds
+    this.piano?.setReverbPreDelay(seconds)
+  }
+
+  setReverbDamping(amount: number): void {
+    this.reverbDamping = amount
+    this.piano?.setReverbDamping(amount)
+  }
+
+  setReverbHiCut(hz: number): void {
+    this.reverbHiCut = hz
+    this.piano?.setReverbHiCut(hz)
+  }
+
+  setReverbLowCut(hz: number): void {
+    this.reverbLowCut = hz
+    this.piano?.setReverbLowCut(hz)
   }
 
   setReleaseTime(seconds: number): void {

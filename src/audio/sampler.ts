@@ -76,10 +76,33 @@ export type PianoInstrument = {
   stopAll(): void
   /** Master output gain. Linear scale: 0 = silent, 1 = unity, >1 = boost. */
   setVolume(value: number): void
-  /** Wet/dry mix of the convolution reverb (0 = dry only, 1 = wet only). */
-  setReverbMix(mix: number): void
-  /** Reverb tail length in seconds. Regenerates the impulse response. */
+  /** Linear gain on the dry (un-reverbed) signal. 1 = unity, 0 = mute. */
+  setReverbDry(level: number): void
+  /** Linear gain on the reverb output (post-convolver). 1 = unity, 0 = mute. */
+  setReverbWet(level: number): void
+  /** IR buffer length (seconds). The maximum possible tail before silence. */
   setReverbSize(seconds: number): void
+  /** RT60 — time (seconds) for the reverb to drop ~60 dB. Independent of
+   * Size so the user can have a long buffer with a quick fade, etc. */
+  setReverbDecayTime(seconds: number): void
+  /** Power-curve exponent on the IR envelope, on top of the RT60 exponential.
+   * Higher = quicker initial drop (tighter attack on the wash); 0 = pure
+   * exponential decay. */
+  setReverbDecay(decay: number): void
+  /** Pre-delay before the wet signal hits the convolver, in seconds. Adds
+   * apparent space between the dry attack and the reverb tail. */
+  setReverbPreDelay(seconds: number): void
+  /** Progressive HF absorption inside the IR, 0..1. 0 = no damping (uniform
+   * spectrum across tail); higher = HF dies faster than LF as the tail
+   * progresses (physical room behavior). Distinct from Hi Cut. */
+  setReverbDamping(amount: number): void
+  /** Static low-pass cutoff (Hz) on the wet path AFTER the convolver. Dulls
+   * the whole reverb uniformly — different from Damping which is time-
+   * varying inside the IR. */
+  setReverbHiCut(hz: number): void
+  /** High-pass cutoff (Hz) on the wet path. Keeps the reverb out of the
+   * bass register so chords don't muddy. */
+  setReverbLowCut(hz: number): void
   /**
    * Release/decay time applied when a held note is stopped. Maps to smplr's
    * `decayTime` start option. Smaller values = sharper cutoff; larger = the
@@ -98,17 +121,43 @@ export type PianoInstrument = {
 export const EQ_BAND_FREQUENCIES = [80, 250, 800, 2500, 6000, 12000] as const
 
 /**
- * Synthesise a stereo impulse response: white noise with exponential decay.
- * Good enough for a "room" feel without bundling external IR files.
+ * Synthesise a stereo impulse response.
+ *
+ * Three knobs shape the tail:
+ * - sizeSec: total IR buffer length — the maximum tail before silence
+ * - decayTimeSec: RT60 — time for the amplitude to drop ~60 dB
+ * - shape: power-curve exponent on top of the exponential — higher = quicker
+ *   initial fall (tighter attack on the wash); 0 = pure exponential
+ * - damping: 0..1, simulates progressive HF absorption by a "room". A one-
+ *   pole LP feedback coefficient that grows from 0 at sample 0 to `damping`
+ *   at the tail end, so early reflections stay bright and late tail darkens
+ *   over time. This is what a physical reverb does (HF energy bounces off
+ *   walls less efficiently than LF) — distinct from a static post-convolver
+ *   low-pass (Hi Cut), which dulls the whole tail uniformly.
  */
-function createImpulseResponse(ctx: AudioContext, durationSec: number, decay: number): AudioBuffer {
-  const length = Math.max(1, Math.floor(ctx.sampleRate * durationSec))
+function createImpulseResponse(
+  ctx: AudioContext,
+  sizeSec: number,
+  decayTimeSec: number,
+  shape: number,
+  damping: number,
+): AudioBuffer {
+  const length = Math.max(1, Math.floor(ctx.sampleRate * sizeSec))
   const ir = ctx.createBuffer(2, length, ctx.sampleRate)
+  // ln(1000) ≈ 6.908 → exp(-decayPerSample * RT60_samples) = 1/1000 ≡ -60 dB
+  const decayPerSample = 6.908 / (decayTimeSec * ctx.sampleRate)
+  const dampingMax = Math.max(0, Math.min(0.999, damping))
   for (let ch = 0; ch < 2; ch++) {
     const data = ir.getChannelData(ch)
+    let prev = 0
     for (let i = 0; i < length; i++) {
       const t = i / length
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay)
+      const noise = Math.random() * 2 - 1
+      // Time-varying one-pole LP — a grows with i so HF dies faster in the tail.
+      const a = dampingMax * t
+      prev = prev * a + noise * (1 - a)
+      const env = Math.exp(-i * decayPerSample) * Math.pow(1 - t, shape)
+      data[i] = prev * env
     }
   }
   return ir
@@ -125,16 +174,35 @@ export async function createPiano(
   const context = Tone.getContext().rawContext as AudioContext
 
   // Signal chain:
-  //   piano -> masterGain -> eqLow -> eqMid -> eqHigh -> split:
-  //                                                ├─ dryGain   ──────────────────> destination
-  //                                                └─ wetGain ──> convolver ──────> destination
+  //   piano -> masterGain -> eq[0..5] -> split:
+  //     ├─ dryGain ─────────────────────────────────────────────────> destination
+  //     └─ preDelay ─> lowCut(HP) ─> convolver ─> hiCut(LP) ─> wetGain ─> destination
   // Master volume sits before EQ + split so it scales everything equally.
   // EQ before reverb so the reverb tail inherits the user's tone shaping.
+  // Dry and Wet are independent linear gains — no equal-power crossfade — so
+  // the user can dial in absolute amounts of each. The wet chain shapes WHAT
+  // goes into the reverb (pre-delay separates the dry attack from the tail;
+  // HP keeps the bass clean), and Hi Cut tames the tail's brightness AFTER
+  // convolution. True Damping is baked into the IR itself (HF dies faster
+  // as the tail progresses).
   const masterGain = context.createGain()
   const dryGain = context.createGain()
   const wetGain = context.createGain()
+  const preDelay = context.createDelay(1.0) // 1 s headroom — UI caps well below
+  const lowCut = context.createBiquadFilter()
+  lowCut.type = 'highpass'
+  lowCut.frequency.value = 100
+  lowCut.Q.value = 0.7
+  const hiCut = context.createBiquadFilter()
+  hiCut.type = 'lowpass'
+  hiCut.frequency.value = 8000
+  hiCut.Q.value = 0.7
   const convolver = context.createConvolver()
-  convolver.buffer = createImpulseResponse(context, 2.0, 2.5)
+  let irSize = 2.0
+  let irDecayTime = 2.0
+  let irShape = 2.5
+  let irDamping = 0.0
+  convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
 
   // 6-band graphic EQ. Endpoints use shelving filters (everything below 80 Hz
   // and above 12 kHz follows the slider), middle bands use peaking with Q=1
@@ -156,7 +224,7 @@ export async function createPiano(
 
   masterGain.gain.value = 1
   dryGain.gain.value = 1
-  wetGain.gain.value = 0
+  wetGain.gain.value = 0.5
 
   // Wire master → eq chain (in series) → split to dry/wet
   masterGain.connect(eqFilters[0])
@@ -165,10 +233,13 @@ export async function createPiano(
   }
   const lastEq = eqFilters[eqFilters.length - 1]
   lastEq.connect(dryGain)
-  lastEq.connect(wetGain)
+  lastEq.connect(preDelay)
   dryGain.connect(context.destination)
-  wetGain.connect(convolver)
-  convolver.connect(context.destination)
+  preDelay.connect(lowCut)
+  lowCut.connect(convolver)
+  convolver.connect(hiCut)
+  hiCut.connect(wetGain)
+  wetGain.connect(context.destination)
 
   const piano = new SplendidGrandPiano(context, {
     destination: masterGain,
@@ -207,20 +278,51 @@ export async function createPiano(
       masterGain.gain.cancelScheduledValues(now)
       masterGain.gain.setTargetAtTime(target, now, 0.01)
     },
-    setReverbMix(mix) {
-      const m = Math.max(0, Math.min(1, mix))
-      // equal-power crossfade so perceived loudness stays roughly flat
-      const dry = Math.cos((m * Math.PI) / 2)
-      const wet = Math.sin((m * Math.PI) / 2)
+    setReverbDry(level) {
+      const v = Math.max(0, level)
       const now = context.currentTime
       dryGain.gain.cancelScheduledValues(now)
+      dryGain.gain.setTargetAtTime(v, now, 0.02)
+    },
+    setReverbWet(level) {
+      const v = Math.max(0, level)
+      const now = context.currentTime
       wetGain.gain.cancelScheduledValues(now)
-      dryGain.gain.setTargetAtTime(dry, now, 0.02)
-      wetGain.gain.setTargetAtTime(wet, now, 0.02)
+      wetGain.gain.setTargetAtTime(v, now, 0.02)
     },
     setReverbSize(seconds) {
-      const dur = Math.max(0.1, Math.min(8, seconds))
-      convolver.buffer = createImpulseResponse(context, dur, 2.5)
+      irSize = Math.max(0.1, Math.min(8, seconds))
+      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+    },
+    setReverbDecayTime(seconds) {
+      irDecayTime = Math.max(0.1, Math.min(10, seconds))
+      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+    },
+    setReverbDecay(decay) {
+      irShape = Math.max(0, Math.min(8, decay))
+      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+    },
+    setReverbPreDelay(seconds) {
+      const v = Math.max(0, Math.min(0.5, seconds))
+      const now = context.currentTime
+      preDelay.delayTime.cancelScheduledValues(now)
+      preDelay.delayTime.setTargetAtTime(v, now, 0.02)
+    },
+    setReverbDamping(amount) {
+      irDamping = Math.max(0, Math.min(0.99, amount))
+      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+    },
+    setReverbHiCut(hz) {
+      const v = Math.max(200, Math.min(20000, hz))
+      const now = context.currentTime
+      hiCut.frequency.cancelScheduledValues(now)
+      hiCut.frequency.setTargetAtTime(v, now, 0.02)
+    },
+    setReverbLowCut(hz) {
+      const v = Math.max(20, Math.min(2000, hz))
+      const now = context.currentTime
+      lowCut.frequency.cancelScheduledValues(now)
+      lowCut.frequency.setTargetAtTime(v, now, 0.02)
     },
     setReleaseTime(seconds) {
       releaseTime = Math.max(0.01, Math.min(5, seconds))

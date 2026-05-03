@@ -23,11 +23,35 @@ export function Layout() {
     audioEngine.setPedalEnabled(settings.pedalEnabled)
   }, [settings.pedalEnabled])
   useEffect(() => {
-    audioEngine.setReverbMix(settings.reverbMix)
-  }, [settings.reverbMix])
+    audioEngine.setReverbEnabled(settings.reverbEnabled)
+  }, [settings.reverbEnabled])
+  useEffect(() => {
+    audioEngine.setReverbDry(settings.reverbDry)
+  }, [settings.reverbDry])
+  useEffect(() => {
+    audioEngine.setReverbWet(settings.reverbWet)
+  }, [settings.reverbWet])
   useEffect(() => {
     audioEngine.setReverbSize(settings.reverbSize)
   }, [settings.reverbSize])
+  useEffect(() => {
+    audioEngine.setReverbDecayTime(settings.reverbDecayTime)
+  }, [settings.reverbDecayTime])
+  useEffect(() => {
+    audioEngine.setReverbDecay(settings.reverbDecay)
+  }, [settings.reverbDecay])
+  useEffect(() => {
+    audioEngine.setReverbPreDelay(settings.reverbPreDelay)
+  }, [settings.reverbPreDelay])
+  useEffect(() => {
+    audioEngine.setReverbDamping(settings.reverbDamping)
+  }, [settings.reverbDamping])
+  useEffect(() => {
+    audioEngine.setReverbHiCut(settings.reverbHiCut)
+  }, [settings.reverbHiCut])
+  useEffect(() => {
+    audioEngine.setReverbLowCut(settings.reverbLowCut)
+  }, [settings.reverbLowCut])
   useEffect(() => {
     audioEngine.setReleaseTime(settings.releaseTime)
   }, [settings.releaseTime])

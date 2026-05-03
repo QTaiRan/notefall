@@ -77,8 +77,33 @@ export type Settings = {
   volume: number
   playbackRate: number
   pedalEnabled: boolean
-  reverbMix: number
+  // Master on/off for the reverb. When off, the wet path output is silenced
+  // (Dry is unaffected). Useful for A/B comparison without losing settings.
+  reverbEnabled: boolean
+  // Linear gain on the dry (un-reverbed) signal. 1 = unity, 0 = mute.
+  reverbDry: number
+  // Linear gain on the reverb output (post-convolver). 1 = unity, 0 = mute.
+  reverbWet: number
+  // IR buffer length (seconds) — the maximum tail before silence.
   reverbSize: number
+  // RT60 — time (seconds) for the reverb to drop ~60 dB. Independent of Size.
+  reverbDecayTime: number
+  // Power-curve exponent on the IR envelope, on top of the RT60 exponential.
+  // Higher = quicker initial drop (tighter attack on the wash).
+  reverbDecay: number
+  // Delay (seconds) before the wet path enters the convolver. Adds visible
+  // separation between the dry attack and the reverb wash.
+  reverbPreDelay: number
+  // Progressive HF absorption inside the IR (0..1). 0 = no damping; higher =
+  // HF dies faster than LF as the tail progresses (physical room behavior).
+  // Distinct from Hi Cut: this varies over time within the IR.
+  reverbDamping: number
+  // Static low-pass cutoff (Hz) on the wet path AFTER the convolver. Dulls
+  // the whole reverb uniformly.
+  reverbHiCut: number
+  // High-pass cutoff (Hz) on the wet path — keeps the reverb out of the
+  // bass register so chords don't muddy.
+  reverbLowCut: number
   // Sampler release time (seconds) — how long a held note takes to fade
   // out after stop is called. Smaller = sharper key-up cutoff.
   releaseTime: number
@@ -160,8 +185,16 @@ export const defaultSettings: Settings = {
   volume: 0.8,
   playbackRate: 1.0,
   pedalEnabled: true,
-  reverbMix: 0.5,
-  reverbSize: 1.0,
+  reverbEnabled: true,
+  reverbDry: 1.0,
+  reverbWet: 1.0,
+  reverbSize: 3.0,
+  reverbDecayTime: 2.2,
+  reverbDecay: 1.0,
+  reverbPreDelay: 0.03,
+  reverbDamping: 0.4,
+  reverbHiCut: 6000,
+  reverbLowCut: 100,
   releaseTime: 0.3,
   samplerDetune: 0,
   eqBands: [0, 0, 0, 0, 0, 0],

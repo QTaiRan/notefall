@@ -140,8 +140,16 @@ export function Inspector() {
         <SwitchRow label="Pedal Enabled" value={s.pedalEnabled} onChange={(v) => update({ pedalEnabled: v })} />
 
         <SectionTitle>Reverb</SectionTitle>
-        <SliderRow label="Mix" value={s.reverbMix} min={0} max={1} step={0.01} onChange={(v) => update({ reverbMix: v })} />
+        <SwitchRow label="Enabled" value={s.reverbEnabled} onChange={(v) => update({ reverbEnabled: v })} />
+        <SliderRow label="Dry" value={s.reverbDry} min={0} max={2} step={0.01} onChange={(v) => update({ reverbDry: v })} />
+        <SliderRow label="Wet" value={s.reverbWet} min={0} max={2} step={0.01} onChange={(v) => update({ reverbWet: v })} />
         <SliderRow label="Size (s)" value={s.reverbSize} min={0.3} max={5} step={0.1} onChange={(v) => update({ reverbSize: v })} />
+        <SliderRow label="Decay Time (s)" value={s.reverbDecayTime} min={0.1} max={8} step={0.05} onChange={(v) => update({ reverbDecayTime: v })} />
+        <SliderRow label="Decay" value={s.reverbDecay} min={0} max={6} step={0.05} onChange={(v) => update({ reverbDecay: v })} />
+        <SliderRow label="Pre-Delay (ms)" value={s.reverbPreDelay * 1000} min={0} max={200} step={1} onChange={(v) => update({ reverbPreDelay: v / 1000 })} />
+        <SliderRow label="Damping" value={s.reverbDamping} min={0} max={0.99} step={0.01} onChange={(v) => update({ reverbDamping: v })} />
+        <SliderRow label="Hi Cut (Hz)" value={s.reverbHiCut} min={500} max={20000} step={100} onChange={(v) => update({ reverbHiCut: v })} />
+        <SliderRow label="Low Cut (Hz)" value={s.reverbLowCut} min={20} max={1000} step={10} onChange={(v) => update({ reverbLowCut: v })} />
 
         <div className="mt-4 px-2 text-[10px] text-neutral-600">
           Default colors: {defaultSettings.noteColor}
