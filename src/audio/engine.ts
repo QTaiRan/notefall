@@ -76,11 +76,22 @@ export class AudioEngine {
   private noteIdx = 0
   private pedalIdx = 0
   private pedalDown = false // raw MIDI pedal state at current song time
+  // Live pedal from the user's physical MIDI device. Independent of the
+  // song's pedal events and of `pedalEnabled` (the user's physical pedal
+  // should always work even when the song's pedal track is muted).
+  private livePedalDown = false
 
   // notes currently sounding (key still held)
   private active = new Map<number, ActiveNote>()
-  // notes whose key was released but pedal is holding the dampers up
-  private pedalHeld: Array<{ midi: number; stop: (time?: number) => void }> = []
+  // notes whose key was released but a pedal is holding the dampers up.
+  // `source` records WHICH pedal is sustaining the note so we can release
+  // only the right entries when one of the pedals goes up while the other
+  // stays down.
+  private pedalHeld: Array<{
+    midi: number
+    stop: (time?: number) => void
+    source: 'song' | 'live'
+  }> = []
 
   private listeners = new Set<KeyEventListener>()
 
@@ -130,7 +141,19 @@ export class AudioEngine {
 
   setPedalEnabled(enabled: boolean): void {
     this.pedalEnabled = enabled
-    if (!enabled) this.flushPedalHeld()
+    // Only release song-pedal-held notes — the user's physical pedal still
+    // governs live notes regardless of this song-side toggle.
+    if (!enabled) this.flushPedalHeld('song')
+  }
+
+  /**
+   * Live pedal state from the user's MIDI device. Calls from the MIDI input
+   * layer when CC#64 crosses the 64-value threshold.
+   */
+  setLivePedalDown(down: boolean): void {
+    if (this.livePedalDown === down) return
+    this.livePedalDown = down
+    if (!down) this.flushPedalHeld('live')
   }
 
   setLoop(loop: boolean): void {
@@ -222,9 +245,13 @@ export class AudioEngine {
         if (note.endTime !== null) return
         note.endTime = performance.now() / 1000
         const stopTime = (this.piano?.context.currentTime ?? 0) + STOP_BUFFER
-        // pedal sustain applies equally to user-triggered notes
-        if (this.pedalEnabled && this.pedalDown) {
-          this.pedalHeld.push({ midi, stop: stopFn })
+        // Live notes are sustained by either pedal source. Tag with whichever
+        // is currently down — live takes precedence when both are pressed,
+        // since the physical pedal is the more direct controller.
+        if (this.livePedalDown) {
+          this.pedalHeld.push({ midi, stop: stopFn, source: 'live' })
+        } else if (this.pedalEnabled && this.pedalDown) {
+          this.pedalHeld.push({ midi, stop: stopFn, source: 'song' })
         } else {
           stopFn(stopTime)
         }
@@ -254,10 +281,22 @@ export class AudioEngine {
     this.listeners.forEach((l) => l(ev))
   }
 
-  private flushPedalHeld(): void {
+  private flushPedalHeld(source: 'song' | 'live' | 'all' = 'all'): void {
     const stopTime = (this.piano?.context.currentTime ?? 0) + STOP_BUFFER
-    for (const h of this.pedalHeld) h.stop(stopTime)
-    this.pedalHeld = []
+    if (source === 'all') {
+      for (const h of this.pedalHeld) h.stop(stopTime)
+      this.pedalHeld = []
+      return
+    }
+    const remaining: typeof this.pedalHeld = []
+    for (const h of this.pedalHeld) {
+      if (h.source === source) {
+        h.stop(stopTime)
+      } else {
+        remaining.push(h)
+      }
+    }
+    this.pedalHeld = remaining
   }
 
   private startBackgroundTicker(): void {
@@ -370,7 +409,7 @@ export class AudioEngine {
     for (const a of this.active.values()) {
       if (a.endTime <= songTime) {
         if (this.pedalEnabled && this.pedalDown) {
-          this.pedalHeld.push({ midi: a.midi, stop: a.stop })
+          this.pedalHeld.push({ midi: a.midi, stop: a.stop, source: 'song' })
         } else {
           a.stop(stopTime)
         }
