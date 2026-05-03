@@ -74,7 +74,8 @@ export type PianoInstrument = {
    */
   start(midi: number, velocity: number, atAudioTime?: number, stopId?: string): StopFn
   stopAll(): void
-  setVolumeDb(db: number): void
+  /** Master output gain. Linear scale: 0 = silent, 1 = unity, >1 = boost. */
+  setVolume(value: number): void
   /** Wet/dry mix of the convolution reverb (0 = dry only, 1 = wet only). */
   setReverbMix(mix: number): void
   /** Reverb tail length in seconds. Regenerates the impulse response. */
@@ -199,8 +200,9 @@ export async function createPiano(
     stopAll() {
       piano.stop()
     },
-    setVolumeDb(db) {
-      const target = Math.pow(10, db / 20)
+    setVolume(value) {
+      // Clamp to non-negative; >1 is allowed for boost (caller's choice).
+      const target = Math.max(0, value)
       const now = context.currentTime
       masterGain.gain.cancelScheduledValues(now)
       masterGain.gain.setTargetAtTime(target, now, 0.01)

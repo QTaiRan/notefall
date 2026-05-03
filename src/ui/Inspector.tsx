@@ -118,8 +118,6 @@ export function Inspector() {
         <SliderRow label="Glow Decay (s)" value={s.keyGlowDecay} min={0.05} max={2} step={0.01} onChange={(v) => update({ keyGlowDecay: v })} />
 
         <SectionTitle>Audio</SectionTitle>
-        <SliderRow label="Volume (dB)" value={s.volume} min={-40} max={6} step={0.5} onChange={(v) => update({ volume: v })} />
-        <SliderRow label="Speed" value={s.playbackRate} min={0.25} max={2} step={0.05} onChange={(v) => update({ playbackRate: v })} />
         <SliderRow label="Release (s)" value={s.releaseTime} min={0.01} max={1.5} step={0.01} onChange={(v) => update({ releaseTime: v })} />
         <SliderRow label="Detune (¢)" value={s.samplerDetune} min={-100} max={100} step={1} onChange={(v) => update({ samplerDetune: v })} />
         <div className="px-2 pt-1 text-[10px] text-neutral-400">EQ (Hz)</div>

@@ -14,7 +14,7 @@ export function Layout() {
 
   // sync engine settings
   useEffect(() => {
-    audioEngine.setVolumeDb(settings.volume)
+    audioEngine.setVolume(settings.volume)
   }, [settings.volume])
   useEffect(() => {
     audioEngine.setRate(settings.playbackRate)

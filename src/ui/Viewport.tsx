@@ -78,6 +78,11 @@ export function Viewport() {
   // after a stretch of no pointer movement. Pause / stop keeps them visible
   // (the user can always reach play/seek).
   const [idleHidden, setIdleHidden] = useState(false)
+  // Whether any popover (volume/speed) opened from the SeekBar is currently
+  // visible. Popovers render in a portal outside the viewport, so the user's
+  // cursor leaves the hover area and the controls would otherwise auto-hide
+  // while they're still adjusting a value.
+  const [popoverOpen, setPopoverOpen] = useState(false)
   // Cursor follows idleHidden but lags both directions by ~100ms so the
   // cursor and the controls appear/disappear at the same visual moment.
   // The seek bar's 200ms opacity fade reads as "gone" / "showing" around
@@ -114,9 +119,9 @@ export function Viewport() {
   }
   useEffect(() => {
     const el = wrapRef.current
-    if (!el || transport !== 'playing' || !isHovered) {
-      // Only the playing+hovered branch arms the timer; reset hidden flag
-      // so the next time we enter that branch we start from "visible".
+    if (!el || transport !== 'playing' || !isHovered || popoverOpen) {
+      // Only the playing+hovered branch (with no popover open) arms the
+      // timer; reset hidden flag so we start "visible" next time.
       setIdleHidden(false)
       return
     }
@@ -135,8 +140,9 @@ export function Viewport() {
       el.removeEventListener('pointermove', onMove)
       if (timer !== null) clearTimeout(timer)
     }
-  }, [transport, isHovered])
-  const controlsVisible = (isHovered && !idleHidden) || transport !== 'playing'
+  }, [transport, isHovered, popoverOpen])
+  const controlsVisible =
+    (isHovered && !idleHidden) || popoverOpen || transport !== 'playing'
 
   useEffect(() => {
     const el = wrapRef.current
@@ -189,7 +195,7 @@ export function Viewport() {
             Drop a MIDI file here
           </Text>
           <div
-            className={`relative shadow-2xl ${cursorHidden ? 'cursor-none' : ''}`}
+            className={`relative shadow-2xl ${cursorHidden && !popoverOpen ? 'cursor-none' : ''}`}
             style={{ width: size.w, height: size.h, touchAction: 'none' }}
             {...hoverProps}
           >
@@ -209,7 +215,11 @@ export function Viewport() {
                   : 'invisible opacity-0 [transition-delay:0s,200ms]'
               }`}
             >
-              <SeekBar isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} />
+              <SeekBar
+                isFullscreen={isFullscreen}
+                onToggleFullscreen={toggleFullscreen}
+                onPopoverOpenChange={setPopoverOpen}
+              />
             </div>
             {isDropTarget && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-sky-500/10 ring-2 ring-inset ring-sky-400">

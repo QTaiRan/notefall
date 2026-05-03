@@ -68,7 +68,7 @@ export class AudioEngine {
 
   private rate = 1
   private pedalEnabled = true
-  private volumeDb = 0
+  private volume = 0.5
   private loop = false
   private reverbMix = 0
   private reverbSize = 2.0
@@ -119,7 +119,7 @@ export class AudioEngine {
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
     if (this.piano) return
     this.piano = await createPiano(onProgress)
-    this.piano.setVolumeDb(this.volumeDb)
+    this.piano.setVolume(this.volume)
     this.piano.setReverbSize(this.reverbSize)
     this.piano.setReverbMix(this.reverbMix)
     this.piano.setReleaseTime(this.releaseTime)
@@ -131,9 +131,9 @@ export class AudioEngine {
     return this.piano !== null
   }
 
-  setVolumeDb(db: number): void {
-    this.volumeDb = db
-    this.piano?.setVolumeDb(db)
+  setVolume(value: number): void {
+    this.volume = value
+    this.piano?.setVolume(value)
   }
 
   setReverbMix(mix: number): void {

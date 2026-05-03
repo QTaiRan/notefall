@@ -72,6 +72,8 @@ export type Settings = {
   keyGlowIntensity: number
   keyGlowDecay: number
   // Audio
+  // Linear gain on the master output. 0 = silent, 1 = unity, >1 = boost.
+  // Linear (not dB) so the slider's bottom is true mute.
   volume: number
   playbackRate: number
   pedalEnabled: boolean
@@ -151,11 +153,11 @@ export const defaultSettings: Settings = {
   backgroundColor: '#05060a',
   whiteKeyColor: '#f5f5f5',
   blackKeyColor: '#161616',
-  keyboardBrightness: 0.8,
+  keyboardBrightness: 0.5,
   keyGlowColor: '#5ad7ff',
   keyGlowIntensity: 1.5,
   keyGlowDecay: 0.05,
-  volume: -6,
+  volume: 0.8,
   playbackRate: 1.0,
   pedalEnabled: true,
   reverbMix: 0.5,
@@ -223,5 +225,16 @@ export const useStore = create<AppState>((set) => ({
   settings: defaultSettings,
   updateSettings: (patch) =>
     set((state) => ({ settings: { ...state.settings, ...patch } })),
-  resetSettings: () => set({ settings: defaultSettings }),
+  // Preserve transport-bar controlled settings (volume, playback speed) so
+  // the user's listening setup isn't lost when they reset the visual /
+  // audio Inspector. The Reset button lives in the Inspector and is
+  // expected to only affect what the Inspector shows.
+  resetSettings: () =>
+    set((state) => ({
+      settings: {
+        ...defaultSettings,
+        volume: state.settings.volume,
+        playbackRate: state.settings.playbackRate,
+      },
+    })),
 }))
