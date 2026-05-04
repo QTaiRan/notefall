@@ -3,229 +3,271 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
-import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH } from '../keyboard/layout'
+import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH, WHITE_KEY_WIDTH } from '../keyboard/layout'
+import { sampleCurl, dirFromXY } from './curlNoise'
 
-const MAX_PARTICLES = 65536
-// Puffs per second per held key at rate 1.0. Each puff drops a small cluster
-// of particles, so the on-screen particle count is roughly puffs × cluster size.
-const BASE_PUFF_RATE = 14
-// Particles in a single puff. Sharing position+seed makes them visually
-// cohere into a "wisp" rather than scattered specks.
-const PUFF_SIZE_MIN = 3
-const PUFF_SIZE_MAX = 7
-// Bonus puffs fired immediately on attack — gives the landing visual punch.
-const ATTACK_PUFFS = 3
+// Curl-noise-driven keyboard particles. Per particle, per frame:
+//
+//   domainPos = pos × movesWith + emitterPos × (1 − movesWith)
+//   domainPos = (domainPos × turbFreq) / (turbX, turbY, turbZ)
+//   domainPos.z += t × flowSpeed
+//   curl = sampleCurl(domainPos, octaves, octaveScale, octaveMultiplier)
+//   curl ⊙= (turbX, turbY, turbZ)
+//   velocity += curl × turbulence × dt
+//   // Optional rotational pull on velocity angle (swirl > 0):
+//   //   destabilises +Y so any horizontal perturbation grows over time
+//   // Optional drag (drag > 0):
+//   //   xy_speed -= drag × DRAG_RATE × min(xy_speed, 1) × dt
+//   //   xy_speed lower-bounded at MIN_XY_SPEED so particles don't stall
+//   pos += velocity × dt
+//
+// Particles live in true 3D space (per-particle Z) so the curl field can
+// produce internal cluster width — two particles at (sameX, sameY,
+// differentZ) sample different curl voxels and drift differently. A 2D
+// curl with any per-particle perturbation we tried produced either a
+// thin coherent strand (no perturbation) or a too-wide spread (any
+// perturbation), so 3D is load-bearing here.
+//
+// Visual rendering (per-pixel circle clip, age-based UV dilation, alpha
+// envelope, color blend, size pop-in) is in the fragment shader below.
+
+// Slot count for the per-particle InstancedBufferGeometry. The hot loop
+// iterates every slot (skipping dead ones via the age check), so this is
+// the practical cap on simultaneous live particles. Sized to handle ~10
+// polyphonic keys at default Count + Lifetime: 10 × 10 × 60 × (0.8 × 5)
+// = 24000 peak. When the user pushes Count or holds many keys, the slots
+// recycle in FIFO order — once full, older particles get overwritten
+// mid-fade, producing a visible "particles vanish in sequence" artefact.
+// Bumping further trades memory + per-frame loop overhead for headroom
+// (~60 bytes/slot for the per-particle Float32Arrays).
+const MAX_PARTICLES = 32768
+// Calibration constants tuning the per-particle world units to read well
+// at our default keyboard / camera scale.
+const BASE_UP_SPEED = 1.0
+const BASE_PARTICLE_SIZE = 0.032
+const LIFETIME_SCALE = 5.0
+// Constant per-key emitter width — same column thickness for black and
+// white keys so the visual columns line up regardless of which key fired.
+const EMITTER_WIDTH = WHITE_KEY_WIDTH * 0.9
+// Quick puff on note-on for visible ignition independent of the steady
+// per-frame emission rate.
+const ATTACK_BURST = 3
+// Lower bound on horizontal speed when air friction is active — prevents
+// particles stalling completely in zero-curl regions. Expressed as a
+// fraction of the unit-speed reference rather than a raw decimal so the
+// "5%" intent is explicit.
+const MIN_XY_SPEED = 1 / 20
+// Per-second drag rate. Multiplied by the user-tuned `drag` setting and
+// by the integration `dt`, giving the per-frame velocity reduction.
+// Tuned so that with drag = 1.0 a unit-speed particle loses about half
+// its speed every 230 ms.
+const DRAG_RATE_PER_SEC = 3.0
+// Per-second angular bend rate at maximum deviation from vertical.
+// Multiplied by `swirl`, `dt`, and the deviation factor; produces the
+// swirling-spread when the user dials it up.
+const ANGULAR_BEND_RATE_PER_SEC = 2.4
+// Time constant (seconds) for the per-particle curl-velocity low-pass
+// filter. The raw curl sample at a particle's current position changes
+// discretely whenever the particle crosses a noise lattice cell or the
+// noise field's Z-axis time slide moves by a feature; without smoothing
+// these discontinuities show up as a high-frequency wobble layered on
+// top of the underlying swirl. EMA-blending with this time constant
+// removes the wobble while keeping the swirl response snappy.
+const CURL_SMOOTHING_TAU = 0.06
+const TWO_OVER_PI = 2.0 / Math.PI
+const HALF_PI = Math.PI / 2
 
 const VERTEX_SHADER = /* glsl */ `
   attribute float aBirth;
-  attribute float aSeed;
-  attribute float aSpeed;
-  attribute float aSwayAmp;
-  attribute float aSwayFreq;
-  attribute vec3 aColor;
+  attribute float aLifetime;
+  attribute vec3  aPosition;   // current world XYZ — written every frame from CPU integration
+  attribute float aBaseSize;
+  attribute vec3  aColor;
 
   uniform float uTime;
-  uniform float uLifetime;
-  uniform float uSize;
-  uniform float uPixelRatio;
-  uniform float uWind;
-  uniform float uWindScale;
-  uniform float uWindSpeed;
-  uniform float uHaloSize;
+  uniform float uSize;          // global Inspector-driven size scale
 
-  varying float vAlpha;
-  varying vec3 vColor;
-
-  // Cheap value-noise + 2-octave FBM. We need spatial coherence (so nearby
-  // particles see the same wind value and drift together as a cluster) and
-  // smooth temporal evolution (so the field "breathes" like a candle flame
-  // instead of jumping between discrete states).
-  float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-  float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-  }
-  float fbm(vec2 p) {
-    return vnoise(p) * 0.65 + vnoise(p * 2.13 + 4.7) * 0.35;
-  }
+  varying vec2  vUv;
+  varying float vAge;
+  varying float vWorldY;
+  varying vec3  vColor;
+  varying float vEffectiveSize;
 
   void main() {
-    vColor = aColor;
     float age = uTime - aBirth;
-    if (age < 0.0 || age > uLifetime) {
-      // Push outside the clip volume AND zero point size — both belts and
-      // suspenders so dead slots can't ever rasterize a stray pixel.
+    if (age < 0.0 || age > aLifetime) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-      gl_PointSize = 0.0;
-      vAlpha = 0.0;
+      vAge = 0.0;
+      vUv = vec2(0.0);
+      vWorldY = 0.0;
+      vColor = vec3(0.0);
+      vEffectiveSize = 0.0;
       return;
     }
-    float t = age / uLifetime;
+    float t = age / aLifetime;
+    vAge = t;
+    vColor = aColor;
+    vUv = position.xy + 0.5;
 
-    // Upward motion with mild deceleration → buoyant, not constant-velocity.
-    float yOffset = aSpeed * age * (1.0 - 0.25 * t);
-    vec2 here = position.xy + vec2(0.0, yOffset);
+    // Pop-in: particles emerge at ~48% of their full size and ramp to
+    // 100% over the first 10% of life. Adds a quick attack flick rather
+    // than the bare appearance of full-size points.
+    float popIn = mix(0.483, 1.0, smoothstep(0.0, 0.10, t));
+    float worldSize = aBaseSize * uSize * popIn;
+    vEffectiveSize = aBaseSize;
 
-    // Sample the wind field at the particle's current position. Default
-    // spatial frequency (0.55 / 0.32) means a flow cell spans many keys so
-    // a tight emission cluster sees roughly the same wind and drifts together.
-    // uWindScale is divided in (so larger user value = larger gusts = more
-    // cohesive cluster motion). uWindSpeed multiplies the time advance —
-    // higher = faster, more flickery; lower = slow candle-flame breathing.
-    vec2 np = vec2(here.x * 0.55, here.y * 0.32) / max(uWindScale, 0.01)
-              + uTime * vec2(0.22, 0.18) * uWindSpeed;
-    float wx = fbm(np) * 2.0 - 1.0;
-    float wy = fbm(np + vec2(11.7, 4.3)) * 2.0 - 1.0;
-    // Wind builds with age — particles disperse from the puff slowly rather
-    // than instantly, so the cluster reads as cohesive at first then
-    // gradually opens up as it rises.
-    float windScale = uWind * (0.25 + t * 0.85);
-    vec2 wind = vec2(wx, wy * 0.35) * windScale;
+    // Camera-aligned billboard. Quad always faces the camera regardless
+    // of where the user moves it via the Inspector.
+    mat3 invViewRot = transpose(mat3(viewMatrix));
+    vec3 right = invViewRot[0];
+    vec3 up    = invViewRot[1];
+    vec3 worldCorner = aPosition
+                       + right * position.x * worldSize
+                       + up    * position.y * worldSize;
+    vWorldY = worldCorner.y;
 
-    // Tiny per-particle micro-jitter (much smaller than wind). Adds the
-    // high-frequency flicker on top of the slow flow without overwhelming it.
-    float phase = aSeed * 6.2831;
-    float micro = sin(age * aSwayFreq + phase) * aSwayAmp * 0.35;
-
-    vec3 finalPos = vec3(here.x + wind.x + micro, here.y + wind.y, position.z);
-    vec4 worldPos = modelMatrix * vec4(finalPos, 1.0);
-    vec4 mvPos = viewMatrix * worldPos;
-    gl_Position = projectionMatrix * mvPos;
-
-    // Fast in, gradual out so attack feels instantaneous and decay is soft.
-    float fadeIn = smoothstep(0.0, 0.04, t);
-    float fadeOut = 1.0 - smoothstep(0.55, 1.0, t);
-    vAlpha = fadeIn * fadeOut;
-
-    // Size shrinks with age + perspective attenuation. The 300.0 constant
-    // matches PointsMaterial's sizeAttenuation at the default camera distance.
-    // Inflated by (1 + uHaloSize) so there's room around the core for the
-    // halo to render — fragment shader compensates so the core stays the
-    // same physical size regardless of halo.
-    float ageScale = mix(1.0, 0.4, t);
-    float haloScale = 1.0 + uHaloSize;
-    gl_PointSize = uSize * uPixelRatio * ageScale * haloScale * (300.0 / -mvPos.z);
+    gl_Position = projectionMatrix * viewMatrix * vec4(worldCorner, 1.0);
   }
 `
 
 const FRAGMENT_SHADER = /* glsl */ `
   precision highp float;
-  varying float vAlpha;
-  varying vec3 vColor;
-  uniform float uIntensity;
-  uniform float uHaloIntensity;
-  uniform float uHaloSize;
+  varying vec2  vUv;
+  varying float vAge;
+  varying float vWorldY;
+  varying vec3  vColor;
+  varying float vEffectiveSize;
+
+  uniform float uHitY;
+  uniform float uOpacity;
+  uniform float uBrightness;
+  uniform float uSize;
+
   void main() {
-    if (vAlpha < 0.001) discard;
-    vec2 p = gl_PointCoord - 0.5;
-    float r = length(p);
-    if (r > 0.5) discard;
+    // Per-pixel keyboard discard — particles only render above the hit
+    // line. The 1.001 bias keeps the keyboard's own top edge from
+    // fighting the discard at the seam.
+    if (vWorldY < uHitY * 1.001) discard;
 
-    // The vertex shader inflated the point by (1 + uHaloSize) to make room
-    // for the halo. Multiply r back to the original (un-inflated) coord
-    // space so the bright core stays the same physical size as it would
-    // with no halo — just sitting in the center of a now-larger sprite.
-    float haloScale = 1.0 + uHaloSize;
-    float coreR = r * haloScale;
+    // Base UV in [-0.5, 0.5] — used for the silhouette circle clip so the
+    // particle is always round regardless of how the size-ratio + age
+    // dilation rescale the falloff. Without this clip, sizeRatio < 1 and
+    // dilateFactor ≈ 1 (young particles) leaves the entire square quad
+    // visible because the procedural radial falloff exp(-r² × 14) never
+    // quite reaches 0.
+    vec2 baseUv = vUv - 0.5;
+    float baseR = length(baseUv);
+    if (baseR > 0.5) discard;
+    // Smooth anti-aliased circle edge.
+    float circleMask = 1.0 - smoothstep(0.45, 0.50, baseR);
 
-    // Sharp center, soft rim — a spark that bloom amplifies into a dot of
-    // light without revealing the underlying square.
-    float core = 1.0 - smoothstep(0.0, 0.5, coreR);
-    core = pow(core, 1.4);
+    // Scaled UV drives the age-based dilation falloff (independent of
+    // the silhouette clip above). As the particle ages, the same screen
+    // pixel maps further from the texture center → bright core appears
+    // to shrink while soft tail extends.
+    vec2 uv = baseUv;
+    float sizeRatio = vEffectiveSize / max(uSize * 0.08, 0.001);
+    uv *= sizeRatio;
 
-    // Soft halo gaussian across the entire (inflated) sprite. Falls off
-    // smoothly to roughly 13% brightness at the sprite edge with the
-    // -8.0 r² coefficient — wide enough to read as a glow rather than a
-    // second hard-edged ring.
-    float halo = exp(-r * r * 8.0) * uHaloIntensity;
+    float dilateDenom = max(1.15 - vAge, 0.001);
+    float dilateFactor = vAge > 0.25 ? 0.9 / dilateDenom : 1.0;
+    uv *= dilateFactor;
 
-    float a = (core + halo) * vAlpha;
-    if (a < 0.001) discard;
-    gl_FragColor = vec4(vColor * uIntensity * a, a);
+    float r = length(uv);
+    float texAlpha = exp(-r * r * 14.0) * circleMask;
+
+    // Smoothstep alpha cap — flat 1.0 until age 0.5, then S-curve fade
+    // to 0 at age 1.0. Smoother than a hard linear ramp at the tail.
+    float alphaCap = 1.0 - smoothstep(0.5, 1.0, vAge);
+
+    float alpha = texAlpha * alphaCap * uOpacity;
+    if (alpha < 0.001) discard;
+
+    // Color lift: blend toward white as brightness goes up, then
+    // multiply by a fixed boost. With brightness > 1 the channel that
+    // started lowest grows fastest, which intentionally produces a hue
+    // shift past white.
+    vec3 lift = vColor + (1.0 - vColor) * uBrightness;
+    vec3 rgb = lift * 1.4;
+
+    gl_FragColor = vec4(rgb, alpha);
   }
 `
 
-/**
- * Drift particles rising from each key while it sounds. GPU-resident:
- * per-particle attributes are written once on emission; the vertex shader
- * runs an FBM-driven wind field per frame so the particles cluster and
- * sway together with candle-flame irregularity instead of each one wobbling
- * on its own metronome.
- */
 export function HitParticles() {
   const settings = useStore((s) => s.settings)
 
-  const positions = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
   const births = useMemo(() => {
-    // Sentinel "long-dead" so freshly-allocated slots don't render anything
-    // before the first emission writes them.
     const a = new Float32Array(MAX_PARTICLES)
     a.fill(-1000)
     return a
   }, [])
-  const seeds = useMemo(() => new Float32Array(MAX_PARTICLES), [])
-  const speeds = useMemo(() => new Float32Array(MAX_PARTICLES), [])
-  const swayAmps = useMemo(() => new Float32Array(MAX_PARTICLES), [])
-  const swayFreqs = useMemo(() => new Float32Array(MAX_PARTICLES), [])
+  const lifetimes = useMemo(() => new Float32Array(MAX_PARTICLES), [])
+  // Per-particle world position (vec3) — written every frame.
+  const positions = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
+  // Internal state (never reaches the GPU):
+  // - velocities: current velocity used for position integration
+  // - emitterPositions: where the particle was spawned, used for the
+  //   "moves with" mix term (`pos × movesWith + emit × (1 − movesWith)`)
+  //   so noise sampling can be partially anchored to the emitter and
+  //   give intra-emission coherence within a single press.
+  const velocities = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
+  const emitterPositions = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
+  // Per-particle low-pass-filtered curl velocity. EMA-blended with the
+  // raw curl sample each frame; used in place of the raw sample for the
+  // velocity update so frame-to-frame curl discontinuities don't show
+  // as a high-frequency wobble. Initialised to 0 on emit so the first
+  // few frames ramp into the wind smoothly.
+  const smoothedCurl = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
+  const baseSizes = useMemo(() => new Float32Array(MAX_PARTICLES), [])
   const colors = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
 
-  const positionAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(positions, 3)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [positions])
-  const birthAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(births, 1)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [births])
-  const seedAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(seeds, 1)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [seeds])
-  const speedAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(speeds, 1)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [speeds])
-  const swayAmpAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(swayAmps, 1)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [swayAmps])
-  const swayFreqAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(swayFreqs, 1)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [swayFreqs])
-  const colorAttr = useMemo(() => {
-    const a = new THREE.BufferAttribute(colors, 3)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }, [colors])
+  const birthAttr = useMemo(
+    () => new THREE.InstancedBufferAttribute(births, 1).setUsage(THREE.DynamicDrawUsage),
+    [births],
+  )
+  const lifetimeAttr = useMemo(
+    () => new THREE.InstancedBufferAttribute(lifetimes, 1).setUsage(THREE.DynamicDrawUsage),
+    [lifetimes],
+  )
+  const positionAttr = useMemo(
+    () => new THREE.InstancedBufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage),
+    [positions],
+  )
+  const baseSizeAttr = useMemo(
+    () => new THREE.InstancedBufferAttribute(baseSizes, 1).setUsage(THREE.DynamicDrawUsage),
+    [baseSizes],
+  )
+  const colorAttr = useMemo(
+    () => new THREE.InstancedBufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage),
+    [colors],
+  )
+
+  const geometry = useMemo(() => {
+    const base = new THREE.PlaneGeometry(1, 1)
+    const g = new THREE.InstancedBufferGeometry()
+    g.index = base.index
+    g.setAttribute('position', base.getAttribute('position'))
+    g.setAttribute('uv', base.getAttribute('uv'))
+    g.setAttribute('aBirth', birthAttr)
+    g.setAttribute('aLifetime', lifetimeAttr)
+    g.setAttribute('aPosition', positionAttr)
+    g.setAttribute('aBaseSize', baseSizeAttr)
+    g.setAttribute('aColor', colorAttr)
+    g.instanceCount = MAX_PARTICLES
+    base.dispose()
+    return g
+  }, [birthAttr, lifetimeAttr, positionAttr, baseSizeAttr, colorAttr])
+  useEffect(() => () => geometry.dispose(), [geometry])
 
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
-        uLifetime: { value: settings.particleLifetime },
+        uHitY: { value: 0 },
         uSize: { value: settings.particleSize },
-        uIntensity: { value: settings.particleIntensity },
-        uWind: { value: settings.particleWind },
-        uWindScale: { value: settings.particleWindScale },
-        uWindSpeed: { value: settings.particleWindSpeed },
-        uHaloIntensity: { value: settings.particleHaloIntensity },
-        uHaloSize: { value: settings.particleHaloSize },
-        uPixelRatio: { value: window.devicePixelRatio || 1 },
+        uOpacity: { value: settings.particleOpacity },
+        uBrightness: { value: settings.particleBrightness },
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
@@ -234,66 +276,41 @@ export function HitParticles() {
       blending: THREE.AdditiveBlending,
       toneMapped: false,
     })
-    // settings deliberately excluded — uniforms mutated below
+    // settings excluded — sync below via per-field useEffects
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => () => material.dispose(), [material])
 
-  useEffect(() => {
-    material.uniforms.uLifetime.value = settings.particleLifetime
-  }, [material, settings.particleLifetime])
-  useEffect(() => {
-    material.uniforms.uSize.value = settings.particleSize
-  }, [material, settings.particleSize])
-  useEffect(() => {
-    material.uniforms.uIntensity.value = settings.particleIntensity
-  }, [material, settings.particleIntensity])
-  useEffect(() => {
-    material.uniforms.uWind.value = settings.particleWind
-  }, [material, settings.particleWind])
-  useEffect(() => {
-    material.uniforms.uWindScale.value = settings.particleWindScale
-  }, [material, settings.particleWindScale])
-  useEffect(() => {
-    material.uniforms.uWindSpeed.value = settings.particleWindSpeed
-  }, [material, settings.particleWindSpeed])
-  useEffect(() => {
-    material.uniforms.uHaloIntensity.value = settings.particleHaloIntensity
-  }, [material, settings.particleHaloIntensity])
-  useEffect(() => {
-    material.uniforms.uHaloSize.value = settings.particleHaloSize
-  }, [material, settings.particleHaloSize])
+  useEffect(() => { material.uniforms.uSize.value = settings.particleSize }, [material, settings.particleSize])
+  useEffect(() => { material.uniforms.uOpacity.value = settings.particleOpacity }, [material, settings.particleOpacity])
+  useEffect(() => { material.uniforms.uBrightness.value = settings.particleBrightness }, [material, settings.particleBrightness])
 
-  const geometry = useMemo(() => {
-    const g = new THREE.BufferGeometry()
-    g.setAttribute('position', positionAttr)
-    g.setAttribute('aBirth', birthAttr)
-    g.setAttribute('aSeed', seedAttr)
-    g.setAttribute('aSpeed', speedAttr)
-    g.setAttribute('aSwayAmp', swayAmpAttr)
-    g.setAttribute('aSwayFreq', swayFreqAttr)
-    g.setAttribute('aColor', colorAttr)
-    g.setDrawRange(0, MAX_PARTICLES)
-    return g
-  }, [positionAttr, birthAttr, seedAttr, speedAttr, swayAmpAttr, swayFreqAttr, colorAttr])
-  useEffect(() => () => geometry.dispose(), [geometry])
-
-  const points = useMemo(() => {
-    const p = new THREE.Points(geometry, material)
-    p.frustumCulled = false
-    return p
+  const mesh = useMemo(() => {
+    const m = new THREE.Mesh(geometry, material)
+    m.frustumCulled = false
+    return m
   }, [geometry, material])
 
   const heldCount = useMemo(() => new Uint8Array(KEY_COUNT), [])
-  // Countdown to the next puff event for each key. Stays > 0 while the next
-  // puff is pending; reset to a randomized interval after each puff fires.
-  const puffTimer = useMemo(() => new Float32Array(KEY_COUNT), [])
-  // Queued attack puffs to fire on the next useFrame.
-  const pendingAttackPuffs = useMemo(() => new Uint8Array(KEY_COUNT), [])
   const lastVelocity = useMemo(() => new Float32Array(KEY_COUNT), [])
+  const emitAccum = useMemo(() => new Float32Array(KEY_COUNT), [])
+  const pendingBurst = useMemo(() => new Uint8Array(KEY_COUNT), [])
+  // Per-key timestamp of the most recent note-on, used to enforce a
+  // minimum sustained emission window matching the falling-note
+  // `noteMinLength` — staccato notes still spawn particles for as long
+  // as the visual bar is on screen, so the key glow, the bar, and the
+  // particles all have synchronised durations. -Infinity = no past note.
+  const noteOnTime = useMemo(() => {
+    const a = new Float32Array(KEY_COUNT)
+    a.fill(-Infinity)
+    return a
+  }, [])
   const writeIdx = useRef(0)
   const lastFrame = useRef(performance.now() / 1000)
   const colorVec = useMemo(() => new THREE.Color(), [])
+  // Reused scratch buffers — avoid per-frame allocation in the hot loop.
+  const curlScratch = useMemo<[number, number, number]>(() => [0, 0, 0], [])
+  const dirScratch = useMemo<[number, number]>(() => [0, 0], [])
 
   useEffect(() => {
     const off = audioEngine.addKeyListener((ev) => {
@@ -302,110 +319,274 @@ export function HitParticles() {
       if (ev.type === 'on') {
         heldCount[idx]++
         lastVelocity[idx] = ev.velocity
-        // Fire several puffs on the next frame so the attack reads as a burst.
-        pendingAttackPuffs[idx] += ATTACK_PUFFS
-        // Reset the sustain timer so the first sustained puff isn't immediate
-        // on top of the attack burst.
-        puffTimer[idx] = 1 / BASE_PUFF_RATE
+        pendingBurst[idx] += ATTACK_BURST
+        emitAccum[idx] = 0
+        noteOnTime[idx] = performance.now() / 1000
       } else {
         heldCount[idx] = Math.max(0, heldCount[idx] - 1)
       }
     })
     return off
-  }, [heldCount, lastVelocity, pendingAttackPuffs, puffTimer])
+  }, [heldCount, lastVelocity, pendingBurst, emitAccum, noteOnTime])
 
   useFrame(() => {
     const now = performance.now() / 1000
     const dt = Math.min(0.05, now - lastFrame.current)
     lastFrame.current = now
+
     material.uniforms.uTime.value = now
+    material.uniforms.uHitY.value = settings.keyboardY + WHITE_KEY_LENGTH
 
     if (!settings.particlesEnabled) return
 
     const hitY = settings.keyboardY + WHITE_KEY_LENGTH
-    // In front of the keys (0/0.04) but behind the falling-note plane (0.05)
-    // so particles read as emitted from beneath the bars, not on top of them.
-    const noteZ = 0.045
+    // Minimum emission duration in seconds, derived from the falling-note
+    // `noteMinLength` (world units) using the same fall-distance ↔ time
+    // conversion FallingNotes uses. Recomputed per frame so changes to
+    // camera / keyboard / fall duration take effect immediately, including
+    // for notes already in their min-emit window.
+    const camDistance = Math.abs(settings.cameraPos[2])
+    const halfVisHeight = camDistance * Math.tan((settings.cameraFov * Math.PI) / 360)
+    const visibleTop = settings.cameraLookAt[1] + halfVisHeight
+    const fallDistance = Math.max(0.5, visibleTop - hitY) + 1.0  // SPAWN_BUFFER = 1.0
+    const minEmitDurationSec = Math.max(0, settings.noteMinLength) / fallDistance * settings.fallDurationSec
+
     colorVec.set(settings.particleColor)
     const cr = colorVec.r
     const cg = colorVec.g
     const cb = colorVec.b
-    const rate = Math.max(0.0001, settings.particleRate)
-    const speedScale = settings.particleSpeed
+    const userSpeed = settings.particleSpeed
+    const userLifetime = settings.particleLifetime
+    const userCount = settings.particleCount
+    const turbStrength = settings.particleTurbulence
+    const turbFreq = settings.turbulenceFrequency
+    const flowSpeed = settings.flowSpeed
+    // Per-axis turbulence scales — applied both as inverse feature-size
+    // inside the domain transform (`/ turbX` etc.) AND as component-wise
+    // amplitude on the curl output. Floor at small ε so divide-by-zero
+    // doesn't blow up when the user dials an axis to 0.
+    const tx = Math.max(settings.turbulenceX, 1e-6)
+    const ty = Math.max(settings.turbulenceY, 1e-6)
+    const tz = Math.max(settings.turbulenceZ, 1e-6)
+    const locality = settings.noiseLocality
+    const oneMinusLocality = 1 - locality
+    const octaves = Math.max(1, Math.floor(settings.turbulenceOctaves))
+    const octScale = settings.octaveScale
+    const octMul = settings.octaveMultiplier
+    const drag = settings.drag
+    const swirl = settings.swirl
+    const kick = settings.kick
+    // dt × 60 — turns per-60Hz-frame coefficients (friction, angle bend)
+    // into framerate-independent rates. = 1.0 at 60fps; 2.0 at 30fps.
+    const dtFactor = dt * 60.0
+    // Z-axis time evolution — slides the noise sample point so the wind
+    // landscape drifts over time. flowSpeed = 0 freezes the field.
+    const tNoise = now * flowSpeed
+    // Frame-rate-independent EMA blending coefficient for the curl
+    // smoothing filter. α = 1 − exp(−dt/τ); at 60fps with τ=60ms this
+    // is ≈ 0.245.
+    const smoothingAlpha = 1 - Math.exp(-dt / CURL_SMOOTHING_TAU)
 
-    let dirty = false
+    let positionDirty = false
+    for (let i = 0; i < MAX_PARTICLES; i++) {
+      const birth = births[i]
+      const age = now - birth
+      if (age < 0 || age > lifetimes[i]) continue
 
-    const emitPuff = (keyIdx: number, vel: number) => {
-      const key = KEYBOARD_LAYOUT.keys[keyIdx]
-      const puffSize = PUFF_SIZE_MIN + Math.floor(Math.random() * (PUFF_SIZE_MAX - PUFF_SIZE_MIN + 1))
-      // Center the puff at a random spot within the key's width so successive
-      // puffs from a held key originate from different points (you see
-      // multiple wisps over time, not a single stream from one spot).
-      const cx = key.x + (Math.random() - 0.5) * key.width * 0.7
-      // Shared seed → all particles in this puff march to the same micro-sway
-      // phase. Combined with their tight start positions (and shared wind
-      // sampling), they read as one coherent wisp.
-      const sharedSeed = Math.random()
-      // Base speed shared across the puff with small individual variance —
-      // keeps the cluster cohering as it rises rather than smearing apart.
-      const baseSpeed = (0.45 + Math.random() * 0.85) * (0.6 + vel * 0.5) * speedScale
+      const i3 = i * 3
+      let px = positions[i3 + 0]
+      let py = positions[i3 + 1]
+      let pz = positions[i3 + 2]
+      let vx = velocities[i3 + 0]
+      let vy = velocities[i3 + 1]
+      let vz = velocities[i3 + 2]
+      const ex = emitterPositions[i3 + 0]
+      const ey = emitterPositions[i3 + 1]
+      const ez = emitterPositions[i3 + 2]
 
-      for (let j = 0; j < puffSize; j++) {
-        const slot = writeIdx.current
-        writeIdx.current = (writeIdx.current + 1) % MAX_PARTICLES
+      if (turbStrength > 0) {
+        // Domain transform — mix particle + emitter by locality.
+        // locality = 1 → pure particle position (each particle drifts
+        // independently). locality = 0 → noise sampled at emitter (all
+        // particles from one press follow the same wind in lockstep).
+        // Mid values give partial coherence within a single emission.
+        const dxBase = px * locality + ex * oneMinusLocality
+        const dyBase = py * locality + ey * oneMinusLocality
+        const dzBase = pz * locality + ez * oneMinusLocality
+        // Apply per-axis scale: smaller tx/ty/tz value → larger feature
+        // size on that axis → smoother variation in that direction.
+        const dx = dxBase * turbFreq / tx
+        const dy = dyBase * turbFreq / ty
+        const dz = dzBase * turbFreq / tz + tNoise
 
-        // Tight cluster around the puff center — small jitter so individual
-        // particles are visible but they overlap meaningfully.
-        const xJ = (Math.random() - 0.5) * 0.06
-        const yJ = (Math.random() - 0.5) * 0.04
-        positions[slot * 3 + 0] = cx + xJ
-        positions[slot * 3 + 1] = hitY + yJ
-        positions[slot * 3 + 2] = noteZ
+        // Multi-octave curl noise sample.
+        sampleCurl(dx, dy, dz, octaves, octScale, octMul, curlScratch)
 
-        births[slot] = now
-        seeds[slot] = sharedSeed
-        // Small individual deviations from the shared base.
-        speeds[slot] = baseSpeed * (0.85 + Math.random() * 0.3)
-        swayAmps[slot] = 0.03 + Math.random() * 0.06
-        swayFreqs[slot] = 2.0 + Math.random() * 3.0
+        // EMA-blend the raw curl into the per-particle smoothed buffer
+        // to filter out the high-frequency wobble caused by lattice-cell
+        // gradient discontinuities + fast Z-axis time slide.
+        const sx = smoothedCurl[i3 + 0]
+        const sy = smoothedCurl[i3 + 1]
+        const sz_ = smoothedCurl[i3 + 2]
+        const nsx = sx + smoothingAlpha * (curlScratch[0] - sx)
+        const nsy = sy + smoothingAlpha * (curlScratch[1] - sy)
+        const nsz = sz_ + smoothingAlpha * (curlScratch[2] - sz_)
+        smoothedCurl[i3 + 0] = nsx
+        smoothedCurl[i3 + 1] = nsy
+        smoothedCurl[i3 + 2] = nsz
 
-        colors[slot * 3 + 0] = cr
-        colors[slot * 3 + 1] = cg
-        colors[slot * 3 + 2] = cb
+        // Component-multiply by per-axis amplitudes so TurbX/Y/Z also
+        // weight the OUTPUT, giving asymmetric noise when the user dials
+        // them away from each other.
+        const dv = turbStrength * dt
+        vx += nsx * tx * dv
+        vy += nsy * ty * dv
+        vz += nsz * tz * dv
       }
-      dirty = true
+
+      // Optional rotational pull on velocity.xy angle. +Y is the
+      // unstable equilibrium — perturbations grow over time, producing
+      // a swirling spread when enabled. Most useful when paired with
+      // friction so particles don't spin out indefinitely.
+      if (swirl > 0) {
+        const xySpeed = Math.sqrt(vx * vx + vy * vy)
+        if (xySpeed > 1e-6) {
+          const angle = Math.atan2(vy, vx)
+          const dev = Math.abs(HALF_PI - angle) * TWO_OVER_PI
+          const devClamped = dev < 1 ? dev : 1
+          const sign = HALF_PI > angle ? 1 : -1
+          const newAngle = angle - sign * swirl * ANGULAR_BEND_RATE_PER_SEC * devClamped * dt
+          vx = xySpeed * Math.cos(newAngle)
+          vy = xySpeed * Math.sin(newAngle)
+        }
+      }
+
+      // Drag — multiplicative damping on xy_speed and |vz|. The
+      // `min(speed, 1)` factor bends the damping curve so high-speed
+      // particles slow proportionally faster. xy_speed is floored so
+      // particles never fully stall in zero-curl regions.
+      if (drag > 0) {
+        const dragStep = drag * DRAG_RATE_PER_SEC * dt
+        const xySpeed = Math.sqrt(vx * vx + vy * vy)
+        if (xySpeed > 1e-6) {
+          const damp = xySpeed < 1 ? xySpeed : 1
+          const newXySpeed = Math.max(xySpeed - dragStep * damp, MIN_XY_SPEED)
+          const scale = newXySpeed / xySpeed
+          vx *= scale
+          vy *= scale
+        }
+        const vzAbs = Math.abs(vz)
+        if (vzAbs > 1e-6) {
+          const dampZ = vzAbs < 1 ? vzAbs : 1
+          const newVzAbs = Math.max(vzAbs - dragStep * dampZ, 0)
+          vz *= newVzAbs / vzAbs
+        }
+      }
+
+      // Integrate position.
+      px += vx * dt
+      py += vy * dt
+      pz += vz * dt
+
+      positions[i3 + 0] = px
+      positions[i3 + 1] = py
+      positions[i3 + 2] = pz
+      velocities[i3 + 0] = vx
+      velocities[i3 + 1] = vy
+      velocities[i3 + 2] = vz
+      positionDirty = true
+    }
+
+    let emissionDirty = false
+
+    const emitOne = (keyIdx: number, vel: number, isBurst: boolean) => {
+      const key = KEYBOARD_LAYOUT.keys[keyIdx]
+      const ox = key.x + (Math.random() - 0.5) * EMITTER_WIDTH
+      const oy = hitY + (Math.random() - 0.5) * 0.02
+      const oz = 0
+
+      const velFactor = 0.55 + vel * 0.6
+      const sizeJitter = 0.9 + Math.random() * 0.2
+      const burstSize = isBurst ? 1.25 : 1.0
+
+      const slot = writeIdx.current
+      writeIdx.current = (writeIdx.current + 1) % MAX_PARTICLES
+      const i3 = slot * 3
+
+      births[slot] = now
+      lifetimes[slot] = userLifetime * LIFETIME_SCALE
+      positions[i3 + 0] = ox
+      positions[i3 + 1] = oy
+      positions[i3 + 2] = oz
+      // Store emitter pos for the moves-with mix later in the integration.
+      emitterPositions[i3 + 0] = ox
+      emitterPositions[i3 + 1] = oy
+      emitterPositions[i3 + 2] = oz
+
+      // Initial velocity: pure upward + optional outward kick from
+      // dirFromXY × kick. Default kick = 0 so the impulse is off; when
+      // dialled up it gives particles a deterministic radial spread
+      // based on their emit XY (same emit position → same direction).
+      let kickX = 0
+      let kickY = 0
+      if (kick > 0) {
+        dirFromXY(ox, oy, dirScratch)
+        kickX = dirScratch[0] * kick
+        kickY = dirScratch[1] * kick
+      }
+      velocities[i3 + 0] = kickX
+      velocities[i3 + 1] = BASE_UP_SPEED * userSpeed * velFactor + kickY
+      velocities[i3 + 2] = 0
+      // Reset the smoothed curl so freshly-emitted particles don't
+      // inherit residual wind from the slot's previous occupant.
+      smoothedCurl[i3 + 0] = 0
+      smoothedCurl[i3 + 1] = 0
+      smoothedCurl[i3 + 2] = 0
+      baseSizes[slot] = BASE_PARTICLE_SIZE * sizeJitter * velFactor * burstSize
+      colors[i3 + 0] = cr
+      colors[i3 + 1] = cg
+      colors[i3 + 2] = cb
+      emissionDirty = true
+      positionDirty = true
     }
 
     for (let i = 0; i < KEY_COUNT; i++) {
-      // Fire any queued attack puffs first (independent of the sustain timer).
-      while (pendingAttackPuffs[i] > 0) {
-        pendingAttackPuffs[i]--
-        emitPuff(i, lastVelocity[i])
+      while (pendingBurst[i] > 0) {
+        pendingBurst[i]--
+        emitOne(i, lastVelocity[i], true)
       }
 
-      if (heldCount[i] === 0) continue
+      // Effective "still emitting" = key physically held OR within the
+      // min-emission window since the last note-on. Lets staccato notes
+      // produce a particle plume that lasts as long as the falling-note
+      // visual bar (which is also extended to noteMinLength).
+      const effectiveHeld = heldCount[i] > 0 || now < noteOnTime[i] + minEmitDurationSec
+      if (!effectiveHeld) continue
 
-      puffTimer[i] -= dt
-      // Loop in case multiple puffs are due (long frame, high rate).
-      while (puffTimer[i] <= 0) {
-        emitPuff(i, lastVelocity[i])
-        // Schedule next puff at base interval × 0.6..1.6 → irregular timing
-        // is half of what makes this read as natural rather than mechanical.
-        const interval = (1 / (BASE_PUFF_RATE * rate)) * (0.6 + Math.random() * 1.0)
-        puffTimer[i] += interval
+      // Stochastic-rounded emission count this frame so per-frame rates
+      // that aren't integer multiples of fps don't lose or double counts.
+      const target = userCount * dtFactor * (0.55 + lastVelocity[i] * 0.6)
+      emitAccum[i] += target
+      while (emitAccum[i] >= 1.0) {
+        emitAccum[i] -= 1.0
+        emitOne(i, lastVelocity[i], false)
+      }
+      if (emitAccum[i] > 0 && Math.random() < emitAccum[i]) {
+        emitAccum[i] -= 1.0
+        emitOne(i, lastVelocity[i], false)
       }
     }
 
-    if (dirty) {
-      positionAttr.needsUpdate = true
+    if (emissionDirty) {
       birthAttr.needsUpdate = true
-      seedAttr.needsUpdate = true
-      speedAttr.needsUpdate = true
-      swayAmpAttr.needsUpdate = true
-      swayFreqAttr.needsUpdate = true
+      lifetimeAttr.needsUpdate = true
+      baseSizeAttr.needsUpdate = true
       colorAttr.needsUpdate = true
+    }
+    if (positionDirty) {
+      positionAttr.needsUpdate = true
     }
   })
 
-  return <primitive object={points} />
+  return <primitive object={mesh} />
 }

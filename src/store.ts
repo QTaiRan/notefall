@@ -60,20 +60,58 @@ export type Settings = {
   // Softness of the core falloff — larger = wider halo edge around the bright spot
   flashHaloWidth: number
   flashColor: string
-  // Particles drifting up from the keyboard while a note is held
+  // Particles drifting up from the keyboard while a note is held. The
+  // visual signature is a billboarded radial flame-wisp: the quad geometry
+  // stays at fixed size, but the fragment's UV is radially dilated as the
+  // particle ages so the bright core appears to shrink while the soft halo
+  // expands. Motion is curl-noise driven (Bridson 2007), with per-particle
+  // 3D position so the divergence-free vector field can produce internal
+  // cluster width without horizontal spreading.
   particlesEnabled: boolean
-  particleIntensity: number
-  particleSize: number
-  particleRate: number
-  particleSpeed: number
-  particleLifetime: number
   particleColor: string
-  // Wind field that drives clustered, candle-flame-like sway
-  particleWind: number       // strength (how far particles get pushed)
-  particleWindScale: number  // gust size — larger = broader cells = more cohesive cluster motion
-  particleWindSpeed: number  // how fast the field evolves over time
-  particleHaloIntensity: number // brightness of the soft glow around each particle's core
-  particleHaloSize: number      // how far that glow extends past the core
+  particleSize: number          // global scale on the radial falloff
+  particleOpacity: number       // alpha multiplier on the final color
+  particleBrightness: number    // lift toward white in `tex × (color + (1 − color) × brightness) × 1.4`
+  particleLifetime: number      // seconds — visible duration of each particle
+  particleSpeed: number         // multiplier on the initial upward drift velocity
+  particleCount: number         // per-key per-frame emission count (stochastic-rounded)
+  // Curl-noise wind field shape. Multi-octave FBM on top of a 3D Perlin
+  // gradient sampled at 3 displaced bases (Bridson 2007's vector
+  // potential ψ → curl(ψ) = divergence-free flow).
+  particleTurbulence: number    // master strength of the curl contribution to velocity
+  turbulenceFrequency: number   // spatial frequency of the curl field (smaller = larger features)
+  flowSpeed: number        // rate the noise sample point slides along Z (= "wind landscape evolves")
+  // Per-axis turbulence scales — applied BOTH as inverse feature-size
+  // inside the domain transform (asymmetric noise) AND component-wise on
+  // the curl output (per-axis amplitude).
+  turbulenceX: number
+  turbulenceY: number
+  turbulenceZ: number
+  // 0 = noise sample point pinned to the emitter (all particles in one
+  // press follow the same wind in lockstep). 1 = sample purely at the
+  // particle's current position (each drifts independently). Mid values
+  // give intra-emission coherence within a single press.
+  noiseLocality: number
+  // FBM octave count and per-octave multipliers. octaveScale = lacunarity
+  // (frequency multiplier per octave); octaveMultiplier = gain (amplitude
+  // multiplier per octave).
+  turbulenceOctaves: number
+  octaveScale: number
+  octaveMultiplier: number
+  // Multiplicative drag rate on velocity per second. xy_speed and |vz|
+  // are damped by `drag × C × min(speed, 1) × dt` per frame; xy_speed is
+  // floored at a small minimum so particles don't completely stall in
+  // zero-curl regions.
+  drag: number
+  // Rotational pull on velocity.xy angle AWAY from π/2 (= +Y, "up"). +Y
+  // is an unstable equilibrium — particles starting purely upward stay
+  // upward, but any horizontal perturbation grows over time, producing
+  // a swirling-spread visual when this is dialled up.
+  swirl: number
+  // Initial outward kick on emission, in a direction deterministically
+  // hashed from the spawn XY (so two particles spawned at the same XY
+  // get the same launch direction). 0 = pure upward initial velocity.
+  kick: number
   // Glowing laser line at the keyboard hit point — straight bar + animated wavy beam
   hitLineEnabled: boolean
   hitLineColor: string
@@ -167,7 +205,7 @@ export const defaultSettings: Settings = {
   fallDirection: 'down',
   fallDurationSec: 2.5,
   noteColor: '#5ad7ff',
-  noteEmissive: 1.5,
+  noteEmissive: 1.0,
   noteOpacity: 1.0,
   noteCornerRadius: 0.05,
   noteWidthScale: 1.0,
@@ -186,17 +224,26 @@ export const defaultSettings: Settings = {
   flashHaloWidth: 0.5,
   flashColor: '#ffffff',
   particlesEnabled: true,
-  particleIntensity: 0.15,
-  particleSize: 0.3,
-  particleRate: 20.0,
-  particleSpeed: 0.8,
-  particleLifetime: 2.5,
   particleColor: '#5ad7ff',
-  particleWind: 1.0,
-  particleWindScale: 0.3,
-  particleWindSpeed: 1.0,
-  particleHaloIntensity: 0.2,
-  particleHaloSize: 1.5,
+  particleSize: 0.80,
+  particleOpacity: 0.15,
+  particleBrightness: 0.15,
+  particleLifetime: 0.70,
+  particleSpeed: 1.00,
+  particleCount: 8.00,
+  particleTurbulence: 0.50,
+  turbulenceFrequency: 1.40,
+  flowSpeed: 4.75,
+  turbulenceX: 0.5,
+  turbulenceY: 0.70,
+  turbulenceZ: 0.90,
+  noiseLocality: 0.80,
+  turbulenceOctaves: 3,
+  octaveScale: 1.1,
+  octaveMultiplier: 0.0,
+  drag: 0.10,
+  swirl: 0.10,
+  kick: 0,
   hitLineEnabled: true,
   hitLineColor: '#5ad7ff',
   hitLineIntensity: 2.5,

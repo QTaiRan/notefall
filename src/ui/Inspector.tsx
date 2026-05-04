@@ -154,17 +154,26 @@ export function Inspector() {
 
         <SectionTitle>Particles</SectionTitle>
         <SwitchRow label="Enabled" value={s.particlesEnabled} onChange={(v) => update({ particlesEnabled: v })} defaultValue={def.particlesEnabled} />
-        <SliderRow label="Intensity" value={s.particleIntensity} min={0} max={1} step={0.01} onChange={(v) => update({ particleIntensity: v })} defaultValue={def.particleIntensity} />
-        <SliderRow label="Size" value={s.particleSize} min={0} max={1.5} step={0.01} onChange={(v) => update({ particleSize: v })} defaultValue={def.particleSize} />
-        <SliderRow label="Rate" value={s.particleRate} min={0} max={40} step={0.1} onChange={(v) => update({ particleRate: v })} defaultValue={def.particleRate} />
-        <SliderRow label="Speed" value={s.particleSpeed} min={0} max={3} step={0.05} onChange={(v) => update({ particleSpeed: v })} defaultValue={def.particleSpeed} />
-        <SliderRow label="Lifetime" value={s.particleLifetime} min={0.3} max={6} step={0.1} onChange={(v) => update({ particleLifetime: v })} defaultValue={def.particleLifetime} />
         <ColorRow label="Color" value={s.particleColor} onChange={(v) => update({ particleColor: v })} defaultValue={def.particleColor} />
-        <SliderRow label="Wind" value={s.particleWind} min={0} max={3} step={0.05} onChange={(v) => update({ particleWind: v })} defaultValue={def.particleWind} />
-        <SliderRow label="Wind Scale" value={s.particleWindScale} min={0.05} max={1.5} step={0.01} onChange={(v) => update({ particleWindScale: v })} defaultValue={def.particleWindScale} />
-        <SliderRow label="Wind Speed" value={s.particleWindSpeed} min={0} max={3} step={0.05} onChange={(v) => update({ particleWindSpeed: v })} defaultValue={def.particleWindSpeed} />
-        <SliderRow label="Halo Intensity" value={s.particleHaloIntensity} min={0} max={1} step={0.01} onChange={(v) => update({ particleHaloIntensity: v })} defaultValue={def.particleHaloIntensity} />
-        <SliderRow label="Halo Size" value={s.particleHaloSize} min={0} max={5} step={0.1} onChange={(v) => update({ particleHaloSize: v })} defaultValue={def.particleHaloSize} />
+        <SliderRow label="Size" value={s.particleSize} min={0} max={2} step={0.01} onChange={(v) => update({ particleSize: v })} defaultValue={def.particleSize} />
+        <SliderRow label="Opacity" value={s.particleOpacity} min={0} max={1} step={0.01} onChange={(v) => update({ particleOpacity: v })} defaultValue={def.particleOpacity} />
+        <SliderRow label="Brightness" value={s.particleBrightness} min={0} max={2} step={0.01} onChange={(v) => update({ particleBrightness: v })} defaultValue={def.particleBrightness} />
+        <SliderRow label="Lifetime" value={s.particleLifetime} min={0.1} max={3} step={0.05} onChange={(v) => update({ particleLifetime: v })} defaultValue={def.particleLifetime} />
+        <SliderRow label="Speed" value={s.particleSpeed} min={0} max={3} step={0.05} onChange={(v) => update({ particleSpeed: v })} defaultValue={def.particleSpeed} />
+        <SliderRow label="Count" value={s.particleCount} min={0} max={30} step={0.1} onChange={(v) => update({ particleCount: v })} defaultValue={def.particleCount} />
+        <SliderRow label="Turbulence" value={s.particleTurbulence} min={0} max={2} step={0.05} onChange={(v) => update({ particleTurbulence: v })} defaultValue={def.particleTurbulence} />
+        <SliderRow label="Turb Frequency" value={s.turbulenceFrequency} min={0} max={5} step={0.05} onChange={(v) => update({ turbulenceFrequency: v })} defaultValue={def.turbulenceFrequency} />
+        <SliderRow label="Flow Speed" value={s.flowSpeed} min={0} max={16} step={0.05} onChange={(v) => update({ flowSpeed: v })} defaultValue={def.flowSpeed} />
+        <SliderRow label="Turbulence X" value={s.turbulenceX} min={0} max={2} step={0.05} onChange={(v) => update({ turbulenceX: v })} defaultValue={def.turbulenceX} />
+        <SliderRow label="Turbulence Y" value={s.turbulenceY} min={0} max={2} step={0.05} onChange={(v) => update({ turbulenceY: v })} defaultValue={def.turbulenceY} />
+        <SliderRow label="Turbulence Z" value={s.turbulenceZ} min={0} max={2} step={0.05} onChange={(v) => update({ turbulenceZ: v })} defaultValue={def.turbulenceZ} />
+        <SliderRow label="Locality" value={s.noiseLocality} min={0} max={1} step={0.01} onChange={(v) => update({ noiseLocality: v })} defaultValue={def.noiseLocality} />
+        <SliderRow label="Octaves" value={s.turbulenceOctaves} min={1} max={4} step={1} onChange={(v) => update({ turbulenceOctaves: v })} defaultValue={def.turbulenceOctaves} />
+        <SliderRow label="Octave Scale" value={s.octaveScale} min={0.5} max={3} step={0.05} onChange={(v) => update({ octaveScale: v })} defaultValue={def.octaveScale} />
+        <SliderRow label="Octave Mul" value={s.octaveMultiplier} min={0} max={1} step={0.01} onChange={(v) => update({ octaveMultiplier: v })} defaultValue={def.octaveMultiplier} />
+        <SliderRow label="Drag" value={s.drag} min={0} max={1} step={0.01} onChange={(v) => update({ drag: v })} defaultValue={def.drag} />
+        <SliderRow label="Swirl" value={s.swirl} min={0} max={1} step={0.01} onChange={(v) => update({ swirl: v })} defaultValue={def.swirl} />
+        <SliderRow label="Kick" value={s.kick} min={0} max={3} step={0.05} onChange={(v) => update({ kick: v })} defaultValue={def.kick} />
 
         <SectionTitle>Hit Line</SectionTitle>
         <SwitchRow label="Enabled" value={s.hitLineEnabled} onChange={(v) => update({ hitLineEnabled: v })} defaultValue={def.hitLineEnabled} />
