@@ -62,6 +62,14 @@ const FRAGMENT_SHADER = /* glsl */ `
   // the UV so positive offset visually moves the image in the positive
   // direction (right / up) on the note.
   uniform vec2 uTextureOffset;
+  // LOD bias applied to the custom-image sampler. Each unit doubles the
+  // effective blur radius — the GPU's trilinear mipmap filter handles the
+  // smoothing in hardware, so even large values stay artifact-free
+  // (compared to a multi-tap blur, which ghosts at wide radii).
+  uniform float uTextureBlur;
+  // Custom-preset per-note offset weight in [0, 1]. Multiplies the vSeed
+  // component so 0 = every note identical, 1 = full random offset per note.
+  uniform float uTextureVariation;
   uniform float uTextureContrast;
   uniform vec3 uRimColor;
   uniform float uRimWidth;
@@ -199,29 +207,33 @@ const FRAGMENT_SHADER = /* glsl */ `
   }
 
   // 'custom': user-uploaded image.
-  // - Both axes use vUv * vSize * uTextureScale so the image maps to a
-  //   world-space tile of size 1/uTextureScale. This means:
-  //     * Low scale = each tile is large → image is ZOOMED IN (only a
-  //       portion fits on the note, no stretching).
-  //     * High scale = each tile is small → image REPEATS many times.
-  //   Both axes scale uniformly so the source image's aspect ratio is
-  //   preserved (no squashing).
-  // - uAnimSpeed (X, Y) scrolls the UV per axis independently.
-  // - Per-note seed offsets the tile origin so each note starts at a
-  //   different point in the pattern.
+  // - UV is per-note local: vUv * vSize gives a coordinate in world units
+  //   from the note's bottom-left corner. Multiplied by uTextureScale, the
+  //   image tiles within the note. Every note starts the image at the
+  //   same origin → identical appearance across notes.
+  // - uTextureScale = "tiles per world unit". Higher = smaller tiles
+  //   (image repeats more times within the note). Both axes scale
+  //   uniformly so the source aspect ratio is preserved.
+  // - uAnimSpeed (X, Y) scrolls the UV per axis. Same world-unit
+  //   semantics as the position term, so motion looks consistent
+  //   regardless of scale.
+  // - uTextureOffset shifts the image inside each note (positive = right
+  //   / up).
+  // - Per-note vSeed offset is gated by uTextureVariation: 0 = all notes
+  //   show the image identically, 1 = each note starts at its own random
+  //   spot. (Liquid / gem always use vSeed, since their patterns are
+  //   abstract and benefit from variation.)
   // - Contrast pushes pixel values away from mid gray (1 = identity).
   // - Tinted by uColor (set Color = white for pass-through).
   // Texture wrap is RepeatWrapping in customTexture.ts so values outside
   // [0,1] tile naturally.
   vec3 textureCustom(vec2 p, float d) {
-    // Express position AND time in the same world-space units, then convert
-    // both to UV by the same scale factor. Without this, increasing scale
-    // (smaller tiles) makes the same uAnimSpeed produce slower-looking motion
-    // and vice-versa — the user would have to retune speed every time they
-    // changed scale. Now uAnimSpeed reads as "world units per second" and
-    // the perceived motion stays constant across scales.
-    vec2 uv = (vUv * vSize + uTime * uAnimSpeed) * uTextureScale + vSeed * 100.0 - uTextureOffset;
-    vec3 sampled = texture2D(uCustomTexture, uv).rgb;
+    vec2 uv = (vUv * vSize + uTime * uAnimSpeed) * uTextureScale + vSeed * 100.0 * uTextureVariation - uTextureOffset;
+    // Single tap with LOD bias — the texture is configured with mipmaps
+    // and trilinear filtering, so the bias selects a progressively-blurred
+    // mip level. This is what GPU hardware is built to do, and produces a
+    // smooth gaussian-like blur with no ghosting at any radius.
+    vec3 sampled = texture2D(uCustomTexture, uv, uTextureBlur).rgb;
     sampled = clamp((sampled - 0.5) * uTextureContrast + 0.5, 0.0, 1.0);
     // When no image is bound yet, fall back to the tint color so the user
     // doesn't see a black rectangle while picking a file.
@@ -338,6 +350,8 @@ export function FallingNotes() {
         uTextureScale: { value: settings.noteTextureScale },
         uAnimSpeed: { value: new THREE.Vector2(settings.noteAnimSpeedX, settings.noteAnimSpeedY) },
         uTextureOffset: { value: new THREE.Vector2(settings.noteTextureOffsetX, settings.noteTextureOffsetY) },
+        uTextureBlur: { value: settings.noteTextureBlur },
+        uTextureVariation: { value: settings.noteTextureVariation },
         uTextureContrast: { value: settings.noteTextureContrast },
         uRimColor: { value: new THREE.Color(settings.noteRimColor) },
         uRimWidth: { value: settings.noteRimWidth },
@@ -364,6 +378,8 @@ export function FallingNotes() {
     material.uniforms.uTextureScale.value = settings.noteTextureScale
     material.uniforms.uAnimSpeed.value.set(settings.noteAnimSpeedX, settings.noteAnimSpeedY)
     material.uniforms.uTextureOffset.value.set(settings.noteTextureOffsetX, settings.noteTextureOffsetY)
+    material.uniforms.uTextureBlur.value = settings.noteTextureBlur
+    material.uniforms.uTextureVariation.value = settings.noteTextureVariation
     material.uniforms.uTextureContrast.value = settings.noteTextureContrast
     material.uniforms.uRimColor.value.set(settings.noteRimColor)
     material.uniforms.uRimWidth.value = settings.noteRimWidth
@@ -380,6 +396,8 @@ export function FallingNotes() {
     settings.noteAnimSpeedY,
     settings.noteTextureOffsetX,
     settings.noteTextureOffsetY,
+    settings.noteTextureBlur,
+    settings.noteTextureVariation,
     settings.noteTextureContrast,
     settings.noteRimColor,
     settings.noteRimWidth,

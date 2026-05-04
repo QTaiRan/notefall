@@ -142,6 +142,12 @@ export function Inspector() {
         ) : (s.noteTexture === 'liquid' || s.noteTexture === 'gem') ? (
           <SliderRow label="Animation Speed" value={s.noteAnimSpeedY} min={0} max={3} step={0.05} onChange={(v) => update({ noteAnimSpeedY: v })} defaultValue={def.noteAnimSpeedY} />
         ) : null}
+        {s.noteTexture === 'custom' && (
+          <>
+            <SliderRow label="Blur" value={s.noteTextureBlur} min={0} max={6} step={0.05} onChange={(v) => update({ noteTextureBlur: v })} defaultValue={def.noteTextureBlur} />
+            <SliderRow label="Per-Note Variation" value={s.noteTextureVariation} min={0} max={1} step={0.01} onChange={(v) => update({ noteTextureVariation: v })} defaultValue={def.noteTextureVariation} />
+          </>
+        )}
         {s.noteTexture !== 'solid' && (
           <SliderRow label="Texture Contrast" value={s.noteTextureContrast} min={0.3} max={20} step={0.1} onChange={(v) => update({ noteTextureContrast: v })} defaultValue={def.noteTextureContrast} />
         )}

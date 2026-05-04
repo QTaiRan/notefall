@@ -46,6 +46,15 @@ export type Settings = {
   // RepeatWrapping so values outside [-1,1] just tile through.
   noteTextureOffsetX: number
   noteTextureOffsetY: number
+  // Gaussian-style blur radius (in UV space) applied to the custom-image
+  // sample. 0 = single tap (no blur). Higher = wider 9-tap kernel — useful
+  // for softening low-resolution source images. Beyond ~0.05 the discrete
+  // taps become visible as ghosting.
+  noteTextureBlur: number
+  // Per-note random offset on the custom-image sample, in [0, 1]. 0 = every
+  // note shows the image identically positioned. 1 = each note starts at a
+  // hash-derived random spot, so adjacent notes look different.
+  noteTextureVariation: number
   // Push factor on bright spots — higher = more contrast between dark and
   // highlight regions of the pattern.
   noteTextureContrast: number
@@ -221,6 +230,8 @@ export const defaultSettings: Settings = {
   noteAnimSpeedY: 0.0,
   noteTextureOffsetX: 0.0,
   noteTextureOffsetY: 0.0,
+  noteTextureBlur: 0.0,
+  noteTextureVariation: 0.0,
   noteTextureContrast: 2.5,
   noteRimColor: '#ffffff',
   noteRimWidth: 0,
