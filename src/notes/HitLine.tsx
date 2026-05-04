@@ -250,10 +250,12 @@ export function HitLine() {
         <planeGeometry args={[planeWidth, BAR_PLANE_HEIGHT]} />
         <primitive object={barMaterial} attach="material" />
       </mesh>
-      <mesh position={[0, hitY + settings.hitLineWaveY, 0.062]}>
-        <planeGeometry args={[planeWidth, WAVE_PLANE_HEIGHT]} />
-        <primitive object={waveMaterial} attach="material" />
-      </mesh>
+      {settings.hitLineWaveEnabled && (
+        <mesh position={[0, hitY + settings.hitLineWaveY, 0.062]}>
+          <planeGeometry args={[planeWidth, WAVE_PLANE_HEIGHT]} />
+          <primitive object={waveMaterial} attach="material" />
+        </mesh>
+      )}
     </>
   )
 }

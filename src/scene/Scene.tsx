@@ -25,15 +25,17 @@ export function Scene() {
     >
       <color attach="background" args={[s.backgroundColor]} />
       <SceneContents />
-      <EffectComposer>
-        <Bloom
-          intensity={s.bloomIntensity}
-          luminanceThreshold={s.bloomThreshold}
-          luminanceSmoothing={s.bloomSmoothing}
-          radius={s.bloomRadius}
-          mipmapBlur
-        />
-      </EffectComposer>
+      {s.bloomEnabled && (
+        <EffectComposer>
+          <Bloom
+            intensity={s.bloomIntensity}
+            luminanceThreshold={s.bloomThreshold}
+            luminanceSmoothing={s.bloomSmoothing}
+            radius={s.bloomRadius}
+            mipmapBlur
+          />
+        </EffectComposer>
+      )}
     </Canvas>
   )
 }
@@ -47,8 +49,8 @@ function SceneContents() {
       <CameraSync pos={s.cameraPos} lookAt={s.cameraLookAt} fov={s.cameraFov} />
       <PlayToggleArea />
       <Keyboard />
-      <FallingNotes />
-      <LandingFlashes />
+      {s.notesEnabled && <FallingNotes />}
+      {s.flashEnabled && <LandingFlashes />}
       <HitParticles />
       <HitLine />
     </>

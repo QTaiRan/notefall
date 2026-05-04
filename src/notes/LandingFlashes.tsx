@@ -24,6 +24,9 @@ const FRAGMENT_SHADER = /* glsl */ `
   // 1.0 = default core softness. Larger value = wider, softer halo edge
   // around the bright spot. Smaller = tighter, sharper edge.
   uniform float uHaloWidth;
+  // 0 = pure uColor, 1 = pure white. Lifts the flash colour toward white
+  // so a coloured flash can still have a hot bright core.
+  uniform float uBrightness;
   void main() {
     if (vIntensity < 0.005) discard;
     vec2 p = (vUv - 0.5) * 2.0;
@@ -42,7 +45,8 @@ const FRAGMENT_SHADER = /* glsl */ `
     float edgeFade = 1.0 - smoothstep(0.7, 1.0, length(p));
     float a = core * edgeFade * vIntensity;
     if (a < 0.001) discard;
-    gl_FragColor = vec4(uColor * a * 1.5, a);
+    vec3 tinted = mix(uColor, vec3(1.0), uBrightness);
+    gl_FragColor = vec4(tinted * a * 1.5, a);
   }
 `
 
@@ -80,8 +84,9 @@ export function LandingFlashes() {
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        uColor: { value: new THREE.Color(settings.flashColor) },
+        uColor: { value: new THREE.Color(settings.flashFollowNote ? settings.noteColor : settings.flashColor) },
         uHaloWidth: { value: settings.flashHaloWidth },
+        uBrightness: { value: settings.flashBrightness },
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
@@ -96,12 +101,16 @@ export function LandingFlashes() {
   useEffect(() => () => material.dispose(), [material])
 
   useEffect(() => {
-    material.uniforms.uColor.value.set(settings.flashColor)
-  }, [material, settings.flashColor])
+    material.uniforms.uColor.value.set(settings.flashFollowNote ? settings.noteColor : settings.flashColor)
+  }, [material, settings.flashColor, settings.flashFollowNote, settings.noteColor])
 
   useEffect(() => {
     material.uniforms.uHaloWidth.value = settings.flashHaloWidth
   }, [material, settings.flashHaloWidth])
+
+  useEffect(() => {
+    material.uniforms.uBrightness.value = settings.flashBrightness
+  }, [material, settings.flashBrightness])
 
   // Press / release tracking. The flash snaps to its sustain level on
   // note-on (no fade-in) and snaps back to 0 once the key is released

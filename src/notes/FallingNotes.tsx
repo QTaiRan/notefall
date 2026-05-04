@@ -382,8 +382,10 @@ export function FallingNotes() {
     material.uniforms.uTextureVariation.value = settings.noteTextureVariation
     material.uniforms.uTextureContrast.value = settings.noteTextureContrast
     material.uniforms.uRimColor.value.set(settings.noteRimColor)
-    material.uniforms.uRimWidth.value = settings.noteRimWidth
-    material.uniforms.uRimIntensity.value = settings.noteRimIntensity
+    // Rim is gated by zeroing width/intensity instead of unmounting; this
+    // keeps the user's slider values intact for a clean re-enable.
+    material.uniforms.uRimWidth.value = settings.rimEnabled ? settings.noteRimWidth : 0
+    material.uniforms.uRimIntensity.value = settings.rimEnabled ? settings.noteRimIntensity : 0
   }, [
     material,
     settings.noteColor,
@@ -399,6 +401,7 @@ export function FallingNotes() {
     settings.noteTextureBlur,
     settings.noteTextureVariation,
     settings.noteTextureContrast,
+    settings.rimEnabled,
     settings.noteRimColor,
     settings.noteRimWidth,
     settings.noteRimIntensity,

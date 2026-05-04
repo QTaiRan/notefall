@@ -323,8 +323,11 @@ export function Keyboard() {
         : settings.whiteKeyColor;
       mat.color.set(baseColor).multiplyScalar(brightness);
       const e = glow[i];
-      if (e > 0.001) {
-        mat.emissive.set(settings.keyGlowColor);
+      if (e > 0.001 && settings.keyGlowEnabled) {
+        // Glow color either follows the note color (default — keeps the
+        // keyboard's press highlight in sync with the falling notes) or uses
+        // a user-chosen colour.
+        mat.emissive.set(settings.keyGlowFollowNote ? settings.noteColor : settings.keyGlowColor);
         // brightness also scales the glow so darkening the keyboard dims its emission too
         mat.emissiveIntensity = e * settings.keyGlowIntensity * brightness;
       } else {

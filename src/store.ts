@@ -14,6 +14,11 @@ export type FallDirection = 'down' | 'up'
 export type NoteTexture = 'solid' | 'liquid' | 'gem' | 'custom'
 
 export type Settings = {
+  // Theme — a single color the user can apply across notes / hit line /
+  // particles / keyboard glow at once via the Inspector's "Apply to All"
+  // button. Stored separately so it persists between applies; individual
+  // color settings can still be tweaked independently afterward.
+  themeColor: string
   // Layout
   keyboardY: number
   // Camera
@@ -21,6 +26,7 @@ export type Settings = {
   cameraPos: [number, number, number]
   cameraLookAt: [number, number, number]
   // Notes
+  notesEnabled: boolean
   fallDirection: FallDirection
   fallDurationSec: number // どのぐらいの時間をかけて鍵盤に到達するか
   noteColor: string
@@ -62,12 +68,19 @@ export type Settings = {
   // (including 'solid'). The rim is a polished outline drawn on top of the
   // note's fill, intended for the "glassy edge" highlight regardless of
   // the surface treatment.
+  rimEnabled: boolean
   noteRimColor: string
   // Rim thickness in world units. 0 = no rim.
   noteRimWidth: number
   // Rim brightness multiplier on the chosen color.
   noteRimIntensity: number
   // White flash that appears at the contact line while a note is held
+  flashEnabled: boolean
+  // When true, flash uses noteColor instead of the explicit flashColor.
+  flashFollowNote: boolean
+  // Lift the flash colour toward white. 0 = pure flashColor, 1 = pure white.
+  // Lets a coloured flash keep a bright white core for that "spark" feel.
+  flashBrightness: number
   flashIntensity: number
   flashSize: number
   flashWidth: number
@@ -131,6 +144,7 @@ export type Settings = {
   hitLineColor: string
   hitLineIntensity: number   // straight-bar brightness
   hitLineThickness: number   // straight-bar core thickness (fraction of plane height)
+  hitLineWaveEnabled: boolean   // gates JUST the wavy laser overlay (the straight bar is gated by hitLineEnabled)
   hitLineWaveIntensity: number  // wavy laser brightness
   hitLineWaveAmplitude: number  // vertical swing of the wave (fraction of plane half-height)
   hitLineWaveScale: number      // wave spatial frequency along the keyboard
@@ -143,6 +157,7 @@ export type Settings = {
   hitLineBarHalo: number        // bar halo extent — divides the gaussian falloff so larger = wider
   hitLineWaveHalo: number       // wave halo extent — same idea, around the wavy laser line
   // Effects (Bloom)
+  bloomEnabled: boolean
   bloomIntensity: number
   bloomThreshold: number
   bloomRadius: number
@@ -153,6 +168,10 @@ export type Settings = {
   whiteKeyColor: string
   blackKeyColor: string
   keyboardBrightness: number
+  keyGlowEnabled: boolean
+  // When true, keyboard press-glow uses noteColor. When false, the user's
+  // explicit keyGlowColor is used instead.
+  keyGlowFollowNote: boolean
   keyGlowColor: string
   keyGlowIntensity: number
   keyGlowDecay: number
@@ -212,10 +231,12 @@ export type Settings = {
 }
 
 export const defaultSettings: Settings = {
+  themeColor: '#5ad7ff',
   keyboardY: -2.0,
   cameraFov: 32,
   cameraPos: [0, 0, 12],
   cameraLookAt: [0, 0, 0],
+  notesEnabled: true,
   fallDirection: 'down',
   fallDurationSec: 2.5,
   noteColor: '#5ad7ff',
@@ -233,10 +254,14 @@ export const defaultSettings: Settings = {
   noteTextureBlur: 0.0,
   noteTextureVariation: 0.0,
   noteTextureContrast: 2.5,
+  rimEnabled: true,
   noteRimColor: '#ffffff',
   noteRimWidth: 0,
   noteRimIntensity: 1.0,
-  flashIntensity: 1.0,
+  flashEnabled: true,
+  flashFollowNote: true,
+  flashBrightness: 0.5,
+  flashIntensity: 1.1,
   flashSize: 2.5,
   flashWidth: 2.5,
   flashHaloWidth: 0.5,
@@ -266,6 +291,7 @@ export const defaultSettings: Settings = {
   hitLineColor: '#5ad7ff',
   hitLineIntensity: 2.5,
   hitLineThickness: 0.3,
+  hitLineWaveEnabled: true,
   hitLineWaveIntensity: 1.0,
   hitLineWaveAmplitude: 0.2,
   hitLineWaveScale: 60.0,
@@ -277,6 +303,7 @@ export const defaultSettings: Settings = {
   hitLineWaveY: 0,
   hitLineBarHalo: 2.0,
   hitLineWaveHalo: 0.8,
+  bloomEnabled: true,
   bloomIntensity: 0.5,
   bloomThreshold: 0.2,
   bloomRadius: 0.7,
@@ -285,6 +312,8 @@ export const defaultSettings: Settings = {
   whiteKeyColor: '#f5f5f5',
   blackKeyColor: '#161616',
   keyboardBrightness: 0.5,
+  keyGlowEnabled: true,
+  keyGlowFollowNote: true,
   keyGlowColor: '#5ad7ff',
   keyGlowIntensity: 1.5,
   keyGlowDecay: 0.05,

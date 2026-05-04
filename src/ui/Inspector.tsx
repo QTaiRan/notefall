@@ -51,7 +51,21 @@ export function Inspector() {
         <SectionTitle>Layout</SectionTitle>
         <SliderRow label="Keyboard Y" value={s.keyboardY} min={-3} max={2} step={0.05} onChange={(v) => update({ keyboardY: v })} defaultValue={def.keyboardY} />
 
+        <SectionTitle>Theme</SectionTitle>
+        <ColorRow
+          label="Color"
+          value={s.themeColor}
+          onChange={(v) => update({
+            themeColor: v,
+            noteColor: v,
+            hitLineColor: v,
+            particleColor: v,
+          })}
+          defaultValue={def.themeColor}
+        />
+
         <SectionTitle>Notes</SectionTitle>
+        <SwitchRow label="Enabled" value={s.notesEnabled} onChange={(v) => update({ notesEnabled: v })} defaultValue={def.notesEnabled} />
         <SelectRow
           label="Direction"
           value={s.fallDirection}
@@ -153,16 +167,22 @@ export function Inspector() {
         )}
 
         <SectionTitle>Rim</SectionTitle>
+        <SwitchRow label="Enabled" value={s.rimEnabled} onChange={(v) => update({ rimEnabled: v })} defaultValue={def.rimEnabled} />
         <ColorRow label="Color" value={s.noteRimColor} onChange={(v) => update({ noteRimColor: v })} defaultValue={def.noteRimColor} />
         <SliderRow label="Width" value={s.noteRimWidth} min={0} max={0.1} step={0.001} onChange={(v) => update({ noteRimWidth: v })} defaultValue={def.noteRimWidth} />
         <SliderRow label="Intensity" value={s.noteRimIntensity} min={0} max={5} step={0.05} onChange={(v) => update({ noteRimIntensity: v })} defaultValue={def.noteRimIntensity} />
 
         <SectionTitle>Flash</SectionTitle>
+        <SwitchRow label="Enabled" value={s.flashEnabled} onChange={(v) => update({ flashEnabled: v })} defaultValue={def.flashEnabled} />
+        <SwitchRow label="Follows Note" value={s.flashFollowNote} onChange={(v) => update({ flashFollowNote: v })} defaultValue={def.flashFollowNote} />
+        {!s.flashFollowNote && (
+          <ColorRow label="Color" value={s.flashColor} onChange={(v) => update({ flashColor: v })} defaultValue={def.flashColor} />
+        )}
+        <SliderRow label="Brightness" value={s.flashBrightness} min={0} max={1} step={0.01} onChange={(v) => update({ flashBrightness: v })} defaultValue={def.flashBrightness} />
         <SliderRow label="Intensity" value={s.flashIntensity} min={0} max={2} step={0.05} onChange={(v) => update({ flashIntensity: v })} defaultValue={def.flashIntensity} />
         <SliderRow label="Size" value={s.flashSize} min={0.3} max={5} step={0.05} onChange={(v) => update({ flashSize: v })} defaultValue={def.flashSize} />
         <SliderRow label="Width" value={s.flashWidth} min={0.3} max={5} step={0.05} onChange={(v) => update({ flashWidth: v })} defaultValue={def.flashWidth} />
         <SliderRow label="Halo" value={s.flashHaloWidth} min={0} max={2} step={0.05} onChange={(v) => update({ flashHaloWidth: v })} defaultValue={def.flashHaloWidth} />
-        <ColorRow label="Color" value={s.flashColor} onChange={(v) => update({ flashColor: v })} defaultValue={def.flashColor} />
 
         <SectionTitle>Particles</SectionTitle>
         <SwitchRow label="Enabled" value={s.particlesEnabled} onChange={(v) => update({ particlesEnabled: v })} defaultValue={def.particlesEnabled} />
@@ -194,6 +214,7 @@ export function Inspector() {
         <SliderRow label="Bar Y" value={s.hitLineBarY} min={-1} max={1} step={0.01} onChange={(v) => update({ hitLineBarY: v })} defaultValue={def.hitLineBarY} />
         <SliderRow label="Bar Thickness" value={s.hitLineThickness} min={0} max={1} step={0.01} onChange={(v) => update({ hitLineThickness: v })} defaultValue={def.hitLineThickness} />
         <SliderRow label="Bar Halo" value={s.hitLineBarHalo} min={0} max={6} step={0.05} onChange={(v) => update({ hitLineBarHalo: v })} defaultValue={def.hitLineBarHalo} />
+        <SwitchRow label="Wave Enabled" value={s.hitLineWaveEnabled} onChange={(v) => update({ hitLineWaveEnabled: v })} defaultValue={def.hitLineWaveEnabled} />
         <SliderRow label="Wave Intensity" value={s.hitLineWaveIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ hitLineWaveIntensity: v })} defaultValue={def.hitLineWaveIntensity} />
         <SliderRow label="Wave Y" value={s.hitLineWaveY} min={-1} max={1} step={0.01} onChange={(v) => update({ hitLineWaveY: v })} defaultValue={def.hitLineWaveY} />
         <SliderRow label="Wave Amplitude" value={s.hitLineWaveAmplitude} min={0} max={1} step={0.01} onChange={(v) => update({ hitLineWaveAmplitude: v })} defaultValue={def.hitLineWaveAmplitude} />
@@ -208,6 +229,7 @@ export function Inspector() {
             emitters above, so it sits at the end of that group rather than
             mixed into any single emitter's section. */}
         <SectionTitle>Bloom</SectionTitle>
+        <SwitchRow label="Enabled" value={s.bloomEnabled} onChange={(v) => update({ bloomEnabled: v })} defaultValue={def.bloomEnabled} />
         <SliderRow label="Intensity" value={s.bloomIntensity} min={0} max={4} step={0.05} onChange={(v) => update({ bloomIntensity: v })} defaultValue={def.bloomIntensity} />
         <SliderRow label="Threshold" value={s.bloomThreshold} min={0} max={1} step={0.01} onChange={(v) => update({ bloomThreshold: v })} defaultValue={def.bloomThreshold} />
         <SliderRow label="Radius" value={s.bloomRadius} min={0} max={1} step={0.01} onChange={(v) => update({ bloomRadius: v })} defaultValue={def.bloomRadius} />
@@ -220,7 +242,11 @@ export function Inspector() {
         <SliderRow label="Brightness" value={s.keyboardBrightness} min={0} max={2} step={0.01} onChange={(v) => update({ keyboardBrightness: v })} defaultValue={def.keyboardBrightness} />
         <ColorRow label="White Keys" value={s.whiteKeyColor} onChange={(v) => update({ whiteKeyColor: v })} defaultValue={def.whiteKeyColor} />
         <ColorRow label="Black Keys" value={s.blackKeyColor} onChange={(v) => update({ blackKeyColor: v })} defaultValue={def.blackKeyColor} />
-        <ColorRow label="Press Glow" value={s.keyGlowColor} onChange={(v) => update({ keyGlowColor: v })} defaultValue={def.keyGlowColor} />
+        <SwitchRow label="Glow Enabled" value={s.keyGlowEnabled} onChange={(v) => update({ keyGlowEnabled: v })} defaultValue={def.keyGlowEnabled} />
+        <SwitchRow label="Glow Follows Note" value={s.keyGlowFollowNote} onChange={(v) => update({ keyGlowFollowNote: v })} defaultValue={def.keyGlowFollowNote} />
+        {!s.keyGlowFollowNote && (
+          <ColorRow label="Glow Color" value={s.keyGlowColor} onChange={(v) => update({ keyGlowColor: v })} defaultValue={def.keyGlowColor} />
+        )}
         <SliderRow label="Glow Intensity" value={s.keyGlowIntensity} min={0} max={5} step={0.05} onChange={(v) => update({ keyGlowIntensity: v })} defaultValue={def.keyGlowIntensity} />
         <SliderRow label="Glow Decay (s)" value={s.keyGlowDecay} min={0.05} max={2} step={0.01} onChange={(v) => update({ keyGlowDecay: v })} defaultValue={def.keyGlowDecay} />
 
