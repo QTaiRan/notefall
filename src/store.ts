@@ -41,6 +41,11 @@ export type Settings = {
   // Animation speed along Y. Used by 'custom' for vertical scroll. Liquid
   // and gem use this as their generic time multiplier (flow / twinkle rate).
   noteAnimSpeedY: number
+  // Static positional shift of the texture sample point. Positive X = image
+  // moves right on the note; positive Y = image moves up. Texture wrap is
+  // RepeatWrapping so values outside [-1,1] just tile through.
+  noteTextureOffsetX: number
+  noteTextureOffsetY: number
   // Push factor on bright spots — higher = more contrast between dark and
   // highlight regions of the pattern.
   noteTextureContrast: number
@@ -213,7 +218,9 @@ export const defaultSettings: Settings = {
   noteTexture: 'solid',
   noteTextureScale: 3.0,
   noteAnimSpeedX: 0.0,
-  noteAnimSpeedY: 0.8,
+  noteAnimSpeedY: 0.0,
+  noteTextureOffsetX: 0.0,
+  noteTextureOffsetY: 0.0,
   noteTextureContrast: 2.5,
   noteRimColor: '#ffffff',
   noteRimWidth: 0,

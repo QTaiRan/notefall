@@ -58,6 +58,10 @@ const FRAGMENT_SHADER = /* glsl */ `
   // gem use only Y as their generic time multiplier (their patterns have
   // no inherent direction).
   uniform vec2 uAnimSpeed;
+  // Static positional shift on the texture sample point. Subtracted from
+  // the UV so positive offset visually moves the image in the positive
+  // direction (right / up) on the note.
+  uniform vec2 uTextureOffset;
   uniform float uTextureContrast;
   uniform vec3 uRimColor;
   uniform float uRimWidth;
@@ -113,7 +117,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   vec3 textureGem(vec2 p, float d) {
     // Per-note offset (vSeed in 0..1 scaled by 100) shifts the Voronoi
     // tiling sample window so each note shows a different cell layout.
-    vec2 uv = p * uTextureScale + vSeed * 100.0;
+    vec2 uv = p * uTextureScale + vSeed * 100.0 - uTextureOffset;
     vec2 i = floor(uv);
     vec2 f = fract(uv);
     float t = uTime * uAnimSpeed.y;
@@ -216,7 +220,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     // and vice-versa — the user would have to retune speed every time they
     // changed scale. Now uAnimSpeed reads as "world units per second" and
     // the perceived motion stays constant across scales.
-    vec2 uv = (vUv * vSize + uTime * uAnimSpeed) * uTextureScale + vSeed * 100.0;
+    vec2 uv = (vUv * vSize + uTime * uAnimSpeed) * uTextureScale + vSeed * 100.0 - uTextureOffset;
     vec3 sampled = texture2D(uCustomTexture, uv).rgb;
     sampled = clamp((sampled - 0.5) * uTextureContrast + 0.5, 0.0, 1.0);
     // When no image is bound yet, fall back to the tint color so the user
@@ -229,7 +233,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   vec3 textureLiquid(vec2 p, float d) {
     // Per-note offset so each note samples a different region of the noise
     // field — otherwise every note shows the same flow pattern.
-    vec2 uv = p * uTextureScale + vSeed * 100.0;
+    vec2 uv = p * uTextureScale + vSeed * 100.0 - uTextureOffset;
     float t = uTime * uAnimSpeed.y;
     // Domain warp — feeding noise into noise's input gives the swirling
     // "lava lamp" / molten gold look.
@@ -333,6 +337,7 @@ export function FallingNotes() {
         uTextureMode: { value: TEXTURE_MODE[settings.noteTexture] ?? TEXTURE_SOLID },
         uTextureScale: { value: settings.noteTextureScale },
         uAnimSpeed: { value: new THREE.Vector2(settings.noteAnimSpeedX, settings.noteAnimSpeedY) },
+        uTextureOffset: { value: new THREE.Vector2(settings.noteTextureOffsetX, settings.noteTextureOffsetY) },
         uTextureContrast: { value: settings.noteTextureContrast },
         uRimColor: { value: new THREE.Color(settings.noteRimColor) },
         uRimWidth: { value: settings.noteRimWidth },
@@ -358,6 +363,7 @@ export function FallingNotes() {
     material.uniforms.uTextureMode.value = TEXTURE_MODE[settings.noteTexture] ?? TEXTURE_SOLID
     material.uniforms.uTextureScale.value = settings.noteTextureScale
     material.uniforms.uAnimSpeed.value.set(settings.noteAnimSpeedX, settings.noteAnimSpeedY)
+    material.uniforms.uTextureOffset.value.set(settings.noteTextureOffsetX, settings.noteTextureOffsetY)
     material.uniforms.uTextureContrast.value = settings.noteTextureContrast
     material.uniforms.uRimColor.value.set(settings.noteRimColor)
     material.uniforms.uRimWidth.value = settings.noteRimWidth
@@ -372,6 +378,8 @@ export function FallingNotes() {
     settings.noteTextureScale,
     settings.noteAnimSpeedX,
     settings.noteAnimSpeedY,
+    settings.noteTextureOffsetX,
+    settings.noteTextureOffsetY,
     settings.noteTextureContrast,
     settings.noteRimColor,
     settings.noteRimWidth,

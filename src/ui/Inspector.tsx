@@ -125,6 +125,12 @@ export function Inspector() {
             defaultValue={def.noteTextureScale}
           />
         )}
+        {s.noteTexture !== 'solid' && (
+          <>
+            <SliderRow label="Offset X" value={s.noteTextureOffsetX} min={-3} max={3} step={0.01} onChange={(v) => update({ noteTextureOffsetX: v })} defaultValue={def.noteTextureOffsetX} />
+            <SliderRow label="Offset Y" value={s.noteTextureOffsetY} min={-3} max={3} step={0.01} onChange={(v) => update({ noteTextureOffsetY: v })} defaultValue={def.noteTextureOffsetY} />
+          </>
+        )}
         {/* Custom: independent X/Y scroll. Liquid/Gem: a single rate (their
             patterns aren't directional) which we route through animSpeedY
             since that's the value their shader code reads. */}
