@@ -6,11 +6,13 @@ import { LoadingOverlay } from './LoadingOverlay'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { midiInput } from '../audio/midiInput'
+import { useGlobalShortcuts } from './useGlobalShortcuts'
 
 export function Layout() {
   const settings = useStore((s) => s.settings)
   const transport = useStore((s) => s.transport)
   const loop = useStore((s) => s.loop)
+  useGlobalShortcuts()
 
   // sync engine settings
   useEffect(() => {

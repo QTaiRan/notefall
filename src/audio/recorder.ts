@@ -116,6 +116,11 @@ class RecorderManager {
     return this.state
   }
 
+  /** Number of events captured so far in the in-progress recording. 0 when idle. */
+  getCurrentEventCount(): number {
+    return this.currentEvents.length
+  }
+
   /** Seconds since the in-progress recording began. 0 when idle. */
   getElapsedSec(): number {
     if (this.state !== 'recording') return 0

@@ -179,6 +179,27 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
+export function MetronomeIcon(props: IconProps) {
+  // Triangular metronome body with a swinging arm — reads as a metronome
+  // even at small sizes.
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+      strokeLinecap="round"
+      {...props}
+    >
+      <path d="M9 3 L7 21 L17 21 L15 3 Z" fill="currentColor" fillOpacity="0.18" />
+      <line x1="12" y1="18" x2="14.5" y2="6" />
+      <circle cx="14.5" cy="6" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function PlaylistIcon(props: IconProps) {
   // List of items with a music note — reads as "list of recordings".
   return (

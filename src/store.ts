@@ -366,6 +366,17 @@ type AppState = {
   fastForward: boolean
   setFastForward: (b: boolean) => void
 
+  // When true, pressing Record plays a 4-beat metronome count-in before
+  // the recorder actually starts capturing input. Lets the user prepare
+  // the first downbeat instead of scrambling into the first note.
+  countInEnabled: boolean
+  setCountInEnabled: (b: boolean) => void
+  // Current beat number during a count-in (1..N). 0 when not counting in.
+  // Driven by the audio click scheduler; the toolbar reads this to show
+  // the countdown badge.
+  countInBeat: number
+  setCountInBeat: (n: number) => void
+
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
@@ -389,6 +400,12 @@ export const useStore = create<AppState>((set) => ({
 
   fastForward: false,
   setFastForward: (fastForward) => set({ fastForward }),
+
+  countInEnabled: true,
+  setCountInEnabled: (countInEnabled) => set({ countInEnabled }),
+
+  countInBeat: 0,
+  setCountInBeat: (countInBeat) => set({ countInBeat }),
 
   settings: defaultSettings,
   updateSettings: (patch) =>

@@ -249,7 +249,10 @@ export function Keyboard() {
     };
 
     const onDown = async (e: KeyboardEvent) => {
-      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      // Shift is reserved for global shortcuts (e.g. Shift+R for record),
+      // so PC-keyboard piano input ignores it to avoid double-firing the
+      // mapped note on top of the shortcut.
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       if (isEditable(e.target)) return;
       const baseMidi = PC_KEY_NOTES[e.code];
       if (baseMidi === undefined) return;
