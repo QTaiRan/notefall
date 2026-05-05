@@ -1,0 +1,239 @@
+import type { SVGProps } from "react";
+
+/**
+ * Icon registry. Every SVG icon used across the UI lives here so call sites
+ * can stay clean and we can swap visual styles in one place.
+ *
+ * # Adding a new icon from Iconify (Solar set)
+ *
+ * 1. Open the icon page on https://icon-sets.iconify.design/solar/
+ * 2. Click the "SVG" button → "Copy SVG" — you'll get markup like:
+ *
+ *      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+ *        <path fill="currentColor" d="…"/>
+ *      </svg>
+ *
+ * 3. Paste it as the body of a new exported function below, following the
+ *    pattern of the existing icons:
+ *
+ *      export function MyNewIcon(props: IconProps) {
+ *        return (
+ *          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" {...props}>
+ *            <path fill="currentColor" d="…" />
+ *          </svg>
+ *        )
+ *      }
+ *
+ *    Drop the hardcoded `width` / `height` from the pasted SVG — sizing comes
+ *    from the call site via Tailwind classes (e.g. `className="h-5 w-5"`).
+ *    Keep `viewBox` and `xmlns`.
+ *
+ * 4. Use it: `<MyNewIcon className="h-5 w-5" />`.
+ *
+ * Icons should be pure presentation: no internal state, no defaults beyond
+ * the SVG attributes that come from Iconify.
+ */
+
+export type IconProps = SVGProps<SVGSVGElement>;
+
+// ────────── Transport ──────────
+
+export function PlayIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path fill="currentColor" d="M8 5.14v14l11-7z" />
+    </svg>
+  );
+}
+
+export function PauseIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path fill="currentColor" d="M14 19h4V5h-4M6 19h4V5H6z" />
+    </svg>
+  );
+}
+
+export function RewindToStartIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path fill="currentColor" d="M20 5v14l-7-7M6 5v14H4V5m9 0v14l-7-7" />
+    </svg>
+  );
+}
+
+export function Replay10Icon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M12.5 3c4.65 0 8.58 3.03 9.97 7.22L20.1 11c-1.05-3.19-4.06-5.5-7.6-5.5c-1.96 0-3.73.72-5.12 1.88L10 10H3V3l2.6 2.6C7.45 4 9.85 3 12.5 3M10 12v10H8v-8H6v-2zm8 2v6c0 1.11-.89 2-2 2h-2a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-4 0v6h2v-6z"
+      />
+    </svg>
+  );
+}
+
+export function Forward10Icon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M10 12v10H8v-8H6v-2zm8 2v6c0 1.11-.89 2-2 2h-2a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-4 0v6h2v-6zM11.5 3c2.65 0 5.05 1 6.9 2.6L21 3v7h-7l2.62-2.62C15.23 6.22 13.46 5.5 11.5 5.5c-3.54 0-6.55 2.31-7.6 5.5l-2.37-.78C2.92 6.03 6.85 3 11.5 3"
+      />
+    </svg>
+  );
+}
+
+export function LoopIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 0 0-8 8a8 8 0 0 0 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18a6 6 0 0 1-6-6a6 6 0 0 1 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"
+      />
+    </svg>
+  );
+}
+
+export function FastForwardIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path fill="currentColor" d="M13 6v12l8.5-6M4 18l8.5-6L4 6z" />
+    </svg>
+  );
+}
+
+// ────────── Volume ──────────
+
+export function VolumeMuteIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M3 9h4l5-5v16l-5-5H3zm13.59 3L14 9.41L15.41 8L18 10.59L20.59 8L22 9.41L19.41 12L22 14.59L20.59 16L18 13.41L15.41 16L14 14.59z"
+      />
+    </svg>
+  );
+}
+
+export function VolumeLowIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M5 9v6h4l5 5V4L9 9m9.5 3c0-1.77-1-3.29-2.5-4.03V16c1.5-.71 2.5-2.24 2.5-4"
+      />
+    </svg>
+  );
+}
+
+export function VolumeHighIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.84-5 6.7v2.07c4-.91 7-4.49 7-8.77s-3-7.86-7-8.77M16.5 12c0-1.77-1-3.29-2.5-4.03V16c1.5-.71 2.5-2.24 2.5-4M3 9v6h4l5 5V4L7 9z"
+      />
+    </svg>
+  );
+}
+
+// ────────── Window / chrome ──────────
+
+export function FullscreenIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M5 5h5v2H7v3H5zm9 0h5v5h-2V7h-3zm3 9h2v5h-5v-2h3zm-7 3v2H5v-5h2v3z"
+      />
+    </svg>
+  );
+}
+
+export function FullscreenExitIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
+      <path
+        fill="currentColor"
+        d="M14 14h5v2h-3v3h-2zm-9 0h5v5H8v-3H5zm3-9h2v5H5V8h3zm11 3v2h-5V5h2v3z"
+      />
+    </svg>
+  );
+}
+
+export function MonitorIcon(props: IconProps) {
+  // Outline-style, used by UnsupportedScreen as a "needs a bigger screen" cue.
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      {...props}
+    >
+      <rect x="3" y="4" width="18" height="13" rx="2" />
+      <path d="M2 20h20" />
+    </svg>
+  );
+}

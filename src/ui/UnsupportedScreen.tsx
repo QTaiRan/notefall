@@ -1,3 +1,5 @@
+import { MonitorIcon } from './icons'
+
 /**
  * Shown on screens narrower than the supported breakpoint. The full UI
  * (3D viewport + inspector + transport bar) needs at least ~1024px to be
@@ -11,10 +13,7 @@ export function UnsupportedScreen() {
         <span className="font-mono text-[10px] text-neutral-500">v{__APP_VERSION__}</span>
       </span>
 
-      <svg viewBox="0 0 24 24" fill="none" className="h-10 w-10 text-neutral-600" stroke="currentColor" strokeWidth="1.5">
-        <rect x="3" y="4" width="18" height="13" rx="2" />
-        <path d="M2 20h20" />
-      </svg>
+      <MonitorIcon className="h-10 w-10 text-neutral-600" />
 
       <h1 className="text-base font-medium">This device is not supported</h1>
       <p className="max-w-xs text-xs leading-relaxed text-neutral-400">

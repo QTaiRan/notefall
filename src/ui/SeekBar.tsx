@@ -1,33 +1,52 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   Button,
   Slider,
   SliderTrack,
   SliderThumb,
-} from 'react-aria-components'
-import { useStore } from '../store'
-import { audioEngine } from '../audio/engine'
-import { pauseSong, playSong } from '../audio/playback'
-import { useCurrentTime } from '../audio/useCurrentTime'
-import { SliderRow } from './controls'
+} from "react-aria-components";
+import { useStore } from "../store";
+import { audioEngine } from "../audio/engine";
+import { pauseSong, playSong } from "../audio/playback";
+import { useCurrentTime } from "../audio/useCurrentTime";
+import { SliderRow } from "./controls";
+import {
+  Forward10Icon,
+  FullscreenExitIcon,
+  FullscreenIcon,
+  LoopIcon,
+  PauseIcon,
+  PlayIcon,
+  Replay10Icon,
+  RewindToStartIcon,
+  VolumeHighIcon,
+  VolumeLowIcon,
+  VolumeMuteIcon,
+} from "./icons";
 
 function fmt(t: number): string {
-  if (!isFinite(t)) return '00:00'
-  const m = Math.floor(t / 60)
-  const s = Math.floor(t % 60)
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  if (!isFinite(t)) return "00:00";
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 type Props = {
-  isFullscreen: boolean
-  onToggleFullscreen: () => void
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
   /**
    * Notify parent whenever any popover (volume / speed) opens or closes.
    * Used to suppress the playback-area auto-hide while the user is
    * interacting with a popover that lives outside the viewport.
    */
-  onPopoverOpenChange?: (open: boolean) => void
-}
+  onPopoverOpenChange?: (open: boolean) => void;
+};
 
 /**
  * Transport bar overlay: rewind / play-pause centered above the seek slider.
@@ -50,7 +69,7 @@ type Props = {
  * `onOpenChange` informs the parent so the playback-area auto-hide can
  * pause while the popover is visible.
  */
-const HOVER_CLOSE_DELAY_MS = 150
+const HOVER_CLOSE_DELAY_MS = 150;
 
 function PopSliderButton({
   id,
@@ -69,52 +88,52 @@ function PopSliderButton({
   onClick,
 }: {
   /** Stable id for this button. Acts as the slot key in the shared open state. */
-  id: string
+  id: string;
   /** Currently-open popover id from the shared parent state, or null. */
-  openId: string | null
+  openId: string | null;
   /** Setter for the shared open id. Functional updates supported. */
-  setOpenId: Dispatch<SetStateAction<string | null>>
-  ariaLabel: string
-  iconLabel: React.ReactNode
-  label: string
-  value: number
-  min: number
-  max: number
-  step: number
-  onChange: (v: number) => void
-  format?: (v: number) => string
-  buttonClass?: string
-  onClick?: () => void
+  setOpenId: Dispatch<SetStateAction<string | null>>;
+  ariaLabel: string;
+  iconLabel: React.ReactNode;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  format?: (v: number) => string;
+  buttonClass?: string;
+  onClick?: () => void;
 }) {
-  const isOpen = openId === id
-  const closeTimerRef = useRef<number | null>(null)
+  const isOpen = openId === id;
+  const closeTimerRef = useRef<number | null>(null);
 
   const cancelClose = () => {
     if (closeTimerRef.current !== null) {
-      clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
     }
-  }
+  };
   const open = () => {
-    cancelClose()
+    cancelClose();
     // Claim the slot — implicitly closes any other open popover instantly.
-    setOpenId(id)
-  }
+    setOpenId(id);
+  };
   const scheduleClose = () => {
-    cancelClose()
+    cancelClose();
     closeTimerRef.current = window.setTimeout(() => {
       // Only release the slot if we still own it. A sibling may have taken
       // over while our timer was pending; clearing unconditionally would
       // close THEIR popover.
-      setOpenId((prev) => (prev === id ? null : prev))
-    }, HOVER_CLOSE_DELAY_MS)
-  }
-  useEffect(() => () => cancelClose(), [])
+      setOpenId((prev) => (prev === id ? null : prev));
+    }, HOVER_CLOSE_DELAY_MS);
+  };
+  useEffect(() => () => cancelClose(), []);
   // If a sibling claims the open slot, drop our pending close timer so it
   // doesn't fire later and try to clear someone else's popover.
   useEffect(() => {
-    if (!isOpen) cancelClose()
-  }, [isOpen])
+    if (!isOpen) cancelClose();
+  }, [isOpen]);
 
   // Plain-DOM positioning (no portal): popover renders as an absolute child
   // of the button's wrapper, which keeps it in the same hover/render flow
@@ -132,7 +151,7 @@ function PopSliderButton({
         onHoverEnd={scheduleClose}
         className={
           buttonClass ??
-          'flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500'
+          "flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500"
         }
       >
         {iconLabel}
@@ -157,64 +176,87 @@ function PopSliderButton({
         </div>
       )}
     </div>
-  )
+  );
 }
 
-const fmtSpeed = (v: number) => `${v.toFixed(2)}×`
-const fmtVolume = (v: number) => `${Math.round(v * 100)}%`
+const fmtSpeed = (v: number) => `${v.toFixed(2)}×`;
+const fmtVolume = (v: number) => `${Math.round(v * 100)}%`;
 
-export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange }: Props) {
-  const currentTime = useCurrentTime()
-  const song = useStore((s) => s.song)
-  const transport = useStore((s) => s.transport)
-  const loadStatus = useStore((s) => s.loadStatus)
-  const loop = useStore((s) => s.loop)
-  const setLoop = useStore((s) => s.setLoop)
-  const volume = useStore((s) => s.settings.volume)
-  const playbackRate = useStore((s) => s.settings.playbackRate)
-  const updateSettings = useStore((s) => s.updateSettings)
+export function SeekBar({
+  isFullscreen,
+  onToggleFullscreen,
+  onPopoverOpenChange,
+}: Props) {
+  const currentTime = useCurrentTime();
+  const song = useStore((s) => s.song);
+  const transport = useStore((s) => s.transport);
+  const loadStatus = useStore((s) => s.loadStatus);
+  const loop = useStore((s) => s.loop);
+  const setLoop = useStore((s) => s.setLoop);
+  const volume = useStore((s) => s.settings.volume);
+  const playbackRate = useStore((s) => s.settings.playbackRate);
+  const updateSettings = useStore((s) => s.updateSettings);
 
   // Single shared "which popover is open" slot. Mutual exclusion: opening
   // one popover (e.g. Speed) immediately drops any other (e.g. Volume) so
   // they can never overlap visually for even a frame.
-  const [openPopoverId, setOpenPopoverId] = useState<string | null>(null)
+  const [openPopoverId, setOpenPopoverId] = useState<string | null>(null);
   useEffect(() => {
-    onPopoverOpenChange?.(openPopoverId !== null)
-  }, [openPopoverId, onPopoverOpenChange])
+    onPopoverOpenChange?.(openPopoverId !== null);
+  }, [openPopoverId, onPopoverOpenChange]);
 
   // Last user-set non-zero volume — restored when toggling off mute.
   // Initialised lazily and updated whenever the user moves the slider away
   // from zero, so an unmute returns to whatever they were last listening at.
-  const lastNonZeroVolumeRef = useRef(volume > 0.001 ? volume : 0.5)
+  const lastNonZeroVolumeRef = useRef(volume > 0.001 ? volume : 0.5);
   useEffect(() => {
-    if (volume > 0.001) lastNonZeroVolumeRef.current = volume
-  }, [volume])
+    if (volume > 0.001) lastNonZeroVolumeRef.current = volume;
+  }, [volume]);
   const toggleMute = () => {
     if (volume > 0.001) {
-      updateSettings({ volume: 0 })
+      updateSettings({ volume: 0 });
     } else {
-      updateSettings({ volume: lastNonZeroVolumeRef.current })
+      updateSettings({ volume: lastNonZeroVolumeRef.current });
     }
-  }
+  };
 
-  const [dragValue, setDragValue] = useState<number | null>(null)
-  const duration = song?.duration ?? 0
-  const value = dragValue ?? Math.min(currentTime, duration)
+  const [dragValue, setDragValue] = useState<number | null>(null);
+  const duration = song?.duration ?? 0;
+  const value = dragValue ?? Math.min(currentTime, duration);
 
   const onSliderChange = (v: number | number[]) => {
-    setDragValue(typeof v === 'number' ? v : v[0])
-  }
+    const t = typeof v === "number" ? v : v[0];
+    setDragValue(t);
+    // Live-seek on every drag tick so the falling notes (which read from
+    // the engine's currentSongTime each frame) move in sync with the
+    // thumb. seek() is cheap — just resets time offsets and recomputes
+    // the song-event cursor.
+    audioEngine.seek(t);
+    useStore.getState().setCurrentTime(t);
+  };
   const onSliderEnd = (v: number | number[]) => {
-    const t = typeof v === 'number' ? v : v[0]
-    audioEngine.seek(t)
-    useStore.getState().setCurrentTime(t)
-    setDragValue(null)
-  }
+    const t = typeof v === "number" ? v : v[0];
+    audioEngine.seek(t);
+    useStore.getState().setCurrentTime(t);
+    setDragValue(null);
+  };
 
   const onRewind = () => {
-    audioEngine.seek(0)
-    useStore.getState().setCurrentTime(0)
-  }
+    audioEngine.seek(0);
+    useStore.getState().setCurrentTime(0);
+  };
+
+  const SKIP_SECONDS = 10;
+  const onSkipBack = () => {
+    const t = Math.max(0, currentTime - SKIP_SECONDS);
+    audioEngine.seek(t);
+    useStore.getState().setCurrentTime(t);
+  };
+  const onSkipForward = () => {
+    const t = Math.min(duration, currentTime + SKIP_SECONDS);
+    audioEngine.seek(t);
+    useStore.getState().setCurrentTime(t);
+  };
 
   // Root + the time/grid/button row are pointer-events-none so empty padding
   // around the controls falls through to the play-toggle area on the canvas.
@@ -236,39 +278,47 @@ export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange 
             aria-label="Rewind to start"
             className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
           >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-              <path d="M6 6h2v12H6zM9.5 12l8.5 6V6z" />
-            </svg>
+            <RewindToStartIcon className="h-5 w-5" />
           </Button>
           <Button
-            isDisabled={!song || loadStatus.state === 'loading'}
-            onPress={transport === 'playing' ? pauseSong : playSong}
-            aria-label={transport === 'playing' ? 'Pause' : 'Play'}
+            isDisabled={!song}
+            onPress={onSkipBack}
+            aria-label="Rewind 10 seconds"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+          >
+            <Replay10Icon className="h-5 w-5" />
+          </Button>
+          <Button
+            isDisabled={!song || loadStatus.state === "loading"}
+            onPress={transport === "playing" ? pauseSong : playSong}
+            aria-label={transport === "playing" ? "Pause" : "Play"}
             className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-500 text-neutral-950 outline-none hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800 disabled:text-neutral-600"
           >
-            {transport === 'playing' ? (
-              <svg viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6">
-                <path d="M7 5h3v14H7zM14 5h3v14h-3z" />
-              </svg>
+            {transport === "playing" ? (
+              <PauseIcon className="h-6 w-6" />
             ) : (
-              <svg viewBox="0 0 24 24" fill="currentColor" className="ml-0.5 h-6 w-6">
-                <path d="M8 5v14l11-7z" />
-              </svg>
+              <PlayIcon className="ml-0.5 h-6 w-6" />
             )}
           </Button>
           <Button
             isDisabled={!song}
+            onPress={onSkipForward}
+            aria-label="Forward 10 seconds"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+          >
+            <Forward10Icon className="h-5 w-5" />
+          </Button>
+          <Button
+            isDisabled={!song}
             onPress={() => setLoop(!loop)}
-            aria-label={loop ? 'Disable loop' : 'Enable loop'}
+            aria-label={loop ? "Disable loop" : "Enable loop"}
             className={
               loop
-                ? 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600'
-                : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600'
+                ? "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600"
+                : "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
             }
           >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-              <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" />
-            </svg>
+            <LoopIcon className="h-5 w-5" />
           </Button>
         </div>
 
@@ -282,17 +332,11 @@ export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange 
             label="Volume"
             iconLabel={
               volume <= 0.001 ? (
-                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-                  <path d="M7 9v6h4l5 5V4l-5 5H7zm12.59 5.41L17.17 12l2.42-2.41-1.41-1.42L15.76 10.59 13.34 8.17 11.93 9.59 14.34 12l-2.41 2.41 1.41 1.42L15.76 13.41l2.42 2.42 1.41-1.42z" />
-                </svg>
+                <VolumeMuteIcon className="h-5 w-5" />
               ) : volume <= 0.4 ? (
-                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-                  <path d="M7 9v6h4l5 5V4l-5 5H7z" />
-                </svg>
+                <VolumeLowIcon className="h-5 w-5" />
               ) : (
-                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-                  <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05A4.5 4.5 0 0016.5 12zM14 3.23v2.06A7 7 0 0119 12a7 7 0 01-5 6.7v2.07A9 9 0 0021 12 9 9 0 0014 3.23z" />
-                </svg>
+                <VolumeHighIcon className="h-5 w-5" />
               )
             }
             value={volume}
@@ -311,7 +355,9 @@ export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange 
             ariaLabel="Playback speed"
             label="Speed"
             iconLabel={
-              <span className="font-mono text-[11px] tabular-nums">{fmtSpeed(playbackRate)}</span>
+              <span className="font-mono text-[11px] tabular-nums">
+                {fmtSpeed(playbackRate)}
+              </span>
             }
             value={playbackRate}
             min={0.25}
@@ -323,17 +369,13 @@ export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange 
           />
           <Button
             onPress={onToggleFullscreen}
-            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
             className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500"
           >
             {isFullscreen ? (
-              <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-                <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
-              </svg>
+              <FullscreenExitIcon className="h-5 w-5" />
             ) : (
-              <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
-                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
-              </svg>
+              <FullscreenIcon className="h-5 w-5" />
             )}
           </Button>
         </div>
@@ -353,17 +395,19 @@ export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange 
             on; the visible bar stays thin and is centered inside it. */}
         <SliderTrack className="relative flex h-5 w-full cursor-pointer items-center">
           {({ state, isHovered }) => {
-            const expanded = isHovered || state.isThumbDragging(0)
+            const expanded = isHovered || state.isThumbDragging(0);
             return (
               <>
                 <div
                   className={`relative w-full overflow-hidden rounded-full transition-all duration-150 ${
-                    expanded ? 'h-3 bg-neutral-500/80' : 'h-1.5 bg-neutral-700/70'
+                    expanded
+                      ? "h-3 bg-neutral-500/80"
+                      : "h-1.5 bg-neutral-700/70"
                   }`}
                 >
                   <div
                     className={`h-full transition-colors duration-150 ${
-                      expanded ? 'bg-sky-400' : 'bg-sky-500/80'
+                      expanded ? "bg-sky-400" : "bg-sky-500/80"
                     }`}
                     style={{ width: `${state.getThumbPercent(0) * 100}%` }}
                   />
@@ -371,10 +415,10 @@ export function SeekBar({ isFullscreen, onToggleFullscreen, onPopoverOpenChange 
                 {/* Required by react-aria for keyboard / a11y, but visually hidden. */}
                 <SliderThumb className="sr-only" />
               </>
-            )
+            );
           }}
         </SliderTrack>
       </Slider>
     </div>
-  )
+  );
 }

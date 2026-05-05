@@ -316,9 +316,75 @@ export class AudioEngine {
 
   seek(t: number): void {
     const wasPlaying = this.playing
-    this.releaseAll()
     const dur = this.song?.duration ?? 0
     const clamped = Math.max(0, Math.min(dur, t))
+
+    // Diff-based release/retrigger so notes that span the new playback
+    // position stay sounding (and stay represented in the visual layer's
+    // listeners — particles, key glow, landing flash). A naive
+    // releaseAll-then-recompute would silently drop spanning notes from
+    // `active`, never emit 'on' for them, and leave the visualisations
+    // empty until the next song-event cursor. Diffing also avoids
+    // re-attacking those same notes on every drag-tick during a live
+    // seek-bar drag (no audible attack-spam).
+    const newActiveIds = new Set<number>()
+    if (this.song) {
+      for (const n of this.song.notes) {
+        if (n.time > clamped) break
+        if (n.time + n.duration > clamped) newActiveIds.add(n.id)
+      }
+    }
+
+    const ctxNow = this.piano?.context.currentTime ?? 0
+    const stopAt = ctxNow + STOP_BUFFER
+    const audioBase = ctxNow + 0.015
+
+    // Release active notes no longer sounding at the new position.
+    for (const a of [...this.active.values()]) {
+      if (!newActiveIds.has(a.id)) {
+        a.stop(stopAt)
+        this.emit({ type: 'off', midi: a.midi, songTime: clamped })
+        this.active.delete(a.id)
+      }
+    }
+
+    // Pedal-held notes: always cleared on seek (they were tied to the
+    // pedal-on context at the previous time, which no longer applies).
+    for (const h of this.pedalHeld) {
+      h.stop(stopAt)
+      this.emit({ type: 'off', midi: h.midi, songTime: clamped })
+    }
+    this.pedalHeld = []
+
+    // Live (user-played) notes: always cleared on seek.
+    const liveNow = performance.now() / 1000
+    for (const n of this.liveNotes) {
+      if (n.endTime === null) {
+        n.endTime = liveNow
+        this.emit({ type: 'off', midi: n.midi, songTime: clamped })
+      }
+    }
+    for (const stop of this.liveStops.values()) stop()
+    this.liveStops.clear()
+
+    // Trigger newly-spanning song notes (not already in `active`). Each
+    // gets a normal note-on so listeners (particles / glow / flash) react,
+    // and audio is started at the new context time so the user hears what
+    // would be sounding at this moment in the song.
+    if (this.song && this.piano) {
+      for (const n of this.song.notes) {
+        if (n.time > clamped) break
+        if (!newActiveIds.has(n.id)) continue
+        if (this.active.has(n.id)) continue
+        const playedMidi = n.midi + this.transpose
+        if (playedMidi < 0 || playedMidi > 127) continue
+        const shaped = this.shapeVelocity(n.velocity)
+        const stopFn = this.piano.start(playedMidi, shaped, audioBase, `s${n.id}`)
+        this.active.set(n.id, { id: n.id, midi: playedMidi, endTime: n.time + n.duration, stop: stopFn })
+        this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime: clamped })
+      }
+    }
+
     this.offsetAtStart = clamped
     this.startedAt = performance.now() / 1000
     this.recomputeIndices(clamped)
