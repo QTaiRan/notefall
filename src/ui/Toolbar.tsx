@@ -1,10 +1,26 @@
 import { Button, DialogTrigger, Dialog, FileTrigger, Popover } from 'react-aria-components'
 import { useStore } from '../store'
+import { useState } from 'react'
 import { audioEngine } from '../audio/engine'
+import { pauseSong, playSong } from '../audio/playback'
 import { ensureAudioReady } from '../audio/midiInput'
 import { useMidiInput } from '../audio/useMidiInput'
+import { useRecorder } from '../audio/useRecorder'
 import { parseMidi } from '../midi/parse'
 import { SAMPLES } from '../samples'
+import { DownloadIcon, PauseIcon, PlayIcon, PlaylistIcon, RecordIcon, StopIcon, TrashIcon } from './icons'
+
+function fmtElapsed(sec: number): string {
+  const m = Math.floor(sec / 60)
+  const s = Math.floor(sec % 60)
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function fmtCreatedAt(epochMs: number): string {
+  const d = new Date(epochMs)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 export function Toolbar() {
   const song = useStore((s) => s.song)
@@ -12,6 +28,12 @@ export function Toolbar() {
   const setTransport = useStore((s) => s.setTransport)
   const setLoadStatus = useStore((s) => s.setLoadStatus)
   const midi = useMidiInput()
+  const rec = useRecorder()
+  const transport = useStore((s) => s.transport)
+  // Tracks which recording (if any) is currently loaded as the active
+  // song. Lets the per-row button toggle between play (load + play) and
+  // pause (stop the running playback) instead of always restarting.
+  const [activeRecordingId, setActiveRecordingId] = useState<string | null>(null)
 
   const onFile = async (file: File) => {
     const buf = await file.arrayBuffer()
@@ -19,6 +41,7 @@ export function Toolbar() {
     setSong(parsed)
     audioEngine.loadSong(parsed)
     setTransport('stopped')
+    setActiveRecordingId(null)
   }
 
   const onLoadSample = (build: () => ReturnType<typeof parseMidi> extends Promise<infer T> ? T : never) => {
@@ -26,6 +49,7 @@ export function Toolbar() {
     setSong(parsed)
     audioEngine.loadSong(parsed)
     setTransport('stopped')
+    setActiveRecordingId(null)
   }
 
   // Click handler for the MIDI button — request access on the first open
@@ -47,6 +71,44 @@ export function Toolbar() {
       if (!ok) return
     }
     midi.connect(deviceId)
+  }
+
+  // Recording requires the AudioContext + sampler so the first input
+  // sound captured isn't silently dropped while the load races.
+  const onToggleRecord = async () => {
+    if (rec.state === 'recording') {
+      rec.stop()
+      return
+    }
+    if (!audioEngine.isReady()) {
+      setLoadStatus({ state: 'loading', loaded: 0, total: 1 })
+      const ok = await ensureAudioReady((loaded, total) =>
+        setLoadStatus({ state: 'loading', loaded, total }),
+      )
+      setLoadStatus(ok ? { state: 'ready' } : { state: 'idle' })
+      if (!ok) return
+    }
+    // Drop any currently-loaded song so the on-screen falling notes from
+    // the prior MIDI don't keep streaming through the keyboard while the
+    // user is recording fresh input.
+    setSong(null)
+    audioEngine.unloadSong()
+    setTransport('stopped')
+    setActiveRecordingId(null)
+    rec.start()
+  }
+
+  const onLoadRecording = async (id: string, name: string) => {
+    const buf = rec.toArrayBuffer(id)
+    if (!buf) return
+    const parsed = await parseMidi(buf, name)
+    setSong(parsed)
+    audioEngine.loadSong(parsed)
+    setTransport('stopped')
+    setActiveRecordingId(id)
+    // Start playback automatically — pressing the play-shaped button in
+    // the list reads as "play this take", not just "load it and wait".
+    await playSong()
   }
 
   return (
@@ -128,6 +190,111 @@ export function Toolbar() {
             </Popover>
           </DialogTrigger>
         )}
+
+        {/* Record / stop / save group. Captures live input (PC keyboard,
+            on-screen, MIDI device) into a downloadable .mid. */}
+        <div className="ml-2 flex items-center gap-1 border-l border-neutral-800 pl-3">
+          <Button
+            onPress={onToggleRecord}
+            aria-label={rec.state === 'recording' ? 'Stop recording' : 'Start recording'}
+            className={
+              rec.state === 'recording'
+                ? 'flex items-center gap-1.5 rounded border border-rose-500/60 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-300 outline-none hover:bg-rose-500/20 focus-visible:border-rose-400'
+                : 'flex items-center gap-1.5 rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500'
+            }
+          >
+            {rec.state === 'recording' ? (
+              <>
+                <StopIcon className="h-3 w-3" />
+                <span className="font-mono tabular-nums">{fmtElapsed(rec.elapsed)}</span>
+              </>
+            ) : (
+              <>
+                <RecordIcon className="h-3 w-3 text-rose-400" />
+                Record
+              </>
+            )}
+          </Button>
+          <DialogTrigger>
+            <Button
+              aria-label="Show recordings"
+              className="flex items-center justify-center rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
+            >
+              <PlaylistIcon className="h-4 w-4" />
+            </Button>
+            <Popover
+              placement="bottom start"
+              className="rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
+            >
+              <Dialog className="flex w-80 flex-col gap-1 outline-none">
+                <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+                    Recordings
+                  </span>
+                  {rec.recordings.length > 0 && (
+                    <Button
+                      onPress={() => rec.clearAll()}
+                      className="rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300"
+                    >
+                      Clear all
+                    </Button>
+                  )}
+                </div>
+                {rec.recordings.length === 0 ? (
+                  <div className="px-2 py-4 text-center text-xs text-neutral-500">
+                    No recordings yet. Press the Record button to capture your input.
+                  </div>
+                ) : (
+                  <div className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+                    {rec.recordings.map((r) => {
+                      const isPlayingThis = r.id === activeRecordingId && transport === 'playing'
+                      return (
+                        <div
+                          key={r.id}
+                          className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-neutral-800/60"
+                        >
+                          <div className="flex flex-1 flex-col overflow-hidden">
+                            <span className="truncate text-neutral-200">{r.name}</span>
+                            <span className="font-mono text-[10px] text-neutral-500">
+                              {fmtCreatedAt(r.createdAt)} · {fmtElapsed(r.duration)}
+                            </span>
+                          </div>
+                          <Button
+                            onPress={() =>
+                              isPlayingThis ? pauseSong() : onLoadRecording(r.id, r.name)
+                            }
+                            aria-label={isPlayingThis ? 'Pause playback' : 'Load and play'}
+                            className="flex h-6 w-6 items-center justify-center rounded text-sky-300 outline-none hover:bg-sky-500/20 focus-visible:ring-1 focus-visible:ring-sky-400"
+                          >
+                            {isPlayingThis ? (
+                              <PauseIcon className="h-3.5 w-3.5" />
+                            ) : (
+                              <PlayIcon className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                          <Button
+                            onPress={() => rec.download(r.id)}
+                            aria-label="Save as .mid"
+                            className="flex h-6 w-6 items-center justify-center rounded text-neutral-300 outline-none hover:bg-neutral-700 focus-visible:ring-1 focus-visible:ring-sky-400"
+                          >
+                            <DownloadIcon className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            onPress={() => rec.delete(r.id)}
+                            aria-label="Delete recording"
+                            className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 outline-none hover:bg-neutral-700 hover:text-neutral-200 focus-visible:ring-1 focus-visible:ring-sky-400"
+                          >
+                            <TrashIcon className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </Dialog>
+            </Popover>
+          </DialogTrigger>
+        </div>
 
         <div className="ml-2 flex items-center gap-1 border-l border-neutral-800 pl-3">
           {SAMPLES.map((s) => (

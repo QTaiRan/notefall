@@ -55,6 +55,20 @@ export type KeyEventListener = (
 ) => void
 
 /**
+ * Subscriber for "live" input events — fires only for user-initiated input
+ * (PC keyboard, on-screen keyboard, physical MIDI device), NOT for song
+ * playback. `time` is `performance.now() / 1000` at the moment the event
+ * was generated. The recorder uses this to capture only what the user
+ * actually played.
+ */
+export type LiveInputListener = (
+  event:
+    | { type: 'noteOn'; midi: number; velocity: number; time: number }
+    | { type: 'noteOff'; midi: number; time: number }
+    | { type: 'pedal'; down: boolean; time: number },
+) => void
+
+/**
  * Self-driven scheduler. Visual layer reads currentSongTime() each frame and
  * also calls tick() to push due events to the sampler.
  */
@@ -113,6 +127,7 @@ export class AudioEngine {
   }> = []
 
   private listeners = new Set<KeyEventListener>()
+  private liveListeners = new Set<LiveInputListener>()
 
   // user-triggered notes (touch/click on the keyboard)
   private liveNotes: LiveNote[] = []
@@ -268,6 +283,7 @@ export class AudioEngine {
     if (this.livePedalDown === down) return
     this.livePedalDown = down
     if (!down) this.flushPedalHeld('live')
+    this.emitLive({ type: 'pedal', down, time: performance.now() / 1000 })
   }
 
   setLoop(loop: boolean): void {
@@ -277,6 +293,23 @@ export class AudioEngine {
   loadSong(song: ParsedSong): void {
     this.releaseAll()
     this.song = song
+    this.noteIdx = 0
+    this.pedalIdx = 0
+    this.pedalDown = false
+    this.offsetAtStart = 0
+    this.startedAt = performance.now() / 1000
+    this.playing = false
+  }
+
+  /**
+   * Clear the loaded song so the visual layer (falling notes) draws nothing
+   * and the engine has no scheduled events. Used when starting a fresh
+   * recording — the previously-loaded MIDI shouldn't sit on screen as an
+   * implicit backing track.
+   */
+  unloadSong(): void {
+    this.releaseAll()
+    this.song = null
     this.noteIdx = 0
     this.pedalIdx = 0
     this.pedalDown = false
@@ -419,6 +452,7 @@ export class AudioEngine {
     this.liveNotes.push(note)
     this.liveStops.set(id, stopFn)
     this.emit({ type: 'on', midi, velocity, songTime: this.currentSongTime() })
+    this.emitLive({ type: 'noteOn', midi, velocity, time: startTime })
 
     return {
       id,
@@ -438,6 +472,7 @@ export class AudioEngine {
         }
         this.liveStops.delete(id)
         this.emit({ type: 'off', midi, songTime: this.currentSongTime() })
+        this.emitLive({ type: 'noteOff', midi, time: note.endTime })
       },
     }
   }
@@ -458,8 +493,17 @@ export class AudioEngine {
     return () => this.listeners.delete(fn)
   }
 
+  addLiveListener(fn: LiveInputListener): () => void {
+    this.liveListeners.add(fn)
+    return () => this.liveListeners.delete(fn)
+  }
+
   private emit(ev: Parameters<KeyEventListener>[0]): void {
     this.listeners.forEach((l) => l(ev))
+  }
+
+  private emitLive(ev: Parameters<LiveInputListener>[0]): void {
+    this.liveListeners.forEach((l) => l(ev))
   }
 
   private flushPedalHeld(source: 'song' | 'live' | 'all' = 'all'): void {
