@@ -251,10 +251,17 @@ export function Keyboard() {
     const onDown = async (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditable(e.target)) return;
-      const midi = PC_KEY_NOTES[e.code];
-      if (midi === undefined) return;
+      const baseMidi = PC_KEY_NOTES[e.code];
+      if (baseMidi === undefined) return;
       e.preventDefault();
       if (pressed.has(e.code) || pending.has(e.code)) return;
+
+      // Apply the global transpose to the PC keyboard input so it matches
+      // the song / external-MIDI behaviour. Out-of-range notes are silently
+      // dropped (same convention as midiInput.ts).
+      const transpose = useStore.getState().settings.transpose
+      const midi = baseMidi + transpose
+      if (midi < 0 || midi > 127) return
 
       if (Tone.getContext().state !== "running") {
         try {
