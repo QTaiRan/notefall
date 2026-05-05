@@ -1,5 +1,11 @@
 import { Midi } from '@tonejs/midi'
 import { audioEngine } from './engine'
+import {
+  clearAllRecordingsFromDb,
+  deleteRecordingFromDb,
+  loadAllRecordings,
+  saveRecording,
+} from './recordingStore'
 
 /**
  * Captures the user's live input (PC keyboard, on-screen keyboard, physical
@@ -39,6 +45,22 @@ class RecorderManager {
   private recordings: Recording[] = []
   private listeners = new Set<() => void>()
 
+  constructor() {
+    // Hydrate from IndexedDB on first construction. Fire-and-forget — the
+    // recorder is usable in-memory immediately, the list just fills in
+    // when the async load resolves and the UI re-renders via notify().
+    void this.hydrate()
+  }
+
+  private async hydrate(): Promise<void> {
+    const stored = await loadAllRecordings()
+    if (stored.length === 0) return
+    // Sort newest-first to match the in-session ordering (unshift on stop).
+    stored.sort((a, b) => b.createdAt - a.createdAt)
+    this.recordings = stored
+    this.notify()
+  }
+
   start(): void {
     if (this.state === 'recording') return
     this.currentEvents = []
@@ -70,13 +92,15 @@ class RecorderManager {
     if (this.currentEvents.length > 0) {
       const id = `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       const createdAt = Date.now()
-      this.recordings.unshift({
+      const recording: Recording = {
         id,
         name: defaultFilename(createdAt),
         createdAt,
         duration,
         events: this.currentEvents,
-      })
+      }
+      this.recordings.unshift(recording)
+      saveRecording(recording)
     }
     this.currentEvents = []
     this.state = 'idle'
@@ -96,19 +120,24 @@ class RecorderManager {
   delete(id: string): void {
     const before = this.recordings.length
     this.recordings = this.recordings.filter((r) => r.id !== id)
-    if (this.recordings.length !== before) this.notify()
+    if (this.recordings.length !== before) {
+      deleteRecordingFromDb(id)
+      this.notify()
+    }
   }
 
   rename(id: string, name: string): void {
     const r = this.recordings.find((r) => r.id === id)
     if (!r) return
     r.name = name
+    saveRecording(r)
     this.notify()
   }
 
   clearAll(): void {
     if (this.recordings.length === 0) return
     this.recordings = []
+    clearAllRecordingsFromDb()
     this.notify()
   }
 
