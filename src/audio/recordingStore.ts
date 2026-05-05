@@ -12,7 +12,10 @@ import type { Recording } from './recorder'
  */
 
 const DB_NAME = 'notefall'
-const DB_VERSION = 1
+// Bump when the schema changes. Bumping forces `onupgradeneeded` to run
+// on next open — useful for repairing a previously-broken DB (e.g. a
+// pre-`recordings` store that older builds may have created).
+const DB_VERSION = 2
 const STORE = 'recordings'
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -45,11 +48,27 @@ async function withStore<T>(
     const db = await openDB()
     return await new Promise<T | null>((resolve, reject) => {
       const tx = db.transaction(STORE, mode)
+      let result: T | null = null
       const req = fn(tx.objectStore(STORE))
-      req.onsuccess = () => resolve(req.result as T)
+      req.onsuccess = () => {
+        result = req.result as T
+      }
       req.onerror = () => reject(req.error)
+      // Resolve on tx.oncomplete (not req.onsuccess) so writes are
+      // durable by the time the promise settles. Reads are unaffected
+      // — they capture the result in onsuccess and replay it here.
+      tx.oncomplete = () => resolve(result)
+      tx.onerror = () => reject(tx.error)
+      tx.onabort = () => reject(tx.error ?? new Error('Transaction aborted'))
     })
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) {
+      // Surface storage failures during development — silent degradation
+      // is right for production but masks real bugs (DB blocked by
+      // private mode, store missing, schema mismatch) during dev.
+      // eslint-disable-next-line no-console
+      console.warn('[recordingStore] IndexedDB op failed:', e)
+    }
     return null
   }
 }

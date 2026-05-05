@@ -1,9 +1,13 @@
 import { useStore } from '../store'
 
 /**
- * Centered overlay shown while the piano samples are loading.
- * `pointer-events-none` so it doesn't intercept key taps — the user can keep
- * interacting (the audio engine queues taps until the sampler is ready).
+ * Centered overlay shown while the piano samples are loading. The backdrop
+ * dims and blurs the rest of the UI to focus attention on the progress
+ * card, matching the confirm modal's visual language. The whole layer is
+ * `pointer-events-none` so the user can keep interacting underneath while
+ * audio loads — the engine queues taps until the sampler is ready, and
+ * the canvas-side click-eater (in `Viewport.tsx`) is what actually blocks
+ * destructive canvas operations during load.
  */
 export function LoadingOverlay() {
   const loadStatus = useStore((s) => s.loadStatus)
@@ -12,8 +16,8 @@ export function LoadingOverlay() {
     loadStatus.total > 0 ? Math.min(100, (loadStatus.loaded / loadStatus.total) * 100) : 0
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
-      <div className="flex w-72 flex-col gap-3 rounded-lg border border-sky-500/40 bg-neutral-950/85 px-5 py-4 shadow-2xl backdrop-blur">
+    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="flex w-72 flex-col gap-3 rounded-md border border-sky-500/40 bg-black/55 px-5 py-4 shadow-lg backdrop-blur-md">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-neutral-100">
             Loading piano samples

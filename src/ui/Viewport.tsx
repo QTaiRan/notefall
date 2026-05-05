@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  DropZone,
   Label,
   Slider,
   SliderOutput,
   SliderThumb,
   SliderTrack,
-  Text,
 } from "react-aria-components";
 import { useHover } from "react-aria";
 import { Scene } from "../scene/Scene";
@@ -19,9 +17,7 @@ import {
   TrashIcon,
 } from "./icons";
 import { useStore } from "../store";
-import { audioEngine } from "../audio/engine";
 import { previewNote } from "../audio/preview";
-import { parseMidi } from "../midi/parse";
 import { deleteNotes, setNotesVelocity } from "../midi/edit";
 import { midiToName } from "../midi/noteName";
 
@@ -427,8 +423,6 @@ export function Viewport() {
   const innerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const transport = useStore((s) => s.transport);
-  const setSong = useStore((s) => s.setSong);
-  const setTransport = useStore((s) => s.setTransport);
   // Drives the click-eater overlay: while samples are being downloaded
   // we shouldn't let any canvas interaction (play toggle, eraser, new
   // note, range-select, hold-to-fast-forward) fire. The Inspector and
@@ -555,87 +549,58 @@ export function Viewport() {
     return () => ro.disconnect();
   }, []);
 
-  const handleFile = async (file: File) => {
-    const buf = await file.arrayBuffer();
-    const parsed = await parseMidi(buf, file.name);
-    setSong(parsed);
-    audioEngine.loadSong(parsed);
-    setTransport("stopped");
-  };
-
+  // Drag-and-drop is now wired at the window level (`useFileDrop` in
+  // `Layout.tsx`) so a drop anywhere over the app — Toolbar, Inspector,
+  // canvas — routes the file. The earlier Viewport-scoped `DropZone` was
+  // too narrow: users routinely dropped onto the Inspector or Toolbar
+  // and saw nothing happen.
   return (
-    <DropZone
+    <div
       ref={wrapRef}
       className="relative flex flex-1 items-center justify-center overflow-hidden bg-black outline-none"
-      getDropOperation={(types) =>
-        // Accept any file drop; we filter by .mid/.midi in onDrop
-        types.has("Files") ? "copy" : "cancel"
-      }
-      onDrop={async (e) => {
-        const fileItem = e.items.find((item) => item.kind === "file");
-        if (!fileItem || fileItem.kind !== "file") return;
-        if (!/\.midi?$/i.test(fileItem.name)) return;
-        const file = await fileItem.getFile();
-        await handleFile(file);
-      }}
     >
-      {({ isDropTarget }) => (
-        <>
-          {/* Visually-hidden label for screen readers */}
-          <Text slot="label" className="sr-only">
-            Drop a MIDI file here
-          </Text>
+      <div
+        ref={innerRef}
+        className={`relative shadow-2xl ${cursorHidden && !popoverOpen ? "cursor-none" : ""}`}
+        style={{ width: size.w, height: size.h, touchAction: "none" }}
+        {...hoverProps}
+      >
+        <Scene />
+        {/* Click-eater while the sampler is loading. Sits between
+            the Scene canvas and the SeekBar gradient, so canvas
+            interactions are blocked but SeekBar / NoteContextMenu /
+            Inspector / Toolbar stay live. cursor-wait gives the
+            visual feedback that interaction is paused. */}
+        {isLoading && (
           <div
-            ref={innerRef}
-            className={`relative shadow-2xl ${cursorHidden && !popoverOpen ? "cursor-none" : ""}`}
-            style={{ width: size.w, height: size.h, touchAction: "none" }}
-            {...hoverProps}
-          >
-            <Scene />
-            {/* Click-eater while the sampler is loading. Sits between
-                the Scene canvas and the SeekBar gradient, so canvas
-                interactions are blocked but SeekBar / NoteContextMenu /
-                Inspector / Toolbar stay live. cursor-wait gives the
-                visual feedback that interaction is paused. */}
-            {isLoading && (
-              <div
-                aria-hidden
-                className="absolute inset-0 cursor-wait"
-              />
-            )}
-            <TransportFeedback />
-            <FastForwardIndicator />
-            <RangeSelectRect wrapEl={innerRef.current} />
-            <NoteContextMenu wrapEl={innerRef.current} />
-            {/* Gradient and SeekBar root are click-through (pointer-events-none);
-                only the buttons / slider inside SeekBar carry pointer-events-auto.
-                That lets the lower PlayToggleArea under the keyboard still
-                receive clicks in the empty space around the controls.
-                When hiding, visibility transitions to hidden after the opacity
-                fade so the (invisible) buttons stop intercepting events. */}
-            <div
-              className={`pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-[opacity,visibility] duration-200 ${
-                controlsVisible
-                  ? "visible opacity-100"
-                  : "invisible opacity-0 [transition-delay:0s,200ms]"
-              }`}
-            >
-              <SeekBar
-                isFullscreen={isFullscreen}
-                onToggleFullscreen={toggleFullscreen}
-                onPopoverOpenChange={setPopoverOpen}
-              />
-            </div>
-            {isDropTarget && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-sky-500/10 ring-2 ring-inset ring-sky-400">
-                <span className="rounded bg-neutral-950/80 px-3 py-1 text-sm text-sky-300">
-                  Drop MIDI file
-                </span>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </DropZone>
+            aria-hidden
+            className="absolute inset-0 cursor-wait"
+          />
+        )}
+        <TransportFeedback />
+        <FastForwardIndicator />
+        <RangeSelectRect wrapEl={innerRef.current} />
+        <NoteContextMenu wrapEl={innerRef.current} />
+        {/* Gradient and SeekBar root are click-through (pointer-events-none);
+            only the buttons / slider inside SeekBar carry pointer-events-auto.
+            That lets the lower PlayToggleArea under the keyboard still
+            receive clicks in the empty space around the controls.
+            When hiding, visibility transitions to hidden after the opacity
+            fade so the (invisible) buttons stop intercepting events. */}
+        <div
+          className={`pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-10 transition-[opacity,visibility] duration-200 ${
+            controlsVisible
+              ? "visible opacity-100"
+              : "invisible opacity-0 [transition-delay:0s,200ms]"
+          }`}
+        >
+          <SeekBar
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
+            onPopoverOpenChange={setPopoverOpen}
+          />
+        </div>
+      </div>
+    </div>
   );
 }

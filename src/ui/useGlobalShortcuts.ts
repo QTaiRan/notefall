@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { togglePlayback } from '../audio/playback'
 import { toggleRecord } from '../audio/recordControl'
+import { openProject, saveProject, saveProjectAs } from '../projects/actions'
 import { useStore } from '../store'
 import { deleteNotes, moveNotes } from '../midi/edit'
 
@@ -16,6 +17,14 @@ import { deleteNotes, moveNotes } from '../midi/edit'
  *                     their own onPress handler (Tab+Space would
  *                     otherwise activate the focused button instead of
  *                     toggling playback). Use Enter to activate buttons.
+ *   Cmd/Ctrl + O          — open project (file picker). Confirms first
+ *                           when there are unsaved changes.
+ *   Cmd/Ctrl + S          — save project (overwrite current file when one
+ *                           exists; otherwise opens Save As). Capture-phase
+ *                           too, so the shortcut works even when a
+ *                           react-aria button has focus.
+ *   Cmd/Ctrl + Shift + S  — Save As (always opens the picker / triggers a
+ *                           download depending on browser support).
  *
  * Edit-mode shortcuts (song loaded AND not playing):
  *   Escape                  — clear selection (or close the context menu
@@ -79,6 +88,51 @@ export function useGlobalShortcuts(): void {
       e.preventDefault()
       e.stopImmediatePropagation()
       void togglePlayback()
+    }
+
+    // Capture-phase Cmd/Ctrl+S — same rationale as Space (must beat the
+    // browser's native Save Page dialog AND any focused react-aria button
+    // that might otherwise consume the key event). Cmd+Shift+S = Save As.
+    const onSaveCapture = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyS') return
+      if (e.altKey) return
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (isEditable(e.target)) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const action = e.shiftKey ? saveProjectAs : saveProject
+      void action().then((result) => {
+        if (result.kind === 'error') window.alert(result.message)
+      })
+    }
+
+    // Capture-phase Cmd/Ctrl+O — overrides the browser's "Open File"
+    // dialog (which would otherwise let the user open arbitrary files
+    // into the tab and navigate away from notefall). `openProject`
+    // handles the dirty-confirm internally.
+    const onOpenCapture = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyO') return
+      if (e.altKey || e.shiftKey) return
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (isEditable(e.target)) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      void openProject().then((result) => {
+        if (result.kind === 'error') window.alert(result.message)
+      })
+    }
+
+    // Warn before navigating away if there are unsaved changes for an
+    // already-named project. We deliberately don't prompt for an unnamed
+    // session — there's no save target to point the user at, and the
+    // friction of a blocking confirm() on every reload would be tiring.
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const { dirty, currentFile } = useStore.getState()
+      if (dirty && currentFile !== null) {
+        e.preventDefault()
+        // Required for some older browsers; modern ones ignore the string.
+        e.returnValue = ''
+      }
     }
 
     const onKey = async (e: KeyboardEvent) => {
@@ -168,10 +222,16 @@ export function useGlobalShortcuts(): void {
     }
 
     window.addEventListener('keydown', onSpaceCapture, true)
+    window.addEventListener('keydown', onSaveCapture, true)
+    window.addEventListener('keydown', onOpenCapture, true)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('beforeunload', onBeforeUnload)
     return () => {
       window.removeEventListener('keydown', onSpaceCapture, true)
+      window.removeEventListener('keydown', onSaveCapture, true)
+      window.removeEventListener('keydown', onOpenCapture, true)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('beforeunload', onBeforeUnload)
     }
   }, [])
 }

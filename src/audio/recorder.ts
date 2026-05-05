@@ -44,6 +44,12 @@ class RecorderManager {
   private off: (() => void) | null = null
   private recordings: Recording[] = []
   private listeners = new Set<() => void>()
+  // Fires when stop() finalizes a non-empty take. Distinct from the
+  // generic `listeners` (which fire on every state change including
+  // empty-stop and rename) so subscribers can react specifically to
+  // "a new recording just appeared" — used by the toolbar to auto-load
+  // the take into the player.
+  private finalizedListeners = new Set<(r: Recording) => void>()
 
   constructor() {
     // Hydrate from IndexedDB on first construction. Fire-and-forget — the
@@ -89,22 +95,27 @@ class RecorderManager {
     this.off?.()
     this.off = null
     const duration = performance.now() / 1000 - this.startWall
+    let finalized: Recording | null = null
     if (this.currentEvents.length > 0) {
       const id = `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       const createdAt = Date.now()
-      const recording: Recording = {
+      finalized = {
         id,
         name: defaultFilename(createdAt),
         createdAt,
         duration,
         events: this.currentEvents,
       }
-      this.recordings.unshift(recording)
-      saveRecording(recording)
+      this.recordings.unshift(finalized)
+      saveRecording(finalized)
     }
     this.currentEvents = []
     this.state = 'idle'
     this.notify()
+    // Fire the dedicated channel AFTER the generic notify so subscribers
+    // that handle the auto-load see the new recording in `getRecordings()`
+    // if they ever need to read it back.
+    if (finalized) this.finalizedListeners.forEach((fn) => fn(finalized!))
   }
 
   /** Cancel an in-progress recording without saving it. */
@@ -225,6 +236,19 @@ class RecorderManager {
     this.listeners.add(fn)
     return () => {
       this.listeners.delete(fn)
+    }
+  }
+
+  /**
+   * Subscribe to "a new recording was just finalized". Fires once per
+   * non-empty `stop()`. Empty stops do NOT fire this — they're surfaced
+   * via `addEmptyStopListener` in `recordControl.ts` instead, since the
+   * recorder discards them with no payload to hand out.
+   */
+  addFinalizedListener(fn: (r: Recording) => void): () => void {
+    this.finalizedListeners.add(fn)
+    return () => {
+      this.finalizedListeners.delete(fn)
     }
   }
 

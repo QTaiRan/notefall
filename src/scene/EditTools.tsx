@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
-import { previewNote } from '../audio/preview'
+import { ensureSamplerLoaded, previewNote } from '../audio/preview'
 import { addNote, deleteNotes, moveNotes } from '../midi/edit'
 import {
   clickXToMidi,
@@ -391,11 +391,17 @@ export function EditTools() {
     e.stopPropagation()
     const native = e.nativeEvent
 
-    // Editing is disabled while the sampler is downloading — adding
-    // a note in that window would either miss its preview audio
-    // entirely (silent click) or, before the engine init dedupe was
-    // added, kick off a duplicate sample download per click.
-    if (useStore.getState().loadStatus.state === 'loading') return
+    // Edit gestures require the sampler to be ready. Two reasons:
+    //   1. Without it, `previewNote` silently drops to avoid the
+    //      chord-burst that used to happen when queued previews all
+    //      fired on sampler-ready (see `audio/preview.ts`).
+    //   2. Starting a drag whose audio quietly disappears reads as
+    //      broken — better to swallow this click and start the load,
+    //      so the user's next click works as expected.
+    if (!audioEngine.isReady()) {
+      void ensureSamplerLoaded()
+      return
+    }
 
     // Right button → eraser drag.
     if (native.button === 2) {

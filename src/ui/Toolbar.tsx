@@ -1,15 +1,54 @@
-import { Button, DialogTrigger, Dialog, FileTrigger, Popover } from 'react-aria-components'
+import {
+  Button,
+  Dialog,
+  DialogTrigger,
+  Header,
+  Menu,
+  MenuItem,
+  MenuSection,
+  MenuTrigger,
+  Popover,
+  Separator,
+  SubmenuTrigger,
+} from 'react-aria-components'
 import { useStore } from '../store'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong } from '../audio/playback'
+import { recorder } from '../audio/recorder'
 import { addEmptyStopListener, COUNT_IN_BEATS, toggleRecord as toggleRecordControl } from '../audio/recordControl'
 import { ensureAudioReady } from '../audio/midiInput'
 import { useMidiInput } from '../audio/useMidiInput'
 import { useRecorder } from '../audio/useRecorder'
 import { parseMidi } from '../midi/parse'
+import { newProject, openProject, openRecent, saveProject, saveProjectAs } from '../projects/actions'
+import { hasFileSystemAccess } from '../projects/io'
+import { clearAllRecent, getRecent, subscribeRecent } from '../projects/recent'
 import { SAMPLES } from '../samples'
 import { DownloadIcon, MetronomeIcon, PauseIcon, PlayIcon, PlaylistIcon, RecordIcon, StopIcon, TrashIcon } from './icons'
+
+// Display modifier symbols for the File menu's keyboard hints. Mac uses
+// the standard ⌘ / ⇧ glyphs; everywhere else falls back to "Ctrl+ /
+// Shift+" word labels so the hint reads naturally on Windows and Linux.
+const IS_MAC =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '')
+const SHORTCUT_OPEN = IS_MAC ? '⌘O' : 'Ctrl+O'
+const SHORTCUT_SAVE = IS_MAC ? '⌘S' : 'Ctrl+S'
+const SHORTCUT_SAVE_AS = IS_MAC ? '⇧⌘S' : 'Ctrl+Shift+S'
+
+// Whether to surface the Recent submenu. Recent files rely on persisted
+// `FileSystemFileHandle`s — Safari / Firefox can't reopen by handle, so
+// the section would be a dead end for those users. Detected once at
+// module load since FSA support doesn't change at runtime.
+const RECENT_AVAILABLE = hasFileSystemAccess()
+
+// Shared className strings for File menu items. Centralised so the three
+// project items, the MIDI import, and the demo-song items stay visually
+// consistent when something changes.
+const menuItemClass =
+  'flex cursor-pointer items-center justify-between gap-6 rounded px-2 py-1.5 text-xs text-neutral-200 outline-none data-[focused]:bg-neutral-800 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50'
+const menuShortcutClass = 'font-mono text-[10px] text-neutral-500'
 
 function fmtElapsed(sec: number): string {
   const m = Math.floor(sec / 60)
@@ -31,6 +70,8 @@ export function Toolbar() {
   const midi = useMidiInput()
   const rec = useRecorder()
   const transport = useStore((s) => s.transport)
+  const currentFile = useStore((s) => s.currentFile)
+  const dirty = useStore((s) => s.dirty)
   const countInEnabled = useStore((s) => s.countInEnabled)
   const setCountInEnabled = useStore((s) => s.setCountInEnabled)
   // Mid-count-in beat number from the global record-control module so the
@@ -91,6 +132,20 @@ export function Toolbar() {
     setActiveRecordingId(null)
   }
 
+  // MenuItem replaces the old FileTrigger button, so we open the file
+  // picker programmatically from the click handler. Same accept list
+  // FileTrigger was using.
+  const onOpenMidi = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.mid,.midi,audio/midi,audio/x-midi'
+    input.onchange = () => {
+      const f = input.files?.[0]
+      if (f) void onFile(f)
+    }
+    input.click()
+  }
+
   const onLoadSample = (build: () => ReturnType<typeof parseMidi> extends Promise<infer T> ? T : never) => {
     const parsed = build()
     setSong(parsed)
@@ -139,8 +194,56 @@ export function Toolbar() {
     })
   }, [])
 
+  // Auto-load a finalized recording as the current song. Record start
+  // already cleared the previous song (recordControl.ts: setSong(null) +
+  // unloadSong) so this just fills the empty slot — the user's project
+  // song is not at risk of being silently overwritten by stop.
+  useEffect(() => {
+    return recorder.addFinalizedListener((r) => {
+      void (async () => {
+        const buf = recorder.toArrayBuffer(r.id)
+        if (!buf) return
+        const parsed = await parseMidi(buf, r.name)
+        setSong(parsed)
+        audioEngine.loadSong(parsed)
+        setTransport('stopped')
+        setActiveRecordingId(r.id)
+      })()
+    })
+  }, [setSong, setTransport])
+
   const onToggleRecord = () => {
     void toggleRecordControl()
+  }
+
+  // Project actions. Dirty-confirm for `newProject` and `openProject`
+  // lives inside the action itself so the keyboard shortcut path
+  // (Cmd+O in useGlobalShortcuts) stays in sync with the menu path.
+  const onNewProject = async () => {
+    const result = await newProject()
+    if (result.kind === 'ok') setActiveRecordingId(null)
+  }
+  const onOpenProject = async () => {
+    const result = await openProject()
+    if (result.kind === 'error') window.alert(result.message)
+    else if (result.kind === 'ok') setActiveRecordingId(null)
+  }
+  const onSaveProject = async () => {
+    const result = await saveProject()
+    if (result.kind === 'error') window.alert(result.message)
+  }
+  const onSaveProjectAs = async () => {
+    const result = await saveProjectAs()
+    if (result.kind === 'error') window.alert(result.message)
+  }
+  // Recents subscription — empty array on browsers without FSA since
+  // `addRecent` no-ops there, so the submenu naturally hides itself
+  // via the recents.length === 0 check below.
+  const recents = useSyncExternalStore(subscribeRecent, getRecent, getRecent)
+  const onOpenRecent = async (entry: (typeof recents)[number]) => {
+    const result = await openRecent(entry)
+    if (result.kind === 'error') window.alert(result.message)
+    else if (result.kind === 'ok') setActiveRecordingId(null)
   }
 
   const onPickRecording = async (id: string, name: string) => {
@@ -167,20 +270,122 @@ export function Toolbar() {
           <span className="text-sm font-semibold tracking-wide text-neutral-200">notefall</span>
           <span className="font-mono text-[10px] text-neutral-500">v{__APP_VERSION__}</span>
         </span>
-        <FileTrigger
-          acceptedFileTypes={['.mid', '.midi', 'audio/midi', 'audio/x-midi']}
-          onSelect={(files) => {
-            const f = files?.[0]
-            if (f) onFile(f)
-          }}
-        >
+
+        {/* File menu — single entry point for everything that loads or
+            saves a song-bearing payload. Project ops (.nfz round-trip),
+            raw MIDI import, and the bundled demo songs all live here so
+            the toolbar stays narrow. The whole menu is disabled during
+            recording to keep the active take from being clobbered by a
+            mid-capture song swap. */}
+        <MenuTrigger>
           <Button
             isDisabled={rec.state === 'recording'}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500 disabled:cursor-not-allowed disabled:border-neutral-800 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:border-neutral-800"
+            className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500 data-[pressed]:bg-neutral-800 disabled:cursor-not-allowed disabled:border-neutral-800 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:border-neutral-800"
           >
-            Open MIDI
+            File
           </Button>
-        </FileTrigger>
+          <Popover
+            placement="bottom start"
+            className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
+          >
+            <Menu
+              aria-label="File"
+              className="flex w-60 flex-col gap-0.5 outline-none"
+            >
+              <MenuItem
+                onAction={() => void onNewProject()}
+                textValue="New"
+                className={menuItemClass}
+              >
+                <span>New</span>
+              </MenuItem>
+              <MenuItem
+                onAction={() => void onOpenProject()}
+                textValue="Open"
+                className={menuItemClass}
+              >
+                <span>Open…</span>
+                <span className={menuShortcutClass}>{SHORTCUT_OPEN}</span>
+              </MenuItem>
+              {RECENT_AVAILABLE && recents.length > 0 && (
+                <SubmenuTrigger>
+                  <MenuItem className={menuItemClass} textValue="Open Recent">
+                    <span>Open Recent</span>
+                    <span className={menuShortcutClass}>▸</span>
+                  </MenuItem>
+                  <Popover
+                    placement="end top"
+                    className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
+                  >
+                    <Menu
+                      aria-label="Open Recent"
+                      className="flex w-64 flex-col gap-0.5 outline-none"
+                    >
+                      {recents.map((entry) => (
+                        <MenuItem
+                          key={entry.id}
+                          onAction={() => void onOpenRecent(entry)}
+                          textValue={entry.name}
+                          className={menuItemClass}
+                        >
+                          <span className="truncate">{entry.name}</span>
+                        </MenuItem>
+                      ))}
+                      <Separator className="my-1 h-px bg-neutral-800" />
+                      <MenuItem
+                        onAction={() => clearAllRecent()}
+                        textValue="Clear Recent"
+                        className={menuItemClass}
+                      >
+                        <span className="text-neutral-400">Clear Recent</span>
+                      </MenuItem>
+                    </Menu>
+                  </Popover>
+                </SubmenuTrigger>
+              )}
+              <MenuItem
+                onAction={() => void onSaveProject()}
+                textValue="Save"
+                className={menuItemClass}
+              >
+                <span>Save</span>
+                <span className={menuShortcutClass}>{SHORTCUT_SAVE}</span>
+              </MenuItem>
+              <MenuItem
+                onAction={() => void onSaveProjectAs()}
+                textValue="Save As"
+                className={menuItemClass}
+              >
+                <span>Save As…</span>
+                <span className={menuShortcutClass}>{SHORTCUT_SAVE_AS}</span>
+              </MenuItem>
+              <Separator className="my-1 h-px bg-neutral-800" />
+              <MenuItem
+                onAction={onOpenMidi}
+                textValue="Open MIDI"
+                className={menuItemClass}
+              >
+                <span>Open MIDI…</span>
+              </MenuItem>
+              <Separator className="my-1 h-px bg-neutral-800" />
+              <MenuSection className="flex flex-col gap-0.5">
+                <Header className="px-2 pt-0.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-neutral-500">
+                  Demo Songs
+                </Header>
+                {SAMPLES.map((sample) => (
+                  <MenuItem
+                    key={sample.label}
+                    onAction={() => onLoadSample(sample.build)}
+                    textValue={sample.label}
+                    className={menuItemClass}
+                  >
+                    <span>{sample.label}</span>
+                  </MenuItem>
+                ))}
+              </MenuSection>
+            </Menu>
+          </Popover>
+        </MenuTrigger>
 
         {midi.supported && (
           <DialogTrigger>
@@ -466,22 +671,22 @@ export function Toolbar() {
           </div>
         </div>
 
-        <div className="ml-2 flex items-center gap-1 border-l border-neutral-800 pl-3">
-          {SAMPLES.map((s) => (
-            <Button
-              key={s.label}
-              isDisabled={rec.state === 'recording'}
-              onPress={() => onLoadSample(s.build)}
-              className="rounded border border-neutral-800 bg-neutral-900/60 px-2 py-1 text-[11px] text-neutral-400 outline-none hover:border-neutral-600 hover:text-neutral-200 focus-visible:border-sky-500 disabled:cursor-not-allowed disabled:border-neutral-900 disabled:bg-neutral-950 disabled:text-neutral-700 disabled:hover:border-neutral-900 disabled:hover:text-neutral-700"
-            >
-              {s.label}
-            </Button>
-          ))}
-        </div>
       </div>
 
-      <div className="truncate text-[11px] text-neutral-500">
-        {song ? song.name : 'No file loaded'}
+      <div className="flex items-center gap-1.5 truncate text-[11px] text-neutral-500">
+        {/* Dirty indicator. Only meaningful when a project is loaded —
+            "no project" doesn't have a save target so the dot would be
+            misleading there. */}
+        {currentFile && dirty && (
+          <span aria-label="Unsaved changes" className="text-amber-400">●</span>
+        )}
+        {currentFile ? (
+          <span className="text-neutral-300">{currentFile.name}</span>
+        ) : song ? (
+          song.name
+        ) : (
+          'No file loaded'
+        )}
       </div>
     </header>
   )

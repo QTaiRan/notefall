@@ -1,0 +1,101 @@
+import type { Settings } from '../store'
+
+/**
+ * On-disk schema for `.nfz` (notefall zip) project files.
+ *
+ * # Versioning policy
+ *
+ * Bump `CURRENT_SCHEMA_VERSION` and add an entry to `migrations` (see
+ * `migrate.ts`) ONLY for breaking shape changes:
+ *   - renaming a settings key
+ *   - changing a settings value's type or units
+ *   - changing the meaning of an existing key
+ *
+ * Adding or removing a settings key is FREE — `loadSettings` lenient-merges
+ * over `defaultSettings`, so missing keys fill with defaults and unknown
+ * keys drop silently. Most app evolution lives in this category.
+ *
+ * # Layout inside the .nfz zip
+ *
+ *   my-project.nfz  (zip)
+ *   ├ manifest.json   ← shape described by `ProjectManifest` below
+ *   └ assets/
+ *      └ song.mid     ← raw SMF bytes (absent when the project has no song)
+ *
+ * MIDI is stored as a binary asset rather than base64 inside the manifest
+ * so the zip stays self-describing on hand-extraction and avoids the 33%
+ * inflation of base64 — MIDI is typically the largest payload in a project.
+ */
+
+export const CURRENT_SCHEMA_VERSION = 1 as const
+
+// `.nfz` = "notefall zip". Three-letter extension matches the convention
+// used by other creative tools (.psd, .fig, .als) and keeps file lists
+// readable. The container is a regular zip — `unzip my.nfz` works.
+export const PROJECT_FILE_EXTENSION = '.nfz' as const
+export const PROJECT_FILE_DESCRIPTION = 'notefall project' as const
+export const PROJECT_MIME_TYPE = 'application/zip' as const
+
+/**
+ * Reference to a binary asset inside the zip (under `assets/`). `ref` is
+ * the path *relative to `assets/`* (e.g. `"note-texture.png"`); `mime`
+ * preserves the content type so we can re-decode without sniffing;
+ * `fileName` is the user's original filename (display only — the
+ * in-zip path is normalised to a predictable name).
+ */
+export type AssetRef = {
+  ref: string
+  mime: string
+  fileName: string
+}
+
+/**
+ * What sits inside `manifest.json`. `songRef` holds a path *inside the zip*
+ * (relative to the zip root). Asset bytes live under `assets/<songRef>`.
+ *
+ * Future fields (audioTrack, etc.) are added here as optional — that alone
+ * doesn't need a schema bump because old loaders ignore unknown keys.
+ */
+export type ProjectManifest = {
+  schemaVersion: number
+  appVersion: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  settings: Partial<Settings>
+  songRef: string | null
+  /**
+   * User-uploaded image for the `noteTexture: 'custom'` preset. Optional
+   * — old projects (or projects that never picked an image) won't carry
+   * this field, and pre-`customTexture` versions of the loader simply
+   * ignore it. No schema bump needed for the addition.
+   */
+  customTexture?: AssetRef | null
+}
+
+/**
+ * In-memory snapshot of a project at the I/O boundary. `pack()` consumes
+ * this; `unpack()` produces it. During a session the project's contents
+ * live in the zustand store (`settings`, `song`) — this struct exists only
+ * to bracket the file I/O, not as a long-lived object.
+ */
+export type Project = {
+  name: string
+  createdAt: number
+  updatedAt: number
+  settings: Partial<Settings>
+  songMidi: ArrayBuffer | null
+  /** Bytes of the user's custom note-texture image. null when not in use. */
+  customTexture: { bytes: ArrayBuffer; mime: string; fileName: string } | null
+}
+
+/**
+ * Reference to a project file on disk + (when supported) the FSA handle
+ * needed to overwrite it on `Save`. `handle` is null on browsers without
+ * the File System Access API (Safari / Firefox), where `Save` falls back
+ * to a download.
+ */
+export type FileRef = {
+  name: string
+  handle: FileSystemFileHandle | null
+}

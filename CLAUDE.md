@@ -19,17 +19,26 @@ src/
 ├ App.tsx               renders Layout, or UnsupportedScreen on screens < 1024px
 ├ main.tsx
 ├ store.ts              Zustand store: settings, song, transport, loadStatus, loop, fastForward,
-│                       countIn, editor state (selection, history, contextMenu, rangeSelectRect)
+│                       countIn, editor state (selection, history, contextMenu, rangeSelectRect),
+│                       project file (currentFile, dirty, loadProject, newProject)
 ├ samples.ts            procedural demo songs (Scales, Arpeggios, Chords + Pedal)
 ├ midi/
 │  ├ types.ts           NoteEvent / PedalEvent / ParsedSong
 │  ├ parse.ts           @tonejs/midi → ParsedSong (sorted by time)
+│  ├ serialize.ts       ParsedSong → SMF bytes (counterpart of parse; used by project Save)
 │  └ edit.ts            editor mutation helpers (delete/move/add/split/setVelocity/resolveOverlaps)
+├ projects/
+│  ├ types.ts           ProjectManifest / Project / FileRef + CURRENT_SCHEMA_VERSION + extensions
+│  ├ migrate.ts         migrations table + loadSettings lenient merge + NewerVersionError
+│  ├ io.ts              fflate zip pack/unpack + FSA wrapper + <input>/download fallback
+│  ├ actions.ts         newProject / openProject / openRecent / saveProject / saveProjectAs orchestration
+│  └ recent.ts          IndexedDB-backed recent files list (FSA only) + subscribe channel
 ├ audio/
 │  ├ sampler.ts         PianoInstrument wrapper (smplr + FadeInStorage + Reverb + EQ)
 │  ├ engine.ts          AudioEngine singleton (scheduler, pedal, live notes, bg ticker, init dedupe)
 │  ├ playback.ts        playSong / pauseSong / togglePlayback (resets editor state on transport)
-│  ├ preview.ts         editor-only previewNote (auto-loads sampler, no listener emit)
+│  ├ preview.ts         editor-only previewNote (sync, silently drops when sampler not ready)
+│  │                    + ensureSamplerLoaded helper (idempotent download trigger)
 │  ├ midiInput.ts       Web MIDI device manager + ensureAudioReady
 │  ├ useMidiInput.ts    React hook over midiInput
 │  ├ recorder.ts        captures live input → Recording[]; SMF export; IndexedDB persistence
@@ -47,7 +56,8 @@ src/
 │  ├ HitParticles.tsx   curl-noise particle system; subscribes to noteDeathFx for delete bursts
 │  ├ HitLine.tsx        glowing horizontal bar + animated wavy beam at the hit line
 │  ├ curlNoise.ts       3D Perlin curl-field sampler used by HitParticles
-│  ├ customTexture.ts   ImageDecoder-based GIF/WebP loader for note texture preset
+│  ├ customTexture.ts   ImageDecoder-based GIF/WebP loader + retains original
+│  │                    bytes so projects round-trip the image (setFromFile / setFromBytes)
 │  ├ positions.ts       shared geometry (clickX→midi, clickY→time, fallDistance, noteVisualBounds)
 │  └ noteDeathFx.ts     publish/subscribe channel for "note deleted" events + active-ghost list
 ├ scene/
@@ -55,7 +65,10 @@ src/
 │  └ EditTools.tsx      edit-mode click handlers (new note, range-select, eraser drag)
 └ ui/
    ├ Layout.tsx           top-level shell (Toolbar + Viewport + Inspector); engine-setting sync
-   ├ Toolbar.tsx          Open MIDI, demo songs, MIDI device picker, recording UI, count-in toggle
+   ├ Toolbar.tsx          File menu (New/Open/Save/Save As + Open MIDI + demo songs),
+   │                      MIDI device picker, recording UI, count-in toggle, currentFile + dirty indicator
+   ├ ConfirmModal.tsx     single-instance modal driven by `confirm.ts`'s pending state
+   ├ confirm.ts           Promise-based imperative `showConfirm()` (replaces window.confirm)
    ├ Viewport.tsx         16:9 letterbox, DropZone, hover controls, range-select rect, context menu
    ├ Inspector.tsx        Reset + every settings slider/switch/select/color picker
    ├ SeekBar.tsx          transport row + slider, lives inside the Viewport overlay
@@ -170,7 +183,9 @@ This keeps a whole drag = 1 undo entry.
 
 **Context menu** (`NoteContextMenu` in `Viewport.tsx`): right-click was repurposed for delete, so the velocity-edit menu opens on **double-click**. Position is clamped to the viewport so it can't slide behind the Inspector. Slider uses `pushUndoSnapshot` once per session + `setSongPreview` per change. While dragging the slider, a 500ms-interval ticker plays the anchor note as preview audio so the user hears the loudness change.
 
-**Loading guard.** While `loadStatus.state === 'loading'`, a transparent click-eater div (`absolute inset-0 cursor-wait`) is mounted between the Canvas and the SeekBar gradient. Blocks every canvas interaction (play toggle, range-select, eraser, new note, hold-to-FF). SeekBar / Inspector / Toolbar stay live. Defense-in-depth: editor pointer handlers also early-return on loading.
+**Loading guard.** While `loadStatus.state === 'loading'`, a transparent click-eater div (`absolute inset-0 cursor-wait`) is mounted between the Canvas and the SeekBar gradient. Blocks every canvas interaction (play toggle, range-select, eraser, new note, hold-to-FF). SeekBar / Inspector / Toolbar stay live.
+
+**The click that triggers the load itself isn't covered by the eater** — at the moment of pointerdown, `loadStatus` is still `'idle'`. Defense-in-depth: editor pointer handlers (`EditTools` and `FallingNotes`) early-return when `!audioEngine.isReady()`, kicking off `ensureSamplerLoaded` instead. So the first canvas click during a never-loaded session triggers the download but does NOT start a drag — the user clicks again once samples have arrived. This pairs with `previewNote`'s sync drop (see `audio/preview.ts`) so no audio queues during the load: the chord-burst-on-ready bug that made the old async version unsafe is structurally impossible.
 
 ## Note death FX (`src/notes/noteDeathFx.ts` + `HitParticles.tsx` + `FallingNotes.tsx`)
 
@@ -222,13 +237,21 @@ Per-key glow: `audioEngine.addKeyListener` updates `held[]` (reference-counted, 
 - Digit row → chromatic continuation A5..G#6
 - Skipped on editable focus, modifier combos (incl. Shift — reserved for Shift+R record). Window blur releases everything. The global `transpose` setting also applies here
 
+## Confirm modal (`src/ui/confirm.ts` + `ConfirmModal.tsx`)
+
+Imperative `showConfirm({ title, message, confirmLabel?, cancelLabel?, destructive? }): Promise<boolean>` so non-React modules (`projects/actions.ts`) can `await` a user decision without holding React refs. Module-level pending-options + listener channel; `<ConfirmModal />` (mounted once in `Layout.tsx`) subscribes via `useSyncExternalStore`, renders a `react-aria-components` `ModalOverlay` + `Modal` + `Dialog` (gets focus trap, Escape-to-dismiss, backdrop-click-to-dismiss for free), and dispatches the user's pick through `resolveConfirm(value)`.
+
+Visual language matches `LoadingOverlay` (centered card, blurred backdrop) but with an amber accent and action buttons instead of a progress bar — confirm is a decision point, not informational. Cancel is `autoFocus` so pressing Enter on a destructive prompt preserves work by default.
+
+Overlapping calls: if a prompt is already open when `showConfirm` is called again, the prior promise resolves as `false` (cancelled) before the new one takes its place — keeps callers from deadlocking on a forgotten promise.
+
 ## Recording (`src/audio/recorder.ts` + `recordControl.ts` + `recordingStore.ts`)
 
 `RecorderManager` singleton captures `addLiveListener` events into `Recording[]`. Hydrates from IndexedDB on first construction; every mutation (stop, rename, delete, clearAll) also writes through. Errors silently degrade (private mode / quota) so the in-memory recorder still works.
 
 `recordControl.toggleRecord()` is the shared entry — Toolbar UI button + Shift+R global shortcut both call it. Drives a 4-beat metronome count-in (100 BPM, sine clicks via `click.ts`) when `countInEnabled` is set; the count-in beat number flows through the store so the Record button shows `1/4`, `2/4`, etc. Empty recordings (no captured events) are silently discarded with a toast.
 
-Recordings are loadable straight back into the player (recorder.toArrayBuffer → parseMidi → setSong) and downloadable as SMF.
+Recordings are loadable straight back into the player (recorder.toArrayBuffer → parseMidi → setSong) and downloadable as SMF. **Auto-load on stop**: `recorder.addFinalizedListener(fn)` fires once per non-empty stop with the new `Recording`. The Toolbar subscribes and immediately loads the take as the current song so the user can replay it without an extra click. Empty stops do NOT fire the channel — they go through `addEmptyStopListener` (which surfaces a "no notes captured" toast) instead. The auto-load is non-destructive: Record start already cleared the previous song, so this just fills the empty slot.
 
 ## Live MIDI input (`src/audio/midiInput.ts`)
 
@@ -252,6 +275,75 @@ While paused/stopped + a song loaded: `<EditTools />` mounts instead. See **Edit
 - `loadStatus: 'idle' | { state: 'loading', loaded, total } | 'ready'` — drives `LoadingOverlay` AND the click-eater overlay
 - `loop`, `fastForward`, `countInEnabled`, `countInBeat`
 - Editor: `selection`, `editHistory[]`, `editFuture[]`, `applySongEdit`, `setSongPreview`, `pushUndoSnapshot`, `undoEdit`, `redoEdit`, `rangeSelectRect`, `contextMenu`
+- Project file: `currentFile: FileRef | null`, `dirty: boolean`, `loadProject`, `newProject`, `setCurrentFile`, `markClean`. `dirty` flips on `setSong`, `updateSettings`, `resetSettings`, `applySongEdit`, `setSongPreview`, `undoEdit`, `redoEdit` — anything that changes what `Save` would persist. `loadProject` is atomic (settings + song + currentFile in one set) and resets `dirty`
+
+## Projects (`src/projects/`)
+
+**File-based** persistence. The user owns their data — projects are saved as `.nfz` ("notefall zip") files on the user's filesystem, not in IndexedDB. Recordings remain the only IndexedDB-backed feature (capture artefacts, not user-authored documents). Presets are planned but not yet implemented; they'll follow the same shape as projects (separate file extension, settings-only manifest).
+
+Why file-based and not IndexedDB:
+- IndexedDB silently disappears on "clear site data", in private mode, and under Safari's 7-day ITP eviction. For creative work this is a catastrophic failure mode
+- Files live in the user's filesystem, sync via Dropbox / iCloud / Git, and can be transferred between devices without any extra UI
+- "Import" and "Open" collapse to a single operation (open a file from disk) — one button instead of two
+
+**Project** = a piece of work. Holds:
+- `settings: Partial<Settings>` — visual / audio config snapshot at save time
+- `songMidi: ArrayBuffer | null` — loaded MIDI re-serialized from the in-memory `ParsedSong` via `serializeMidi` so editor changes round-trip
+- `customTexture: { bytes, mime, fileName } | null` — user-uploaded image for the `noteTexture: 'custom'` preset (lives in `useCustomTexture` at runtime; `actions.ts` ferries it through the manifest's `customTexture` `AssetRef` and the zip's `assets/note-texture<ext>` payload). Captured on save even when the active preset isn't `'custom'` so a temporary preset switch doesn't drop the user's image
+- `audioTrack` (future) — user-supplied piano audio + sync offset, when that feature ships
+- `name`, `createdAt`, `updatedAt`
+
+**Schema versioning.** Files carry `schemaVersion: number` and `appVersion: string` (from package.json — diagnostic only, never used for branching). Strategy:
+- Settings load is a **lenient merge**: `{ ...defaultSettings, ...saved }`. Missing keys fill with defaults; unknown keys drop silently (`migrate.ts:loadSettings`)
+- `schemaVersion` only increments for **breaking** shape changes (key rename, type change, semantic flip). Each break adds an entry to `migrate.ts:migrations[oldV] = (data) => migratedData`
+- `schemaVersion > CURRENT_SCHEMA_VERSION` → throws `NewerVersionError`, surfaced as an alert ("saved in a newer version"). Failure mode: stale tab loading something the new app saved
+
+So: **adding or removing a settings key needs no migration**. Only renames / restructures cost a migration step.
+
+**File format.** `.nfz` is a zip (via `fflate`). The container is a regular zip — `unzip my.nfz` works for inspection:
+
+```
+my-project.nfz  (zip)
+├ manifest.json   { schemaVersion, appVersion, name, createdAt, updatedAt, settings,
+│                   songRef: "song.mid" | null,
+│                   customTexture: { ref, mime, fileName } | null }
+└ assets/
+   ├ song.mid              (raw SMF bytes — absent when songRef is null)
+   └ note-texture.<ext>    (custom note-texture image — absent when customTexture is null)
+```
+
+The zip wrapper exists from day 1 even when only `manifest.json` is present, so the format doesn't fork later when audio sync ships. MIDI is stored as a binary asset (referenced by `songRef`) rather than base64 inside the manifest — keeps the zip self-describing on hand-extraction and avoids the 33% inflation base64 would impose.
+
+**File I/O strategy** (`io.ts`). Browsers split here:
+- **Chrome / Edge**: File System Access API (`showOpenFilePicker`, `showSaveFilePicker`, `FileSystemFileHandle.createWritable`). The handle is held in `useStore.currentFile.handle` for the session, so `Save` overwrites the same file in place. The Recent Files list (`recent.ts`) persists handles across reloads in IndexedDB, capped at 8 entries
+- **Safari / Firefox**: `hasFileSystemAccess()` returns false → fallback path. `showOpen` uses a programmatic `<input type="file">`; `showSaveAs` triggers a Blob-URL download. `Save` falls through to `Save As` because `currentFile.handle` is always null on this path. Functionally `Save` and `Save As` are identical here
+
+**Save model.**
+- Explicit only. No autosave
+- `Save` (`Cmd+S`) overwrites the active file via FSA, or falls through to `Save As` if no handle / handle stale
+- `Save As` (`Cmd+Shift+S`) always opens the picker (FSA) or downloads (fallback)
+- `dirty` clears on successful save
+- Window `beforeunload` prompts when `dirty && currentFile !== null`. Unnamed sessions don't prompt — there's no save target to point the user at, and the friction would be tiring on every reload
+- Edit history (undo / redo stack) is **not** persisted — too large, rarely useful across sessions
+
+**Action layer** (`actions.ts`). `newProject` / `openProject` / `openRecent` / `openProjectFromFile` / `saveProject` / `saveProjectAs` orchestrate file I/O + parse/serialize + store mutations + audio engine sync. `openProjectFromFile(file)` is the entry point used by canvas drag-and-drop in `Viewport.tsx` — same pipeline as `openProject` but skips the picker. Dropped files don't carry an FSA write handle, so the resulting `currentFile.handle` is null and Save falls through to Save As until the user picks a destination. All return `{ kind: 'ok' | 'cancelled' | 'error', message? }` so call sites can pattern-match — `'cancelled'` is silent (user dismissed picker / declined the dirty prompt), `'error'` surfaces via `window.alert`. The `dirty`-confirm prompt for the destructive actions (`newProject`, `openProject`, `openRecent`) lives **inside the action**, not at call sites, so the Cmd+O shortcut and the File menu items stay in sync without duplicating the gate. The prompt itself goes through `showConfirm` (`src/ui/confirm.ts`) so it shares the styled modal with the rest of the app — no `window.confirm` calls. `openProject` and `openRecent` share an internal `applyOpenedProject(buf, ref)` helper so unpack / migrate / audio sync / recent-list update logic is in one place.
+
+**Recent files** (`recent.ts`). Persists `FileSystemFileHandle` references in IndexedDB (DB `notefall-recents`, store `handles`, capped at 8 entries) so the user can reopen a project with one click. **FSA-only**: handles can't be obtained on Safari / Firefox, so `addRecent` no-ops there and the Toolbar's "Open Recent" submenu hides itself when the list is empty. Dedup via FSA's `isSameEntry()` so opening the same file twice moves it to the top instead of duplicating. The list is updated by `applyOpenedProject` (after `openProject` / `openRecent`), `saveProject` (bumps timestamp on overwrite), and `saveProjectAs` (records the freshly-picked handle). `openRecent` re-checks read permission via `openFromHandle`; if the handle is stale (file moved / deleted / permission denied), the entry is dropped from the list so the menu doesn't keep showing dead items. No project DATA lives here — only the handle. Losing this list is harmless; the project files themselves are unaffected.
+
+**UI surface.** Toolbar has a single **File** menu (react-aria `MenuTrigger`) consolidating every "load or save a song-bearing payload" entry point into one place:
+
+- Project actions — `New` / `Open…` / `Open Recent ▸` / `Save` / `Save As…`. Open / Save / Save As show shortcut hints (`⌘O` / `⌘S` / `⇧⌘S` on macOS, `Ctrl+…` elsewhere — detection at module load via `navigator.platform`). `New` deliberately has no shortcut (Cmd+N / Cmd+Shift+N collide with the browser's New Window / Incognito affordances). `Open Recent` is a `SubmenuTrigger` that hides itself when there are no recents OR when FSA is unavailable
+- `Open MIDI…` — programmatic `<input type="file">` rather than `FileTrigger`, since menu items can't host a `FileTrigger` directly. Replaces just the song in the current project (settings preserved); contrast with `Open Project…` which replaces the whole session
+- Demo Songs section (under a `Header` inside `MenuSection`) — built from the `SAMPLES` array in `src/samples.ts`
+
+The whole menu disables during recording — any of these would clobber the in-progress take. `SAMPLES` items shouldn't change frequently; if the list grows beyond 5–6 entries, consider a `SubmenuTrigger` so the menu stays compact.
+
+**Keyboard shortcuts.** `Cmd/Ctrl+O` (open), `Cmd/Ctrl+S` (save), `Cmd/Ctrl+Shift+S` (save as) are wired in `useGlobalShortcuts.ts` on the **capture phase**, same rationale as `Space`: must beat both the browser's native dialogs (Save Page / Open File) AND any focused react-aria button that might otherwise consume the key event.
+
+**Rules of thumb when changing settings:**
+- New key → add to `defaultSettings`. Old projects load via lenient merge. No migration
+- Removed key → just delete it. Unknown key drops on load. No migration
+- Renamed / type-changed / semantically-changed key → `CURRENT_SCHEMA_VERSION++` and add `migrations[oldV]` that rewrites the field
 
 ## UI layout
 
@@ -271,9 +363,13 @@ While paused/stopped + a song loaded: `<EditTools />` mounts instead. See **Edit
 - Click-eater (transparent, only while loading)
 - `<TransportFeedback />` — transient centered play/pause icon on every transition (skip on the very first play after sample load — that's "the load finished", not a user toggle)
 - `<FastForwardIndicator />` — top-center 2× pill while `fastForward`
-- `<RangeSelectRect />` — marquee, positioned in client coords against `innerRef`'s bounding rect (NOT the outer DropZone, which is offset by the letterbox bars)
+- `<RangeSelectRect />` — marquee, positioned in client coords against `innerRef`'s bounding rect (NOT the outer wrapper, which spans the full available area and is offset from the canvas by the letterbox bars)
 - `<NoteContextMenu />` — velocity slider; same `innerRef`-based positioning + clamp
 - Bottom gradient + `<SeekBar />` — gradient is `pointer-events-none`; only buttons / slider re-enable `pointer-events-auto` so empty space passes clicks to the canvas. Hover (`useHover`) + `idleHidden` autohide while playing; popovers from SeekBar pin the controls visible
+
+**File drag-and-drop.** A single `react-aria-components` `<DropZone>` wraps the entire `Layout` (Toolbar + Viewport + Inspector) so a drop anywhere over the app routes the file. Earlier the DropZone was scoped to Viewport, but users routinely dropped onto the Toolbar or Inspector and got nothing — widening the bound surface removes that footgun. Routing inside `onDrop`: `.nfz` → `openProjectFromFile` (project pipeline with dirty-confirm), `.mid`/`.midi` → direct `parseMidi` + `setSong` (song-only swap, mirrors the File menu's "Open MIDI"). Unknown extensions are silently ignored. The drop indicator is rendered inside the DropZone's `isDropTarget` render prop (`pointer-events-none`, z-50) so it doesn't intercept the drop event itself.
+
+**Footgun**: react-aria's `DragTypes.has('Files')` does NOT mirror HTML's `dataTransfer.types.includes('Files')`. The `DragTypes` set holds the MIME types of the dragged items (e.g. `'image/png'`), not the OS-level `'Files'` sentinel — so a `getDropOperation` gated on `types.has('Files')` always returns `'cancel'` for native file drops and the DropZone silently does nothing. Either return `'copy'` unconditionally and filter in `onDrop` (current approach), or check specific MIME types like `'audio/midi'`. Don't gate on `'Files'`.
 
 The seek slider uses `SliderTrackRenderProps.isHovered` + `state.isThumbDragging(0)` to expand the bar / brighten the fill. Thumb is `sr-only` (visible track only). Same hover-grow pattern in `Inspector.tsx`'s `SliderRow`.
 

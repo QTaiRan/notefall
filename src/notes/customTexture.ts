@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import * as THREE from 'three'
+import { useStore } from '../store'
 
 /**
  * Holds the user-provided image used by the 'custom' note-texture preset.
@@ -8,6 +9,12 @@ import * as THREE from 'three'
  * GPU-bound object that doesn't belong in the serialisable settings tree.
  * The FallingNotes material subscribes to `texture` and rebinds its uniform
  * whenever this changes.
+ *
+ * The original file bytes (`fileBytes` + `fileMime`) are retained alongside
+ * the GPU texture so the image survives a project save/load cycle —
+ * `pack`/`unpack` in `projects/io.ts` ferry these bytes through the .nfz
+ * zip as a binary asset, and `setFromBytes` rehydrates the texture on
+ * project load without requiring the user to re-pick the file.
  *
  * Animated formats (GIF, animated WebP, APNG) are decoded via the
  * `ImageDecoder` Web API. Frames are pre-decoded into ImageBitmaps, then a
@@ -44,31 +51,40 @@ function stopActiveAnimation() {
 type CustomTextureStore = {
   texture: THREE.Texture | null
   fileName: string | null
+  /** Original file bytes — kept so the image can be re-serialised into a project zip. */
+  fileBytes: ArrayBuffer | null
+  /** MIME type captured at load time — needed to redecode on project open. */
+  fileMime: string | null
+  /** User-gesture entry point (Inspector's FileTrigger). Marks the project dirty. */
   setFromFile: (file: File | null) => Promise<void>
+  /** Project-load entry point. Same loading logic as `setFromFile` but skips the dirty mark. */
+  setFromBytes: (bytes: ArrayBuffer, mime: string, fileName: string) => Promise<void>
+  /** Project-load clear (called when a loaded project doesn't carry a custom texture). No dirty mark. */
+  clearFromLoad: () => void
 }
 
-export const useCustomTexture = create<CustomTextureStore>((set, get) => ({
-  texture: null,
-  fileName: null,
-  setFromFile: async (file) => {
+export const useCustomTexture = create<CustomTextureStore>((set, get) => {
+  const clear = () => {
     stopActiveAnimation()
-    const prev = get().texture
-    prev?.dispose()
-    if (!file) {
-      set({ texture: null, fileName: null })
-      return
-    }
+    get().texture?.dispose()
+    set({ texture: null, fileName: null, fileBytes: null, fileMime: null })
+  }
+
+  const loadFromBytes = async (bytes: ArrayBuffer, mime: string, fileName: string) => {
+    stopActiveAnimation()
+    get().texture?.dispose()
 
     // Try the animated path first. Returns null for unsupported types or
     // single-frame images so the static fallback handles them.
-    const animated = await loadAnimated(file).catch(() => null)
+    const animated = await loadAnimatedFromBytes(bytes, mime).catch(() => null)
     if (animated) {
-      set({ texture: animated, fileName: file.name })
+      set({ texture: animated, fileName, fileBytes: bytes, fileMime: mime })
       return
     }
 
     // Static fallback — JPEG / PNG / single-frame WebP, etc.
-    const url = URL.createObjectURL(file)
+    const blob = new Blob([bytes], { type: mime })
+    const url = URL.createObjectURL(blob)
     try {
       const loader = new THREE.TextureLoader()
       const tex = await loader.loadAsync(url)
@@ -82,26 +98,50 @@ export const useCustomTexture = create<CustomTextureStore>((set, get) => ({
       tex.minFilter = THREE.LinearMipmapLinearFilter
       tex.magFilter = THREE.LinearFilter
       tex.needsUpdate = true
-      set({ texture: tex, fileName: file.name })
+      set({ texture: tex, fileName, fileBytes: bytes, fileMime: mime })
     } finally {
       URL.revokeObjectURL(url)
     }
-  },
-}))
+  }
 
-async function loadAnimated(file: File): Promise<THREE.Texture | null> {
+  return {
+    texture: null,
+    fileName: null,
+    fileBytes: null,
+    fileMime: null,
+    setFromFile: async (file) => {
+      if (!file) {
+        clear()
+        useStore.getState().markDirty()
+        return
+      }
+      const bytes = await file.arrayBuffer()
+      const mime = file.type || guessMimeFromName(file.name) || 'application/octet-stream'
+      await loadFromBytes(bytes, mime, file.name)
+      useStore.getState().markDirty()
+    },
+    setFromBytes: async (bytes, mime, fileName) => {
+      await loadFromBytes(bytes, mime, fileName)
+    },
+    clearFromLoad: () => {
+      clear()
+    },
+  }
+})
+
+async function loadAnimatedFromBytes(
+  bytes: ArrayBuffer,
+  mime: string,
+): Promise<THREE.Texture | null> {
   // Feature-gate. ImageDecoder is in all modern browsers (Chrome 94+,
   // Edge 94+, Safari 17+, Firefox 133+) but we keep the fallback path for
   // defensive coverage.
   if (typeof ImageDecoder === 'undefined') return null
-
-  const mime = file.type || guessMimeFromName(file.name)
   if (!mime) return null
   const supported = await ImageDecoder.isTypeSupported(mime).catch(() => false)
   if (!supported) return null
 
-  const data = await file.arrayBuffer()
-  const decoder = new ImageDecoder({ type: mime, data })
+  const decoder = new ImageDecoder({ type: mime, data: bytes })
   await decoder.tracks.ready
   const track = decoder.tracks.selectedTrack
   if (!track) return null

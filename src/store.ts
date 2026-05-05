@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ParsedSong } from './midi/types'
 import { audioEngine } from './audio/engine'
+import type { FileRef } from './projects/types'
 
 // Cap on the in-memory undo stack. 50 individual edits is plenty for a
 // session of editing without tipping into multi-MB snapshot retention on
@@ -457,6 +458,38 @@ type AppState = {
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
+
+  // === Project file persistence ============================================
+  // The .nfz file currently associated with this session, or null when
+  // the user is editing a fresh / never-saved project. `handle` (when
+  // present) lets `Save` overwrite the file without re-prompting; on
+  // browsers without the File System Access API, `handle` is always null
+  // and `Save` falls back to a download.
+  currentFile: FileRef | null
+  setCurrentFile: (f: FileRef | null) => void
+
+  // True when in-memory state has changed since the last Save / Open / New.
+  // Drives the beforeunload prompt and a "*" indicator next to the filename.
+  dirty: boolean
+  markClean: () => void
+  // Manual dirty trigger — for state held outside this store that still
+  // belongs to the project (e.g. `useCustomTexture`'s loaded image).
+  markDirty: () => void
+
+  // Atomic project load. Replaces settings + song + currentFile in one
+  // step and marks clean. Bypasses the per-mutation dirty flag since the
+  // session now represents exactly what's on disk. Editor state (history,
+  // selection, etc.) is reset like any other song change.
+  loadProject: (
+    nextSettings: Settings,
+    nextSong: ParsedSong | null,
+    ref: FileRef,
+  ) => void
+
+  // Clear to a blank session — equivalent to a fresh page load. Resets
+  // settings to defaults, drops the song, clears `currentFile`, and marks
+  // clean. Editor state is reset.
+  newProject: () => void
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -465,7 +498,7 @@ export const useStore = create<AppState>((set) => ({
   // notes from the previous file and the highlighted selection no longer
   // points at anything visible. Editor restarts fresh on every load.
   setSong: (song) =>
-    set({ song, editHistory: [], editFuture: [], selection: new Set() }),
+    set({ song, editHistory: [], editFuture: [], selection: new Set(), dirty: true }),
 
   transport: 'stopped',
   setTransport: (transport) => set({ transport }),
@@ -545,6 +578,7 @@ export const useStore = create<AppState>((set) => ({
         song: computed,
         editHistory: history,
         editFuture: [],
+        dirty: true,
       }
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
@@ -557,7 +591,7 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       if (!state.song) return state
       audioEngine.updateSong(s)
-      const patch: Partial<AppState> = { song: s }
+      const patch: Partial<AppState> = { song: s, dirty: true }
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
         const note = s.notes.find((n) => n.id === id)
@@ -584,7 +618,13 @@ export const useStore = create<AppState>((set) => ({
       const validIds = new Set(prev.notes.map((n) => n.id))
       const trimmed = new Set<number>()
       for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
-      return { song: prev, editHistory: history, editFuture: future, selection: trimmed }
+      return {
+        song: prev,
+        editHistory: history,
+        editFuture: future,
+        selection: trimmed,
+        dirty: true,
+      }
     }),
   redoEdit: () =>
     set((state) => {
@@ -597,7 +637,13 @@ export const useStore = create<AppState>((set) => ({
       const validIds = new Set(next.notes.map((n) => n.id))
       const trimmed = new Set<number>()
       for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
-      return { song: next, editHistory: history, editFuture: future, selection: trimmed }
+      return {
+        song: next,
+        editHistory: history,
+        editFuture: future,
+        selection: trimmed,
+        dirty: true,
+      }
     }),
   canUndo: (): boolean => useStore.getState().editHistory.length > 0,
   canRedo: (): boolean => useStore.getState().editFuture.length > 0,
@@ -616,7 +662,7 @@ export const useStore = create<AppState>((set) => ({
 
   settings: defaultSettings,
   updateSettings: (patch) =>
-    set((state) => ({ settings: { ...state.settings, ...patch } })),
+    set((state) => ({ settings: { ...state.settings, ...patch }, dirty: true })),
   // Preserve transport-bar controlled settings (volume, playback speed) so
   // the user's listening setup isn't lost when they reset the visual /
   // audio Inspector. The Reset button lives in the Inspector and is
@@ -628,5 +674,39 @@ export const useStore = create<AppState>((set) => ({
         volume: state.settings.volume,
         playbackRate: state.settings.playbackRate,
       },
+      dirty: true,
     })),
+
+  currentFile: null,
+  setCurrentFile: (currentFile) => set({ currentFile }),
+
+  dirty: false,
+  markClean: () => set({ dirty: false }),
+  markDirty: () => set({ dirty: true }),
+
+  loadProject: (nextSettings, nextSong, ref) =>
+    set({
+      settings: nextSettings,
+      song: nextSong,
+      currentFile: ref,
+      dirty: false,
+      editHistory: [],
+      editFuture: [],
+      selection: new Set(),
+      contextMenu: null,
+      rangeSelectRect: null,
+    }),
+
+  newProject: () =>
+    set({
+      settings: defaultSettings,
+      song: null,
+      currentFile: null,
+      dirty: false,
+      editHistory: [],
+      editFuture: [],
+      selection: new Set(),
+      contextMenu: null,
+      rangeSelectRect: null,
+    }),
 }))

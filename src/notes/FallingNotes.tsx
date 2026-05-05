@@ -6,7 +6,7 @@ import { audioEngine } from '../audio/engine'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
 import { useCustomTexture } from './customTexture'
 import { deleteNotes, moveNotes, splitNote } from '../midi/edit'
-import { previewNote } from '../audio/preview'
+import { ensureSamplerLoaded, previewNote } from '../audio/preview'
 import { clickXToMidi, clickYToTime, fallDistance, noteVisualBounds } from './positions'
 import { noteDeathFx, FADE_DURATION as DEATH_FADE_DURATION } from './noteDeathFx'
 
@@ -1070,9 +1070,14 @@ export function FallingNotes() {
     // handler can't fire on the same gesture even if the instance lookup
     // below bails out (e.g. instanceId race during a buffer-rebuild).
     e.stopPropagation()
-    // Editing is disabled while the sampler is loading (avoids silent
-    // edits + concurrent init storms via previewNote).
-    if (useStore.getState().loadStatus.state === 'loading') return
+    // Edit gestures require the sampler to be ready — see EditTools'
+    // matching guard for the rationale (silent drag + queued-preview
+    // burst on ready). Swallow this click and kick off the load so a
+    // subsequent click works normally.
+    if (!audioEngine.isReady()) {
+      void ensureSamplerLoaded()
+      return
+    }
     const instId = e.instanceId
     if (instId === undefined) return
     const noteId = instanceToNoteId.current[instId]
@@ -1178,7 +1183,10 @@ export function FallingNotes() {
   const onDoubleClickNote = (e: ThreeEvent<MouseEvent>) => {
     if (transport === 'playing') return
     e.stopPropagation()
-    if (useStore.getState().loadStatus.state === 'loading') return
+    if (!audioEngine.isReady()) {
+      void ensureSamplerLoaded()
+      return
+    }
     const instId = e.instanceId
     if (instId === undefined) return
     const noteId = instanceToNoteId.current[instId]
