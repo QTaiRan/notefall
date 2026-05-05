@@ -51,8 +51,11 @@ import {
  * Selection cleanup is also reachable via Escape (useGlobalShortcuts).
  */
 
-const NEW_NOTE_DURATION = 0.25
-const NEW_NOTE_VELOCITY = 0.7
+// Fallback if for some reason store.lastNoteParams is unset; in practice
+// the store seeds itself with these same values, so this branch is just
+// a defensive default.
+const FALLBACK_DURATION = 0.25
+const FALLBACK_VELOCITY = 0.7
 
 // CSS-standard "no/cancel" cursor — the OS-native circle-with-slash
 // icon. Used while the right-click eraser drag is active so the cursor
@@ -308,6 +311,12 @@ export function EditTools() {
     const time = clickYToTime(startWorld.y, t, settings)
     const midi = clickXToMidi(startWorld.x, settings.transpose)
 
+    // New notes inherit the duration & velocity of the most recently
+    // edited single note (resized, velocity-changed, or just selected).
+    // Store keeps lastNoteParams up to date for us — see store.ts.
+    const newDuration = cur.lastNoteParams?.duration ?? FALLBACK_DURATION
+    const newVelocity = cur.lastNoteParams?.velocity ?? FALLBACK_VELOCITY
+
     // Push the pre-add snapshot first so a single undo step fully
     // reverses the click + any subsequent drag motion.
     cur.pushUndoSnapshot(cur.song)
@@ -316,12 +325,12 @@ export function EditTools() {
       cur.song,
       midi,
       Math.max(0, time),
-      NEW_NOTE_DURATION,
-      NEW_NOTE_VELOCITY,
+      newDuration,
+      newVelocity,
     )
     cur.setSongPreview(result.song)
     cur.replaceSelection([result.id])
-    void previewNote(midi + settings.transpose, NEW_NOTE_VELOCITY, 200)
+    void previewNote(midi + settings.transpose, newVelocity, 200)
 
     // Drag-to-position. The post-add song is the snapshot we apply
     // moveNotes deltas against, so the new note keeps its identity
@@ -362,7 +371,7 @@ export function EditTools() {
       if (deltaSemis !== lastDeltaSemis) {
         lastDeltaSemis = deltaSemis
         // Audible feedback when the snapped pitch crosses to a new key.
-        void previewNote(anchorDisplayedMidi + deltaSemis, NEW_NOTE_VELOCITY, 150)
+        void previewNote(anchorDisplayedMidi + deltaSemis, newVelocity, 150)
       }
 
       const next = moveNotes(snapshot, [noteId], deltaTime, deltaSemis)

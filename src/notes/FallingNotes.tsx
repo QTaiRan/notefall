@@ -305,13 +305,53 @@ const FRAGMENT_SHADER = /* glsl */ `
     float rim = smoothstep(uRimWidth, 0.0, abs(d));
     vec3 rimCol = uRimColor * rim * uRimIntensity;
 
-    // Selection outline — drawn on top of rim, always visible regardless of
-    // user-controlled rim settings, so a selected note is unambiguous even
-    // when Rim Width = 0 or the colour is identical to the fill.
-    float selRim = vSelected > 0.5 ? smoothstep(0.06, 0.0, abs(d)) : 0.0;
-    vec3 selCol = vec3(2.5) * selRim;
+    vec3 finalColor = fill + rimCol;
 
-    gl_FragColor = vec4(fill + rimCol + selCol, alpha * uOpacity * vAlpha);
+    // Selection treatment. Has to remain perceptible against every
+    // possible fill colour AND luminance — a single-colour treatment
+    // (white halo, black halo, even adaptive luminance shift) all
+    // collapse on certain colours: white halo vanishes on white fills,
+    // dark halo on black fills, luminance shift on mid-greys (~#A1A1A1)
+    // where neither "brighten" nor "darken" produces meaningful
+    // contrast. Three composited layers cover the whole spectrum:
+    //   1. Adaptive luminance shift — brighten dark fills, dim bright
+    //      fills. Carries most of the cue for high-contrast colours.
+    //   2. Soft inner halo with HDR-adaptive accent — feeds Bloom into
+    //      a glow when Bloom is on, contributes a subtle tint when off.
+    //   3. Dual-edge stroke (bright stripe + dark stripe placed a few
+    //      antialiased pixels apart) — guarantees that AT LEAST one
+    //      stripe contrasts strongly with the underlying fill no matter
+    //      what its luminance is. This is the "always works" layer
+    //      that catches grey/mid-tone fills the other layers miss.
+    //      Same principle as macOS / Windows focus rings.
+    if (vSelected > 0.5) {
+      float fillLum = dot(fill, vec3(0.299, 0.587, 0.114));
+      float brightT = smoothstep(0.5, 0.7, fillLum);   // 0 dark → 1 bright
+      float edgeDepth = min(halfSize.x, halfSize.y) * 0.18;
+      float edgeT = smoothstep(-edgeDepth, 0.0, d);    // 0 inside → 1 at edge
+
+      // 1. Uniform luminance shift.
+      finalColor += fill * (1.0 - brightT);   // up to +1× for very dark fills
+      finalColor *= mix(1.0, 0.5, brightT);   // down to ×0.5 for very bright fills
+
+      // 2. Soft inner halo with adaptive accent.
+      vec3 accent = mix(vec3(2.0), vec3(0.0), brightT);
+      finalColor = mix(finalColor, accent, edgeT * 0.5);
+
+      // 3. Dual-edge stroke. Two parallel ~1px stripes inset from the
+      // edge: a bright HDR stripe near the outside, a dark stripe just
+      // inside it. Pixel-scale offsets via fwidth keep both stripes a
+      // consistent screen width at any zoom.
+      float aaW = fwidth(d);
+      float brightStrokeMid = -aaW * 2.0;
+      float darkStrokeMid = -aaW * 5.0;
+      float brightMask = 1.0 - smoothstep(aaW * 0.5, aaW * 1.5, abs(d - brightStrokeMid));
+      float darkMask = 1.0 - smoothstep(aaW * 0.5, aaW * 1.5, abs(d - darkStrokeMid));
+      finalColor = mix(finalColor, vec3(2.5), brightMask * 0.9);
+      finalColor = mix(finalColor, vec3(0.0), darkMask * 0.9);
+    }
+
+    gl_FragColor = vec4(finalColor, alpha * uOpacity * vAlpha);
   }
 `
 

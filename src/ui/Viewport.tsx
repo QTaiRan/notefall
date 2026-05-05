@@ -11,12 +11,19 @@ import {
 import { useHover } from "react-aria";
 import { Scene } from "../scene/Scene";
 import { SeekBar } from "./SeekBar";
-import { FastForwardIcon, PauseIcon, PlayIcon } from "./icons";
+import {
+  CloseIcon,
+  FastForwardIcon,
+  PauseIcon,
+  PlayIcon,
+  TrashIcon,
+} from "./icons";
 import { useStore } from "../store";
 import { audioEngine } from "../audio/engine";
 import { previewNote } from "../audio/preview";
 import { parseMidi } from "../midi/parse";
-import { setNotesVelocity } from "../midi/edit";
+import { deleteNotes, setNotesVelocity } from "../midi/edit";
+import { midiToName } from "../midi/noteName";
 
 const ASPECT = 16 / 9;
 // Auto-hide the seek bar / play controls after this many ms of no pointer
@@ -130,31 +137,35 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
   const selection = useStore((s) => s.selection);
   const song = useStore((s) => s.song);
   const transport = useStore((s) => s.transport);
+  const transpose = useStore((s) => s.settings.transpose);
   const pushUndoSnapshot = useStore((s) => s.pushUndoSnapshot);
   const setSongPreview = useStore((s) => s.setSongPreview);
+  const applySongEdit = useStore((s) => s.applySongEdit);
+  const replaceSelection = useStore((s) => s.replaceSelection);
 
   const sessionStartedRef = useRef(false);
 
   // Periodic-preview ticker. While the user is actively dragging the
-  // velocity slider we play the anchor note every 500 ms so they can
-  // hear the loudness changing — a one-shot preview at slider release
-  // would land too late to inform the gesture.
+  // velocity slider we replay the selection every 500 ms so the user
+  // hears the loudness changing — a one-shot preview at slider release
+  // would land too late to inform the gesture. With multiple notes
+  // selected we play every distinct pitch in the selection so the chord
+  // / scale being edited is audible as a chord, not just a single note.
+  // Dedupe by midi: multiple selected instances of the same pitch
+  // would just stack identical voices for no gain.
   const previewIntervalRef = useRef<number | null>(null);
   const firePreview = () => {
     const state = useStore.getState();
     if (!state.song || state.selection.size === 0) return;
     const sel = state.song.notes.filter((n) => state.selection.has(n.id));
     if (sel.length === 0) return;
-    // Use the first selected note (sorted by time) as the audible
-    // representative. Multi-select sets all selected notes to the same
-    // velocity, so reading any selected note's velocity yields the
-    // current slider value.
-    const anchor = sel[0];
-    void previewNote(
-      anchor.midi + state.settings.transpose,
-      anchor.velocity,
-      200,
-    );
+    const seen = new Set<number>();
+    for (const n of sel) {
+      const midi = n.midi + state.settings.transpose;
+      if (seen.has(midi)) continue;
+      seen.add(midi);
+      void previewNote(midi, n.velocity, 200);
+    }
   };
   const startPreviewLoop = () => {
     if (previewIntervalRef.current !== null) return;
@@ -233,7 +244,7 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
   // generous on purpose so the eye sees the menu fully on-screen, not
   // teetering at the edge.
   const MENU_W = 240;
-  const MENU_H = 110;
+  const MENU_H = 160;
   const PAD = 8;
   const rawLeft = ctxMenu.x - wrapRect.left;
   const rawTop = ctxMenu.y - wrapRect.top;
@@ -269,17 +280,55 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
     stopPreviewLoop();
   };
 
+  const closeMenu = () => {
+    setContextMenu(null);
+    sessionStartedRef.current = false;
+    stopPreviewLoop();
+  };
+
+  // Mirrors the Delete-key shortcut: deletes the entire current selection
+  // (which always includes the right-clicked note since opening the menu
+  // selects it) and closes the menu. Goes through applySongEdit so the
+  // operation is one undo step. Skips noteDeathFx — same rationale as the
+  // Delete key (bulk delete shouldn't spawn overlapping puffs).
+  const handleDelete = () => {
+    if (!song || selection.size === 0) return;
+    const next = deleteNotes(song, selection);
+    if (next === song) {
+      closeMenu();
+      return;
+    }
+    applySongEdit(next);
+    replaceSelection([]);
+    closeMenu();
+  };
+
+  const deleteLabel =
+    selectedNotes.length === 1
+      ? "Delete note"
+      : `Delete ${selectedNotes.length} notes`;
+
   return (
     <div
       data-note-context-menu
-      className="absolute z-50 min-w-[14rem] rounded-md border border-neutral-700 bg-neutral-900/95 p-3 shadow-2xl backdrop-blur-sm"
+      className="absolute z-50 min-w-[14rem] rounded-md bg-black/55 p-3 shadow-lg ring-1 ring-white/10 backdrop-blur-md"
       style={{ left, top }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-        {selectedNotes.length === 1
-          ? "Note"
-          : `${selectedNotes.length} notes selected`}
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+          {selectedNotes.length === 1
+            ? midiToName(selectedNotes[0].midi + transpose)
+            : `${selectedNotes.length} notes selected`}
+        </div>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={closeMenu}
+          className="-mr-1 -mt-1 flex h-5 w-5 items-center justify-center rounded text-neutral-400 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-sky-400"
+        >
+          <CloseIcon className="h-3.5 w-3.5" />
+        </button>
       </div>
       <Slider
         value={avgVelocity}
@@ -310,6 +359,14 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
           )}
         </SliderTrack>
       </Slider>
+      <button
+        type="button"
+        onClick={handleDelete}
+        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded bg-red-500/10 px-2 py-1.5 text-xs font-medium text-red-400 outline-none transition-colors hover:bg-red-500/20 hover:text-red-300 focus-visible:ring-2 focus-visible:ring-red-400"
+      >
+        <TrashIcon className="h-3.5 w-3.5" />
+        {deleteLabel}
+      </button>
     </div>
   );
 }

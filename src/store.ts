@@ -445,6 +445,15 @@ type AppState = {
   contextMenu: { x: number; y: number } | null
   setContextMenu: (m: { x: number; y: number } | null) => void
 
+  // Defaults inherited by the next new note (left-click on empty edit
+  // area). Updated whenever exactly one note is the active edit subject:
+  // selecting it (replaceSelection of size 1), creating a new note, or
+  // editing it via velocity menu / drag-resize. Survives Escape and
+  // note deletion so a user can deselect / delete and the next created
+  // note still picks up the last-touched note's feel.
+  lastNoteParams: { duration: number; velocity: number }
+  setLastNoteParams: (p: { duration: number; velocity: number }) => void
+
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
@@ -480,12 +489,40 @@ export const useStore = create<AppState>((set) => ({
   setCountInBeat: (countInBeat) => set({ countInBeat }),
 
   selection: new Set<number>(),
-  replaceSelection: (ids) => set({ selection: new Set(ids) }),
+  replaceSelection: (ids) =>
+    set((state) => {
+      const next = new Set(ids)
+      // Snapshot the singly-selected note's params so the next new
+      // note can inherit them. Skipped for multi-select (ambiguous)
+      // and empty (preserve previous snapshot).
+      if (next.size === 1 && state.song) {
+        const id = next.values().next().value as number
+        const note = state.song.notes.find((n) => n.id === id)
+        if (note) {
+          return {
+            selection: next,
+            lastNoteParams: { duration: note.duration, velocity: note.velocity },
+          }
+        }
+      }
+      return { selection: next }
+    }),
   toggleSelection: (id) =>
     set((state) => {
       const next = new Set(state.selection)
       if (next.has(id)) next.delete(id)
       else next.add(id)
+      // Same single-selection snapshot rule as replaceSelection.
+      if (next.size === 1 && state.song) {
+        const sid = next.values().next().value as number
+        const note = state.song.notes.find((n) => n.id === sid)
+        if (note) {
+          return {
+            selection: next,
+            lastNoteParams: { duration: note.duration, velocity: note.velocity },
+          }
+        }
+      }
       return { selection: next }
     }),
   clearSelection: () =>
@@ -501,13 +538,32 @@ export const useStore = create<AppState>((set) => ({
       const history = state.editHistory.concat(state.song)
       if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
       audioEngine.updateSong(computed)
-      return { song: computed, editHistory: history, editFuture: [] }
+      // Re-snapshot lastNoteParams so post-edit values (resize, velocity
+      // change) carry over to the next new note even if the user later
+      // deselects.
+      const patch: Partial<AppState> = {
+        song: computed,
+        editHistory: history,
+        editFuture: [],
+      }
+      if (state.selection.size === 1) {
+        const id = state.selection.values().next().value as number
+        const note = computed.notes.find((n) => n.id === id)
+        if (note) patch.lastNoteParams = { duration: note.duration, velocity: note.velocity }
+      }
+      return patch
     }),
   setSongPreview: (s) =>
     set((state) => {
       if (!state.song) return state
       audioEngine.updateSong(s)
-      return { song: s }
+      const patch: Partial<AppState> = { song: s }
+      if (state.selection.size === 1) {
+        const id = state.selection.values().next().value as number
+        const note = s.notes.find((n) => n.id === id)
+        if (note) patch.lastNoteParams = { duration: note.duration, velocity: note.velocity }
+      }
+      return patch
     }),
   pushUndoSnapshot: (snapshot) =>
     set((state) => {
@@ -551,6 +607,12 @@ export const useStore = create<AppState>((set) => ({
 
   contextMenu: null,
   setContextMenu: (contextMenu) => set({ contextMenu }),
+
+  // Defaults match the original NEW_NOTE_DURATION / NEW_NOTE_VELOCITY in
+  // EditTools — mirror them here so the very first new note (before any
+  // selection happened) still uses the same baseline feel.
+  lastNoteParams: { duration: 0.25, velocity: 0.7 },
+  setLastNoteParams: (lastNoteParams) => set({ lastNoteParams }),
 
   settings: defaultSettings,
   updateSettings: (patch) =>

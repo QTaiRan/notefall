@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { audioEngine } from './engine'
 import { recorder } from './recorder'
-
-const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-function midiToName(midi: number): string {
-  return `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`
-}
+import { midiToName } from '../midi/noteName'
 
 /**
  * React hook around the recorder singleton. Exposes the current state, the
