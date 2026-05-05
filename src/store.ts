@@ -1,5 +1,11 @@
 import { create } from 'zustand'
 import type { ParsedSong } from './midi/types'
+import { audioEngine } from './audio/engine'
+
+// Cap on the in-memory undo stack. 50 individual edits is plenty for a
+// session of editing without tipping into multi-MB snapshot retention on
+// large MIDIs (each snapshot keeps the full notes/pedals arrays).
+const HISTORY_LIMIT = 50
 
 export type FallDirection = 'down' | 'up'
 
@@ -377,6 +383,68 @@ type AppState = {
   countInBeat: number
   setCountInBeat: (n: number) => void
 
+  // === MIDI editor ==========================================================
+  // Selection of falling-note ids the user is editing. Stored as a Set for
+  // O(1) membership tests during click handling and selection-aware shader
+  // attribute assembly. A new Set instance is allocated on each mutation
+  // (replaceSelection / addToSelection / etc.) so zustand's reference-equality
+  // change detection re-renders subscribers.
+  selection: Set<number>
+  // Replace the selection. Pass an empty array to clear.
+  replaceSelection: (ids: Iterable<number>) => void
+  // Toggle a single id. Used by Ctrl/Cmd+click for additive selection.
+  toggleSelection: (id: number) => void
+  // Convenience for clicking on empty space.
+  clearSelection: () => void
+
+  // Snapshot stack for undo. Each element is the full song *before* the
+  // edit that produced the current state — undo restores it. Capped at
+  // HISTORY_LIMIT entries to keep memory bounded for long sessions.
+  editHistory: ParsedSong[]
+  // Forward stack for redo. Cleared whenever a fresh edit is applied
+  // (standard branching-history semantics).
+  editFuture: ParsedSong[]
+  /**
+   * Apply an edit to the current song. Pushes the previous state onto
+   * `editHistory`, sets the new song, clears `editFuture`, and notifies the
+   * audio engine so its scheduling cursor tracks the new note array. No-op
+   * when nothing is loaded. Pass either a replacement song or a function
+   * `(prev) => next` for in-place mutation patterns.
+   */
+  applySongEdit: (next: ParsedSong | ((prev: ParsedSong) => ParsedSong)) => void
+  /**
+   * Set the song without touching undo history. Used during a drag where
+   * each frame produces a new song state but we only want one undo entry
+   * for the whole gesture (pushed via `pushUndoSnapshot` at drag start).
+   */
+  setSongPreview: (s: ParsedSong) => void
+  /**
+   * Push a snapshot to the undo stack without applying any change. Pair
+   * with `setSongPreview` to bracket a multi-frame edit (e.g. a drag) so
+   * one Undo restores the pre-drag state in a single step.
+   */
+  pushUndoSnapshot: (snapshot: ParsedSong) => void
+  undoEdit: () => void
+  redoEdit: () => void
+  canUndo: () => boolean
+  canRedo: () => boolean
+
+  // Active range-select rectangle (in viewport client coords). Non-null
+  // while the user is dragging on empty space in edit mode; the Viewport
+  // overlay subscribes to this to draw the marquee.
+  rangeSelectRect: { x1: number; y1: number; x2: number; y2: number } | null
+  setRangeSelectRect: (
+    r: { x1: number; y1: number; x2: number; y2: number } | null,
+  ) => void
+
+  // Position (in viewport client coords) of the per-note context menu, or
+  // null when no menu is open. Set by a right-click on a falling note;
+  // cleared by outside-click / Escape / selection-empty. The menu reads
+  // velocity (etc.) from the current `selection`, not from a captured
+  // note id, so dragging-into-selection-then-right-clicking still works.
+  contextMenu: { x: number; y: number } | null
+  setContextMenu: (m: { x: number; y: number } | null) => void
+
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
@@ -384,7 +452,11 @@ type AppState = {
 
 export const useStore = create<AppState>((set) => ({
   song: null,
-  setSong: (song) => set({ song }),
+  // Loading a new song wipes the editor state — the undo stack referenced
+  // notes from the previous file and the highlighted selection no longer
+  // points at anything visible. Editor restarts fresh on every load.
+  setSong: (song) =>
+    set({ song, editHistory: [], editFuture: [], selection: new Set() }),
 
   transport: 'stopped',
   setTransport: (transport) => set({ transport }),
@@ -406,6 +478,79 @@ export const useStore = create<AppState>((set) => ({
 
   countInBeat: 0,
   setCountInBeat: (countInBeat) => set({ countInBeat }),
+
+  selection: new Set<number>(),
+  replaceSelection: (ids) => set({ selection: new Set(ids) }),
+  toggleSelection: (id) =>
+    set((state) => {
+      const next = new Set(state.selection)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return { selection: next }
+    }),
+  clearSelection: () =>
+    set((state) => (state.selection.size === 0 ? state : { selection: new Set() })),
+
+  editHistory: [],
+  editFuture: [],
+  applySongEdit: (next) =>
+    set((state) => {
+      if (!state.song) return state
+      const computed = typeof next === 'function' ? next(state.song) : next
+      if (computed === state.song) return state
+      const history = state.editHistory.concat(state.song)
+      if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+      audioEngine.updateSong(computed)
+      return { song: computed, editHistory: history, editFuture: [] }
+    }),
+  setSongPreview: (s) =>
+    set((state) => {
+      if (!state.song) return state
+      audioEngine.updateSong(s)
+      return { song: s }
+    }),
+  pushUndoSnapshot: (snapshot) =>
+    set((state) => {
+      const history = state.editHistory.concat(snapshot)
+      if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+      return { editHistory: history, editFuture: [] }
+    }),
+  undoEdit: () =>
+    set((state) => {
+      if (!state.song || state.editHistory.length === 0) return state
+      const prev = state.editHistory[state.editHistory.length - 1]
+      const history = state.editHistory.slice(0, -1)
+      const future = state.editFuture.concat(state.song)
+      audioEngine.updateSong(prev)
+      // The selection may reference notes that no longer exist in the
+      // restored snapshot; intersect to drop the strays so highlight stays
+      // truthful.
+      const validIds = new Set(prev.notes.map((n) => n.id))
+      const trimmed = new Set<number>()
+      for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
+      return { song: prev, editHistory: history, editFuture: future, selection: trimmed }
+    }),
+  redoEdit: () =>
+    set((state) => {
+      if (!state.song || state.editFuture.length === 0) return state
+      const next = state.editFuture[state.editFuture.length - 1]
+      const future = state.editFuture.slice(0, -1)
+      const history = state.editHistory.concat(state.song)
+      if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+      audioEngine.updateSong(next)
+      const validIds = new Set(next.notes.map((n) => n.id))
+      const trimmed = new Set<number>()
+      for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
+      return { song: next, editHistory: history, editFuture: future, selection: trimmed }
+    }),
+  canUndo: (): boolean => useStore.getState().editHistory.length > 0,
+  canRedo: (): boolean => useStore.getState().editFuture.length > 0,
+
+  rangeSelectRect: null,
+  setRangeSelectRect: (rangeSelectRect) => set({ rangeSelectRect }),
+
+  contextMenu: null,
+  setContextMenu: (contextMenu) => set({ contextMenu }),
 
   settings: defaultSettings,
   updateSettings: (patch) =>

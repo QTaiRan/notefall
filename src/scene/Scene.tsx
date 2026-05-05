@@ -11,6 +11,7 @@ import { HitLine } from '../notes/HitLine'
 import { WHITE_KEY_LENGTH } from '../keyboard/layout'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong, togglePlayback } from '../audio/playback'
+import { EditTools } from './EditTools'
 
 export function Scene() {
   const s = useStore((st) => st.settings)
@@ -42,12 +43,19 @@ export function Scene() {
 
 function SceneContents() {
   const s = useStore((st) => st.settings)
+  const transport = useStore((st) => st.transport)
+  const song = useStore((st) => st.song)
+  // Edit mode = song loaded AND not currently playing. Mounting EditTools
+  // (instead of PlayToggleArea) flips the meaning of every empty-area
+  // click — "toggle play" becomes "select / range / add note". Live
+  // performance / fast-forward UX stays untouched while playing.
+  const editMode = transport !== 'playing' && song !== null
   return (
     <>
       <ambientLight intensity={0.35} />
       <directionalLight position={[2, 6, 4]} intensity={0.8} />
       <CameraSync pos={s.cameraPos} lookAt={s.cameraLookAt} fov={s.cameraFov} />
-      <PlayToggleArea />
+      {editMode ? <EditTools /> : <PlayToggleArea />}
       <Keyboard />
       {s.notesEnabled && <FallingNotes />}
       {s.flashEnabled && <LandingFlashes />}

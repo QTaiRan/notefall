@@ -7,9 +7,24 @@ import { audioEngine } from './engine'
  * sampler init flow through here so the two entry points stay in sync.
  */
 
+/**
+ * Drop the editor's selection + per-note context menu. Called on every
+ * play/pause transition so a paused-then-resumed session doesn't leave a
+ * note "selected" or its velocity menu floating in mid-air after some of
+ * those notes have already scrolled past the hit line. Editing and
+ * playback are conceptually separate modes — pressing a transport
+ * control resets the editing-mode state.
+ */
+function resetEditorState(): void {
+  const s = useStore.getState()
+  if (s.contextMenu) s.setContextMenu(null)
+  if (s.selection.size > 0) s.clearSelection()
+}
+
 export async function playSong(): Promise<void> {
   const { song, loadStatus, setLoadStatus, setTransport } = useStore.getState()
   if (!song) return
+  resetEditorState()
   if (loadStatus.state !== 'ready') {
     setLoadStatus({ state: 'loading', loaded: 0, total: 1 })
     await audioEngine.init((p) =>
@@ -23,6 +38,7 @@ export async function playSong(): Promise<void> {
 
 export function pauseSong(): void {
   audioEngine.pause()
+  resetEditorState()
   useStore.getState().setTransport('paused')
 }
 

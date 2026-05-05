@@ -139,22 +139,36 @@ export class AudioEngine {
   private tickWorker: Worker | null = null
   private tickWorkerUrl: string | null = null
 
+  // Cached in-flight init. Concurrent callers (e.g. one click triggers
+  // a preview while another click triggers another preview before the
+  // sampler finishes loading) all share this single promise instead of
+  // each kicking off their own ~60 MB sample download.
+  private initPromise: Promise<void> | null = null
+
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
     if (this.piano) return
-    this.piano = await createPiano(onProgress)
-    this.piano.setVolume(this.volume)
-    this.piano.setReverbSize(this.reverbSize)
-    this.piano.setReverbDecayTime(this.reverbDecayTime)
-    this.piano.setReverbDecay(this.reverbDecay)
-    this.piano.setReverbPreDelay(this.reverbPreDelay)
-    this.piano.setReverbDamping(this.reverbDamping)
-    this.piano.setReverbHiCut(this.reverbHiCut)
-    this.piano.setReverbLowCut(this.reverbLowCut)
-    this.piano.setReverbDry(this.reverbDry)
-    this.piano.setReverbWet(this.effectiveWet())
-    this.piano.setReleaseTime(this.releaseTime)
-    this.piano.setDetune(this.detuneCents)
-    this.eqBandsDb.forEach((db, i) => this.piano!.setEqBand(i, db))
+    if (this.initPromise) return this.initPromise
+    this.initPromise = (async () => {
+      try {
+        this.piano = await createPiano(onProgress)
+        this.piano.setVolume(this.volume)
+        this.piano.setReverbSize(this.reverbSize)
+        this.piano.setReverbDecayTime(this.reverbDecayTime)
+        this.piano.setReverbDecay(this.reverbDecay)
+        this.piano.setReverbPreDelay(this.reverbPreDelay)
+        this.piano.setReverbDamping(this.reverbDamping)
+        this.piano.setReverbHiCut(this.reverbHiCut)
+        this.piano.setReverbLowCut(this.reverbLowCut)
+        this.piano.setReverbDry(this.reverbDry)
+        this.piano.setReverbWet(this.effectiveWet())
+        this.piano.setReleaseTime(this.releaseTime)
+        this.piano.setDetune(this.detuneCents)
+        this.eqBandsDb.forEach((db, i) => this.piano!.setEqBand(i, db))
+      } finally {
+        this.initPromise = null
+      }
+    })()
+    return this.initPromise
   }
 
   isReady(): boolean {
@@ -302,6 +316,43 @@ export class AudioEngine {
   }
 
   /**
+   * Replace the current song with an edited version while preserving the
+   * playhead. Used by the in-app MIDI editor: the user mutates the loaded
+   * song in place (delete / move / add notes) and we need the engine's
+   * scheduling cursor to track the new note array.
+   *
+   * Active-note handling is selective on purpose: editing an unrelated
+   * note shouldn't kill the visualizer state of an in-flight note. We
+   * keep active entries whose corresponding note in the new song is
+   * structurally unchanged (same id, same playedMidi, same endTime),
+   * and only emit off + drop entries whose note was deleted or whose
+   * timing/pitch changed. The engine's tick then naturally fires
+   * note-off when each surviving in-flight note's endTime passes —
+   * exactly as it would have if the user hadn't edited at all.
+   */
+  updateSong(song: ParsedSong): void {
+    const t = this.currentSongTime()
+    const newById = new Map<number, ParsedSong['notes'][number]>()
+    for (const n of song.notes) newById.set(n.id, n)
+    for (const a of Array.from(this.active.values())) {
+      const next = newById.get(a.id)
+      const unchanged =
+        next !== undefined &&
+        next.midi + this.transpose === a.midi &&
+        next.time + next.duration === a.endTime
+      if (!unchanged) {
+        this.emit({ type: 'off', midi: a.midi, songTime: t })
+        this.active.delete(a.id)
+      }
+    }
+    // Pedal-held entries don't carry a note id, so we can't filter them
+    // by what changed in the edit. Leave them — they'll release when
+    // the pedal flips or when the song's pedal track is muted.
+    this.song = song
+    this.recomputeIndices(t)
+  }
+
+  /**
    * Clear the loaded song so the visual layer (falling notes) draws nothing
    * and the engine has no scheduled events. Used when starting a fresh
    * recording — the previously-loaded MIDI shouldn't sit on screen as an
@@ -333,6 +384,12 @@ export class AudioEngine {
     const t = this.currentSongTime()
     this.offsetAtStart = t
     this.playing = false
+    // Audio off, but visualizer state (key glow, landing flash, hit
+    // particles) is intentionally preserved — pausing should freeze
+    // the moment, not wipe the on-screen state. The "stuck forever"
+    // bug after pause + edit + resume is handled inside updateSong
+    // (which emits off for the in-flight notes when the song
+    // structure changes underneath them).
     this.releaseAllSounding()
     this.stopBackgroundTicker()
   }
@@ -480,6 +537,32 @@ export class AudioEngine {
   /** Live notes currently visible / recently played (for visualization). */
   getLiveNotes(): readonly LiveNote[] {
     return this.liveNotes
+  }
+
+  // Monotonic counter for the unique smplr stopId of preview triggers.
+  // A preview's stopId must not collide with `s${songId}` or `live${liveId}`,
+  // otherwise stopping a preview could cancel a real sounding note.
+  private previewIdCounter = 0
+
+  /**
+   * Brief audible cue for the editor — used when the user clicks a falling
+   * note (or drags it to a new pitch) to confirm the action audibly. Does
+   * NOT emit key listener events and is NOT added to liveNotes, so:
+   *   • the keyboard's press-glow stays dark
+   *   • LandingFlashes / HitParticles stay quiet
+   *   • a "live" rising falling-note bar is not drawn
+   * Returns silently when the sampler hasn't been initialised yet — the
+   * caller is responsible for kicking off the load (see audio/preview.ts).
+   */
+  triggerPreview(midi: number, velocity = 0.7, durationMs = 200): void {
+    if (!this.piano) return
+    const shaped = this.shapeVelocity(velocity)
+    const id = this.previewIdCounter++
+    const stopFn = this.piano.start(midi, shaped, undefined, `prev-${id}`)
+    // setTimeout is fine here — the stop call doesn't need sample-accurate
+    // timing for an audible-cue note, and we already pad smplr's stop with
+    // STOP_BUFFER internally for the AudioContext-side schedule.
+    setTimeout(() => stopFn(), Math.max(40, durationMs))
   }
 
   private cleanupLiveNotes(): void {

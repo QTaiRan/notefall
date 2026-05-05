@@ -1,7 +1,7 @@
 import { useMemo, useRef, useEffect, useCallback } from "react";
 import * as THREE from "three";
 import * as Tone from "tone";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import {
   KEYBOARD_LAYOUT,
@@ -80,6 +80,41 @@ const PC_KEY_NOTES: Record<string, number> = {
 export function Keyboard() {
   const settings = useStore((s) => s.settings);
   const setLoadStatus = useStore((s) => s.setLoadStatus);
+  const { gl } = useThree();
+
+  // Hover affordance: hovering any key shows the standard "this is
+  // clickable" pointer cursor. The keyboard is N adjacent meshes
+  // (white + black) so a horizontal cursor sweep generates a string
+  // of OUT(prev) → OVER(next) event pairs. Naively setting/clearing
+  // the cursor in each handler causes a 1-frame visual flicker every
+  // time the cursor crosses a black/white boundary because Out can
+  // fire after Over (R3F event ordering depends on raycast results).
+  // We defend with a hover counter + deferred reset:
+  //   - Over: bump counter, cancel pending reset, force "pointer"
+  //   - Out:  decrement counter; if it hits zero, schedule a reset on
+  //           the next macrotask so an immediately-following Over from
+  //           the next key can re-bump the counter without ever
+  //           dropping the cursor visually.
+  const hoverCountRef = useRef(0);
+  const resetTimerRef = useRef<number | null>(null);
+  const onKeyPointerOver = useCallback(() => {
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+    }
+    hoverCountRef.current++;
+    gl.domElement.style.cursor = "pointer";
+  }, [gl]);
+  const onKeyPointerOut = useCallback(() => {
+    hoverCountRef.current = Math.max(0, hoverCountRef.current - 1);
+    if (hoverCountRef.current === 0) {
+      if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = window.setTimeout(() => {
+        resetTimerRef.current = null;
+        if (hoverCountRef.current === 0) gl.domElement.style.cursor = "";
+      }, 0);
+    }
+  }, [gl]);
 
   const glow = useMemo(() => new Float32Array(KEY_COUNT), []);
   const held = useMemo(() => new Uint8Array(KEY_COUNT), []);
@@ -378,6 +413,8 @@ export function Keyboard() {
           position={[k.x, k.yLocal, k.zCenter]}
           onPointerDown={(e) => onPointerDown(e, k.midi)}
           onPointerEnter={(e) => onPointerEnter(e, k.midi)}
+          onPointerOver={onKeyPointerOver}
+          onPointerOut={onKeyPointerOut}
         >
           <planeGeometry args={[k.width * 0.96, k.length]} />
           <meshStandardMaterial

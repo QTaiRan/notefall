@@ -1,10 +1,14 @@
 import { useMemo, useRef, useEffect } from 'react'
 import * as THREE from 'three'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
 import { useCustomTexture } from './customTexture'
+import { deleteNotes, moveNotes, splitNote } from '../midi/edit'
+import { previewNote } from '../audio/preview'
+import { clickXToMidi, clickYToTime, fallDistance, noteVisualBounds } from './positions'
+import { noteDeathFx, FADE_DURATION as DEATH_FADE_DURATION } from './noteDeathFx'
 
 const MAX_INSTANCES = 4096
 // Buffer in world units between the visible top edge of the camera frustum
@@ -15,14 +19,23 @@ const SPAWN_BUFFER = 1.0
 const VERTEX_SHADER = /* glsl */ `
   attribute vec2 instanceSize;
   attribute vec2 instanceSeed;
+  attribute float instanceSelected;
+  // Per-instance opacity multiplier. 1.0 for normal notes; ramped down
+  // 1 → 0 over FADE_DURATION for the dying-note ghosts the renderer
+  // appends after the live-note pass.
+  attribute float instanceAlpha;
   varying vec2 vUv;
   varying vec2 vSize;
   varying vec2 vSeed;
+  varying float vSelected;
+  varying float vAlpha;
   varying float vWorldY;
   void main() {
     vUv = uv;
     vSize = instanceSize;
     vSeed = instanceSeed;
+    vSelected = instanceSelected;
+    vAlpha = instanceAlpha;
     vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
     vWorldY = worldPos.y;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
@@ -43,6 +56,8 @@ const FRAGMENT_SHADER = /* glsl */ `
   varying vec2 vUv;
   varying vec2 vSize;
   varying vec2 vSeed;
+  varying float vSelected;
+  varying float vAlpha;
   varying float vWorldY;
   uniform vec3 uColor;
   uniform float uEmissive;
@@ -290,7 +305,13 @@ const FRAGMENT_SHADER = /* glsl */ `
     float rim = smoothstep(uRimWidth, 0.0, abs(d));
     vec3 rimCol = uRimColor * rim * uRimIntensity;
 
-    gl_FragColor = vec4(fill + rimCol, alpha * uOpacity);
+    // Selection outline — drawn on top of rim, always visible regardless of
+    // user-controlled rim settings, so a selected note is unambiguous even
+    // when Rim Width = 0 or the colour is identical to the fill.
+    float selRim = vSelected > 0.5 ? smoothstep(0.06, 0.0, abs(d)) : 0.0;
+    vec3 selCol = vec3(2.5) * selRim;
+
+    gl_FragColor = vec4(fill + rimCol + selCol, alpha * uOpacity * vAlpha);
   }
 `
 
@@ -316,9 +337,11 @@ export function FallingNotes() {
   const settings = useStore((s) => s.settings)
   const song = useStore((s) => s.song)
   const customTexture = useCustomTexture((s) => s.texture)
+  const transport = useStore((s) => s.transport)
 
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
+  const { camera, gl } = useThree()
 
   // per-instance world size attribute (width, length)
   const sizes = useMemo(() => new Float32Array(MAX_INSTANCES * 2), [])
@@ -336,6 +359,31 @@ export function FallingNotes() {
     a.setUsage(THREE.DynamicDrawUsage)
     return a
   }, [seeds])
+  // per-instance selection flag (0 / 1). Drives the bright white outline in
+  // the fragment shader. Filled in the same useFrame pass that builds size
+  // and seed, since the per-frame instance ↔ note mapping is built there.
+  const selectedAttrData = useMemo(() => new Float32Array(MAX_INSTANCES), [])
+  const selectedAttr = useMemo(() => {
+    const a = new THREE.InstancedBufferAttribute(selectedAttrData, 1)
+    a.setUsage(THREE.DynamicDrawUsage)
+    return a
+  }, [selectedAttrData])
+  // per-instance opacity multiplier. 1.0 for normal notes; ramps 1 → 0
+  // over DEATH_FADE_DURATION for dying-note ghosts that the renderer
+  // appends after the live-note pass.
+  const alphaAttrData = useMemo(() => {
+    const a = new Float32Array(MAX_INSTANCES)
+    a.fill(1)
+    return a
+  }, [])
+  const alphaAttr = useMemo(() => {
+    const a = new THREE.InstancedBufferAttribute(alphaAttrData, 1)
+    a.setUsage(THREE.DynamicDrawUsage)
+    return a
+  }, [alphaAttrData])
+  // Maps the per-frame instance slot back to the song's note id. Click
+  // handling reads from this; useFrame writes it.
+  const instanceToNoteId = useRef<number[]>([])
 
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
@@ -412,11 +460,25 @@ export function FallingNotes() {
     if (!mesh) return
     mesh.geometry.setAttribute('instanceSize', sizeAttr)
     mesh.geometry.setAttribute('instanceSeed', seedAttr)
+    mesh.geometry.setAttribute('instanceSelected', selectedAttr)
+    mesh.geometry.setAttribute('instanceAlpha', alphaAttr)
+    // Pin a large bounding sphere so raycasting never short-circuits.
+    // Three.js's InstancedMesh.raycast() does an early-reject against the
+    // mesh's bounding sphere, but auto-computes it ONCE (lazily, on first
+    // raycast) from whatever instances happened to be visible then. Notes
+    // that arrive later — at the screen edges, far above / below — would
+    // then sit outside that stale sphere and silently become unclickable
+    // (selecting "some notes, not others"). A fixed sphere larger than any
+    // realistic camera frame keeps every instance in scope; the per-
+    // instance triangle test is what actually decides hits.
+    mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000)
     return () => {
       mesh.geometry.deleteAttribute('instanceSize')
       mesh.geometry.deleteAttribute('instanceSeed')
+      mesh.geometry.deleteAttribute('instanceSelected')
+      mesh.geometry.deleteAttribute('instanceAlpha')
     }
-  }, [sizeAttr, seedAttr])
+  }, [sizeAttr, seedAttr, selectedAttr, alphaAttr])
 
   useEffect(() => () => material.dispose(), [material])
 
@@ -464,6 +526,11 @@ export function FallingNotes() {
     // with the audio engine's transposed playback so the user sees the
     // notes land on the keys that will actually sound.
     const transpose = settings.transpose
+
+    // Selection set is read once per frame so the per-instance flag fill
+    // doesn't pay a Map lookup cost per song note (could be thousands).
+    const selection = useStore.getState().selection
+    const noteIds = instanceToNoteId.current
 
     let count = 0
     const notes = song?.notes ?? []
@@ -529,6 +596,10 @@ export function FallingNotes() {
       seeds[count * 2] = (sid * 0.6180339887498949) % 1
       seeds[count * 2 + 1] = (sid * 0.7548776662466927) % 1
 
+      selectedAttrData[count] = selection.has(n.id) ? 1 : 0
+      alphaAttrData[count] = 1
+      noteIds[count] = n.id
+
       count++
       if (count >= MAX_INSTANCES) break
     }
@@ -574,17 +645,511 @@ export function FallingNotes() {
         const lsid = ln.id + 1_000_003
         seeds[count * 2] = (lsid * 0.6180339887498949) % 1
         seeds[count * 2 + 1] = (lsid * 0.7548776662466927) % 1
+        // Live notes are user-played performance, never editable, so they're
+        // never selected and the noteId map gets a sentinel.
+        selectedAttrData[count] = 0
+        alphaAttrData[count] = 1
+        noteIds[count] = -1
 
         count++
         if (count >= MAX_INSTANCES) break
       }
     }
 
+    // Dying-note ghosts (right-click delete + eraser drag). Renders the
+    // same shader as a regular note with a per-instance alpha multiplier
+    // ramped 1 → 0 over DEATH_FADE_DURATION on a plain linear curve.
+    const nowSec = performance.now() / 1000
+    noteDeathFx.prune(nowSec)
+    const dying = noteDeathFx.list()
+    for (let i = 0; i < dying.length; i++) {
+      if (count >= MAX_INSTANCES) break
+      const d = dying[i]
+      const ageNorm = (nowSec - d.startTime) / DEATH_FADE_DURATION
+      if (ageNorm >= 1) continue
+      const fadeAlpha = 1 - Math.max(0, Math.min(1, ageNorm))
+
+      dummy.position.set(d.x, d.centerY, noteZ)
+      dummy.rotation.set(0, 0, 0)
+      dummy.scale.set(d.width, d.length, 1)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(count, dummy.matrix)
+      sizes[count * 2] = d.width
+      sizes[count * 2 + 1] = d.length
+      // Reuse a high low-discrepancy seed so the ghost's texture sample
+      // is stable for its lifetime instead of crawling each frame.
+      const seedBase = (i + 7919) // arbitrary prime offset
+      seeds[count * 2] = (seedBase * 0.6180339887498949) % 1
+      seeds[count * 2 + 1] = (seedBase * 0.7548776662466927) % 1
+      selectedAttrData[count] = 0
+      alphaAttrData[count] = fadeAlpha
+      noteIds[count] = -1 // not editable / not selectable
+      count++
+    }
+
     mesh.count = count
     mesh.instanceMatrix.needsUpdate = true
     sizeAttr.needsUpdate = true
     seedAttr.needsUpdate = true
+    selectedAttr.needsUpdate = true
+    alphaAttr.needsUpdate = true
   })
+
+  // Project a screen-space pointer to the falling-note z plane (z = 0.05).
+  // Used during drag tracking via window-level pointermove (which is in
+  // client coords, not three event coords). Returns null if the canvas has
+  // disappeared mid-drag (e.g. the user navigated away).
+  const noteZ = 0.05
+  const screenToWorld = (clientX: number, clientY: number): THREE.Vector3 | null => {
+    const canvas = gl.domElement
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return null
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1),
+    )
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(ndc, camera)
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -noteZ)
+    const out = new THREE.Vector3()
+    if (!raycaster.ray.intersectPlane(plane, out)) return null
+    return out
+  }
+
+  // Brief audible cue when the user selects a note. Goes through the
+  // editor-only `previewNote` helper so it does NOT light up the keyboard
+  // press-glow / landing flash / hit particles — those are reserved for
+  // real performance input.
+  const previewSelectedNote = (noteId: number) => {
+    const state = useStore.getState()
+    if (!state.song) return
+    const n = state.song.notes.find((x) => x.id === noteId)
+    if (!n) return
+    void previewNote(n.midi + state.settings.transpose, n.velocity, 200)
+  }
+
+  // Cached "we are hovering this note's top/bottom edge". Updated every
+  // pointermove over the InstancedMesh and consumed at pointerdown to
+  // decide whether the click should resize the note's duration instead
+  // of selecting / starting a move-drag. Also drives the `ns-resize`
+  // canvas cursor so the user gets a hint before clicking.
+  const hoveredEdgeRef = useRef<{
+    noteId: number
+    edge: 'head' | 'tail'
+  } | null>(null)
+  // World-space proximity threshold for "is the cursor near this edge".
+  // Scaled so 1080p height ≈ 12 px at default camera; small enough that
+  // it doesn't accidentally trigger on the body of short notes, large
+  // enough to grab without pixel-perfect aim.
+  const EDGE_PROXIMITY = 0.08
+
+  // Drag state. Lives on a ref so the closure handlers can mutate without
+  // causing React re-renders, which would interrupt the pointer capture.
+  const dragRef = useRef<{
+    snapshot: import('../midi/types').ParsedSong
+    ids: Set<number>
+    anchorMidi: number
+    anchorOriginalDisplayedX: number
+    startWorld: THREE.Vector3
+    startClient: { x: number; y: number }
+    moved: boolean
+    pushedHistory: boolean
+    lastDeltaSemis: number
+  } | null>(null)
+
+  const beginDrag = (
+    startWorld: THREE.Vector3,
+    startClient: { x: number; y: number },
+    anchorNoteId: number,
+  ) => {
+    const state = useStore.getState()
+    if (!state.song) return
+    const anchor = state.song.notes.find((n) => n.id === anchorNoteId)
+    if (!anchor) return
+    // Drag every currently-selected note. The anchor is just the click
+    // target — its delta drives everyone else's delta uniformly so the
+    // selection's relative shape is preserved.
+    const ids = new Set<number>(state.selection)
+    if (!ids.has(anchorNoteId)) ids.add(anchorNoteId)
+    const anchorIdx = anchor.midi + state.settings.transpose - MIDI_MIN
+    if (anchorIdx < 0 || anchorIdx >= KEY_COUNT) return
+    dragRef.current = {
+      snapshot: state.song,
+      ids,
+      anchorMidi: anchor.midi + state.settings.transpose,
+      anchorOriginalDisplayedX: KEYBOARD_LAYOUT.keys[anchorIdx].x,
+      startWorld,
+      startClient,
+      moved: false,
+      pushedHistory: false,
+      lastDeltaSemis: 0,
+    }
+
+    const onMove = (ev: PointerEvent) => {
+      const drag = dragRef.current
+      if (!drag) return
+      // Threshold so a tiny accidental jitter on click doesn't push history
+      // and doesn't reposition the note. ~5 px before drag starts.
+      if (!drag.moved) {
+        const cdx = ev.clientX - drag.startClient.x
+        const cdy = ev.clientY - drag.startClient.y
+        if (cdx * cdx + cdy * cdy < 25) return
+        drag.moved = true
+        // Stay on the four-way 'move' cursor through the drag — it
+        // already represents both the hover affordance and the active
+        // gesture (no need for a separate "grabbing" variant).
+        gl.domElement.style.cursor = 'move'
+      }
+      const world = screenToWorld(ev.clientX, ev.clientY)
+      if (!world) return
+      const dx = world.x - drag.startWorld.x
+      const dy = world.y - drag.startWorld.y
+
+      const settings = useStore.getState().settings
+      const fd = fallDistance(settings)
+      // Y → time. In 'down', notes higher up are later → +ΔY = +ΔTime.
+      // In 'up', notes higher up are older → +ΔY = −ΔTime.
+      const dirSign = settings.fallDirection === 'down' ? 1 : -1
+      const deltaTime = dirSign * (dy / fd) * settings.fallDurationSec
+
+      // X → semitones. Compute via the anchor's snapped position so the
+      // black/white key X spacing is honoured naturally — clickXToMidi
+      // already finds the nearest key by absolute X distance.
+      const newAnchorDisplayedMidi = clickXToMidi(drag.anchorOriginalDisplayedX + dx, 0)
+      const deltaSemis = newAnchorDisplayedMidi - drag.anchorMidi
+
+      if (!drag.pushedHistory) {
+        useStore.getState().pushUndoSnapshot(drag.snapshot)
+        drag.pushedHistory = true
+      }
+
+      // Audible confirmation when the snapped pitch crosses to a new key.
+      if (deltaSemis !== drag.lastDeltaSemis) {
+        drag.lastDeltaSemis = deltaSemis
+        // Preview the anchor at its new pitch — uses `previewNote` so the
+        // keyboard glow / flash stay quiet while dragging through pitches.
+        const anchorVel =
+          drag.snapshot.notes.find((n) => n.id === anchorNoteId)?.velocity ?? 0.7
+        void previewNote(drag.anchorMidi + deltaSemis, anchorVel, 150)
+      }
+
+      const next = moveNotes(drag.snapshot, drag.ids, deltaTime, deltaSemis)
+      useStore.getState().setSongPreview(next)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      dragRef.current = null
+      // Drop the grabbing cursor — the next pointermove will decide
+      // whether the cursor sits over a note again and re-establish
+      // the right hover cursor.
+      gl.domElement.style.cursor = ''
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  // Edge-resize gesture. Drags one end of a note's time interval while
+  // keeping the other end fixed. Direction-aware: "head" edge moves
+  // note.time (and inversely adjusts duration so the tail stays put);
+  // "tail" edge changes note.duration only.
+  //
+  // Collision behavior — same "solid blocks" model as moveNotes: extending
+  // into a same-pitch neighbour is BLOCKED, not allowed-with-clipping.
+  // The neighbour's edge becomes a hard stop so resize feels symmetric
+  // with move (you can't carve out room from another note by accident).
+  const beginResizeDrag = (
+    noteId: number,
+    edge: 'head' | 'tail',
+    startWorld: THREE.Vector3,
+    startClient: { x: number; y: number },
+  ) => {
+    const cur = useStore.getState()
+    if (!cur.song) return
+    const note = cur.song.notes.find((n) => n.id === noteId)
+    if (!note) return
+    const initialTime = note.time
+    const initialDuration = note.duration
+    const initialEnd = initialTime + initialDuration
+    const snapshot = cur.song
+
+    // Pre-compute the nearest same-pitch obstacles. They don't change
+    // during the drag because nothing else moves and overlap is
+    // forbidden anyway, so caching here is safe and avoids per-frame
+    // re-scanning of the whole song.
+    let prevObstacleEnd = 0
+    let nextObstacleStart = Number.POSITIVE_INFINITY
+    for (const o of snapshot.notes) {
+      if (o.id === noteId || o.midi !== note.midi) continue
+      const oEnd = o.time + o.duration
+      if (oEnd <= initialTime && oEnd > prevObstacleEnd) prevObstacleEnd = oEnd
+      if (o.time >= initialEnd && o.time < nextObstacleStart) nextObstacleStart = o.time
+    }
+    const MIN_DUR = 0.02
+
+    let pushedHistory = false
+    let started = false
+
+    const onMove = (ev: PointerEvent) => {
+      if (!started) {
+        const cdx = ev.clientX - startClient.x
+        const cdy = ev.clientY - startClient.y
+        if (cdx * cdx + cdy * cdy < 25) return
+        started = true
+      }
+      const w = screenToWorld(ev.clientX, ev.clientY)
+      if (!w) return
+      const dy = w.y - startWorld.y
+      const settings = useStore.getState().settings
+      const fd = fallDistance(settings)
+      // For 'down', +Y on screen is later in time; for 'up', +Y is older.
+      const dirSign = settings.fallDirection === 'down' ? 1 : -1
+      const deltaTimeOnAxis = dirSign * (dy / fd) * settings.fallDurationSec
+
+      let newTime = initialTime
+      let newDuration = initialDuration
+      if (edge === 'head') {
+        // Head moves; tail stays at initialEnd.
+        // Lower bound: prevObstacleEnd (and >= 0).
+        // Upper bound: initialEnd - MIN_DUR (so duration stays positive).
+        const requested = initialTime + deltaTimeOnAxis
+        const lower = Math.max(0, prevObstacleEnd)
+        const upper = initialEnd - MIN_DUR
+        newTime = Math.max(lower, Math.min(upper, requested))
+        newDuration = initialEnd - newTime
+      } else {
+        // Tail moves; head stays at initialTime.
+        // Upper bound: nextObstacleStart - initialTime (so the new end
+        // doesn't cross into the next neighbour).
+        const requested = initialDuration + deltaTimeOnAxis
+        const maxDur = nextObstacleStart - initialTime
+        newDuration = Math.max(MIN_DUR, Math.min(maxDur, requested))
+      }
+
+      if (newTime === initialTime && newDuration === initialDuration) return
+
+      if (!pushedHistory) {
+        useStore.getState().pushUndoSnapshot(snapshot)
+        pushedHistory = true
+      }
+
+      const updated = snapshot.notes.map((n) =>
+        n.id === noteId ? { ...n, time: newTime, duration: newDuration } : n,
+      )
+      // No resolveOverlaps — the clamp above keeps the resized note
+      // inside its allowed window, so neighbour notes are never touched.
+      useStore.getState().setSongPreview({ ...snapshot, notes: updated })
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      // Clear the resize cursor — the next pointermove over a note will
+      // decide whether to put it back.
+      gl.domElement.style.cursor = ''
+      hoveredEdgeRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  // Hover detection. Three cursor states based on where on the note the
+  // pointer is sitting:
+  //   - within EDGE_PROXIMITY of top/bottom → 'ns-resize' (drag the
+  //     time-extent of the note)
+  //   - anywhere else inside the note rectangle → 'move' (the body
+  //     drag is 2D — vertical for time, horizontal for pitch — so the
+  //     four-way 'move' cursor is more honest than 'grab')
+  //   - off the note → cleared by onPointerOutNote
+  const onPointerMoveNote = (e: ThreeEvent<PointerEvent>) => {
+    if (transport === 'playing') {
+      hoveredEdgeRef.current = null
+      gl.domElement.style.cursor = ''
+      return
+    }
+    const instId = e.instanceId
+    if (instId === undefined) return
+    const noteId = instanceToNoteId.current[instId]
+    if (noteId === undefined || noteId < 0) return
+    // Own this pointermove so EditTools' empty-area cursor handler
+    // doesn't run after us and overwrite our grab/ns-resize cursor
+    // with crosshair.
+    e.stopPropagation()
+    const state = useStore.getState()
+    if (!state.song) return
+    const note = state.song.notes.find((n) => n.id === noteId)
+    if (!note) return
+    const t = audioEngine.currentSongTime()
+    const b = noteVisualBounds(note, t, state.settings)
+    if (!b) {
+      hoveredEdgeRef.current = null
+      gl.domElement.style.cursor = ''
+      return
+    }
+
+    // Map screen-edge → semantic head/tail edge based on fall direction.
+    // 'down': bottom = head, top = tail. 'up': top = head, bottom = tail.
+    const isDownFall = state.settings.fallDirection === 'down'
+    const distTop = Math.abs(e.point.y - b.yMax)
+    const distBottom = Math.abs(e.point.y - b.yMin)
+    const nearTop = distTop < EDGE_PROXIMITY && distTop <= distBottom
+    const nearBottom = distBottom < EDGE_PROXIMITY && distBottom < distTop
+
+    if (nearTop) {
+      hoveredEdgeRef.current = { noteId, edge: isDownFall ? 'tail' : 'head' }
+      gl.domElement.style.cursor = 'ns-resize'
+    } else if (nearBottom) {
+      hoveredEdgeRef.current = { noteId, edge: isDownFall ? 'head' : 'tail' }
+      gl.domElement.style.cursor = 'ns-resize'
+    } else {
+      hoveredEdgeRef.current = null
+      gl.domElement.style.cursor = 'move'
+    }
+  }
+
+  const onPointerOutNote = () => {
+    // Cursor leaves the note's hit area — clear any resize/grab state.
+    // (Without this the cursor can stick on ns-resize / grab when the
+    // user moves off a note quickly.)
+    hoveredEdgeRef.current = null
+    gl.domElement.style.cursor = ''
+  }
+
+  const onPointerDownNote = (e: ThreeEvent<PointerEvent>) => {
+    // While playing, click-on-note shouldn't preempt the play/pause toggle.
+    // We let the event continue past us so PlayToggleArea handles it.
+    if (transport === 'playing') return
+    // In edit mode we own every click on the note plane geometry. Stop
+    // propagation up-front so EditTools' empty-area clear-selection
+    // handler can't fire on the same gesture even if the instance lookup
+    // below bails out (e.g. instanceId race during a buffer-rebuild).
+    e.stopPropagation()
+    // Editing is disabled while the sampler is loading (avoids silent
+    // edits + concurrent init storms via previewNote).
+    if (useStore.getState().loadStatus.state === 'loading') return
+    const instId = e.instanceId
+    if (instId === undefined) return
+    const noteId = instanceToNoteId.current[instId]
+    // Live notes (id === -1) and stale slots can't be edited.
+    if (noteId === undefined || noteId < 0) return
+    const state = useStore.getState()
+    if (!state.song) return
+
+    const native = e.nativeEvent
+
+    // Right-click → delete just this single note, even when it's part
+    // of a multi-selection. Bulk deletion of the whole selection is
+    // intentionally reserved for the Delete / Backspace key, so a stray
+    // right-click can't wipe out a multi-note selection in one action.
+    // Browser default contextmenu is suppressed by the canvas-level
+    // handler in Viewport.
+    if (native.button === 2) {
+      const targetNote = state.song.notes.find((n) => n.id === noteId)
+      const next = deleteNotes(state.song, [noteId])
+      if (next !== state.song) {
+        // Capture the note's visible rectangle BEFORE applying the edit
+        // so the death FX can puff out from the spot the note actually
+        // occupied (querying after the delete would find nothing).
+        if (targetNote) {
+          const t = audioEngine.currentSongTime()
+          const b = noteVisualBounds(targetNote, t, state.settings)
+          if (b) {
+            noteDeathFx.emit({
+              midi: targetNote.midi + state.settings.transpose,
+              velocity: targetNote.velocity,
+              x: (b.xMin + b.xMax) / 2,
+              centerY: (b.yMin + b.yMax) / 2,
+              width: b.xMax - b.xMin,
+              length: b.yMax - b.yMin,
+            })
+          }
+        }
+        state.applySongEdit(next)
+        if (state.selection.has(noteId)) {
+          const trimmed = new Set(state.selection)
+          trimmed.delete(noteId)
+          state.replaceSelection(trimmed)
+        }
+      }
+      return
+    }
+
+    // Alt+click splits the note at the click position. The split time uses
+    // the click's world Y so the cut lands exactly where the user pointed.
+    if (native.altKey) {
+      const splitTime = clickYToTime(e.point.y, audioEngine.currentSongTime(), state.settings)
+      const result = splitNote(state.song, noteId, splitTime)
+      if (result) {
+        state.applySongEdit(result.song)
+        state.replaceSelection([noteId, result.tailId])
+      }
+      return
+    }
+
+    // Ctrl/Cmd+click toggles this note's selection without disturbing the
+    // others. No drag is started — additive selection is a discrete action.
+    if (native.ctrlKey || native.metaKey) {
+      state.toggleSelection(noteId)
+      previewSelectedNote(noteId)
+      return
+    }
+
+    // Edge hover takes precedence over move-drag for plain clicks. The
+    // hover state was set in onPointerMoveNote; we read it here so the
+    // pointerdown that converts the hover into a gesture starts a
+    // resize instead of a move. Only single-note resize for now —
+    // multi-note resize is a power feature we can add later.
+    const hovered = hoveredEdgeRef.current
+    if (hovered && hovered.noteId === noteId) {
+      if (!state.selection.has(noteId)) {
+        state.replaceSelection([noteId])
+      }
+      beginResizeDrag(
+        noteId,
+        hovered.edge,
+        e.point.clone(),
+        { x: native.clientX, y: native.clientY },
+      )
+      return
+    }
+
+    // Plain click: collapse selection to this note (unless it's already
+    // part of a multi-selection — preserve the group so the drag carries
+    // everyone). Then arm a drag.
+    if (!state.selection.has(noteId)) {
+      state.replaceSelection([noteId])
+    }
+    previewSelectedNote(noteId)
+    beginDrag(e.point.clone(), { x: native.clientX, y: native.clientY }, noteId)
+  }
+
+  // Double-click → open the per-note context menu at the cursor. The two
+  // pointerdowns that precede the dblclick already select the note (via
+  // the regular click handler), so by the time we open the menu the
+  // selection is up to date. We still defensively replace selection here
+  // in case some intermediate event (e.g. ctrl-click toggle) cleared it
+  // between the first and second click.
+  const onDoubleClickNote = (e: ThreeEvent<MouseEvent>) => {
+    if (transport === 'playing') return
+    e.stopPropagation()
+    if (useStore.getState().loadStatus.state === 'loading') return
+    const instId = e.instanceId
+    if (instId === undefined) return
+    const noteId = instanceToNoteId.current[instId]
+    if (noteId === undefined || noteId < 0) return
+    const state = useStore.getState()
+    if (!state.song) return
+    if (!state.selection.has(noteId)) {
+      state.replaceSelection([noteId])
+    }
+    state.setContextMenu({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
+  }
 
   return (
     <instancedMesh
@@ -593,6 +1158,10 @@ export function FallingNotes() {
       frustumCulled={false}
       material={material}
       count={0}
+      onPointerDown={onPointerDownNote}
+      onPointerMove={onPointerMoveNote}
+      onPointerOut={onPointerOutNote}
+      onDoubleClick={onDoubleClickNote}
     >
       <planeGeometry args={[1, 1]} />
     </instancedMesh>

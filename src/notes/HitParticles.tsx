@@ -5,6 +5,16 @@ import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH, WHITE_KEY_WIDTH } from '../keyboard/layout'
 import { sampleCurl, dirFromXY } from './curlNoise'
+import { noteDeathFx } from './noteDeathFx'
+
+// How long a single death event keeps emitting particles. Spreading
+// emission over a window — instead of dumping everything in one frame —
+// reproduces the "particles streaming out of a held key" look exactly,
+// because we're literally running the same per-frame emit logic the
+// held-key path uses, just at the death position. Net particle count
+// across the window matches what the user would see if the note had
+// played for this duration.
+const DEATH_EMIT_DURATION = 0.35
 
 // Curl-noise-driven keyboard particles. Per particle, per frame:
 //
@@ -329,6 +339,41 @@ export function HitParticles() {
     return off
   }, [heldCount, lastVelocity, pendingBurst, emitAccum, noteOnTime])
 
+  // Active "death emitters" — each death event spawns one of these and it
+  // emits particles for DEATH_EMIT_DURATION using the same per-frame rate
+  // a held key would. That's how the puff matches a real hit's feel:
+  // we're literally running the held-key emission logic at the deletion
+  // position for a brief window, then letting it expire.
+  type DeathEmitter = {
+    x: number
+    centerY: number
+    width: number
+    length: number
+    velocity: number
+    startTime: number
+    emitAccum: number
+    // The attack-burst on first tick mirrors what a real key press
+    // does — without it the death puff would be missing the brief
+    // "pop" of slightly-larger particles at the very start.
+    burstFired: boolean
+  }
+  const deathEmittersRef = useRef<DeathEmitter[]>([])
+  useEffect(() => {
+    const off = noteDeathFx.subscribe((d) => {
+      deathEmittersRef.current.push({
+        x: d.x,
+        centerY: d.centerY,
+        width: d.width,
+        length: d.length,
+        velocity: d.velocity,
+        startTime: performance.now() / 1000,
+        emitAccum: 0,
+        burstFired: false,
+      })
+    })
+    return off
+  }, [])
+
   useFrame(() => {
     const now = performance.now() / 1000
     const dt = Math.min(0.05, now - lastFrame.current)
@@ -499,12 +544,22 @@ export function HitParticles() {
 
     let emissionDirty = false
 
-    const emitOne = (keyIdx: number, vel: number, isBurst: boolean) => {
-      const key = KEYBOARD_LAYOUT.keys[keyIdx]
-      const ox = key.x + (Math.random() - 0.5) * EMITTER_WIDTH
-      const oy = hitY + (Math.random() - 0.5) * 0.02
-      const oz = 0
-
+    // Lower-level primitive: stamp one particle into the next pool slot
+    // at a given world position with a given color/velocity profile.
+    // emitOne (key-derived) and the death-burst loop both go through this.
+    const emitParticleAt = (
+      ox: number,
+      oy: number,
+      oz: number,
+      vel: number,
+      isBurst: boolean,
+      r: number,
+      g: number,
+      b: number,
+      sizeMul: number,
+      upwardSpeed: number,
+      lifetimeSec: number,
+    ) => {
       const velFactor = 0.55 + vel * 0.6
       const sizeJitter = 0.9 + Math.random() * 0.2
       const burstSize = isBurst ? 1.25 : 1.0
@@ -514,19 +569,14 @@ export function HitParticles() {
       const i3 = slot * 3
 
       births[slot] = now
-      lifetimes[slot] = userLifetime * LIFETIME_SCALE
+      lifetimes[slot] = lifetimeSec
       positions[i3 + 0] = ox
       positions[i3 + 1] = oy
       positions[i3 + 2] = oz
-      // Store emitter pos for the moves-with mix later in the integration.
       emitterPositions[i3 + 0] = ox
       emitterPositions[i3 + 1] = oy
       emitterPositions[i3 + 2] = oz
 
-      // Initial velocity: pure upward + optional outward kick from
-      // dirFromXY × kick. Default kick = 0 so the impulse is off; when
-      // dialled up it gives particles a deterministic radial spread
-      // based on their emit XY (same emit position → same direction).
       let kickX = 0
       let kickY = 0
       if (kick > 0) {
@@ -535,19 +585,36 @@ export function HitParticles() {
         kickY = dirScratch[1] * kick
       }
       velocities[i3 + 0] = kickX
-      velocities[i3 + 1] = BASE_UP_SPEED * userSpeed * velFactor + kickY
+      velocities[i3 + 1] = upwardSpeed * velFactor + kickY
       velocities[i3 + 2] = 0
-      // Reset the smoothed curl so freshly-emitted particles don't
-      // inherit residual wind from the slot's previous occupant.
       smoothedCurl[i3 + 0] = 0
       smoothedCurl[i3 + 1] = 0
       smoothedCurl[i3 + 2] = 0
-      baseSizes[slot] = BASE_PARTICLE_SIZE * sizeJitter * velFactor * burstSize
-      colors[i3 + 0] = cr
-      colors[i3 + 1] = cg
-      colors[i3 + 2] = cb
+      baseSizes[slot] = BASE_PARTICLE_SIZE * sizeJitter * velFactor * burstSize * sizeMul
+      colors[i3 + 0] = r
+      colors[i3 + 1] = g
+      colors[i3 + 2] = b
       emissionDirty = true
       positionDirty = true
+    }
+
+    const emitOne = (keyIdx: number, vel: number, isBurst: boolean) => {
+      const key = KEYBOARD_LAYOUT.keys[keyIdx]
+      const ox = key.x + (Math.random() - 0.5) * EMITTER_WIDTH
+      const oy = hitY + (Math.random() - 0.5) * 0.02
+      emitParticleAt(
+        ox,
+        oy,
+        0,
+        vel,
+        isBurst,
+        cr,
+        cg,
+        cb,
+        1.0,
+        BASE_UP_SPEED * userSpeed,
+        userLifetime * LIFETIME_SCALE,
+      )
     }
 
     for (let i = 0; i < KEY_COUNT; i++) {
@@ -574,6 +641,84 @@ export function HitParticles() {
       if (emitAccum[i] > 0 && Math.random() < emitAccum[i]) {
         emitAccum[i] -= 1.0
         emitOne(i, lastVelocity[i], false)
+      }
+    }
+
+    // Drive the active death emitters. Each one is a "phantom hit" that
+    // runs the same per-frame emission rate as a held key for
+    // DEATH_EMIT_DURATION seconds, scattered inside the deleted note's
+    // visual rectangle. By using the held-key formula here (target =
+    // userCount * dtFactor * velFactor) every Inspector setting that
+    // shapes the hit column — count, size, lifetime, curl noise — also
+    // shapes the death puff identically. Particles fly off in the same
+    // physics, so the result reads as "this note got pressed for a
+    // moment and then disappeared".
+    const deathEmitters = deathEmittersRef.current
+    for (let e = deathEmitters.length - 1; e >= 0; e--) {
+      const em = deathEmitters[e]
+      const age = now - em.startTime
+      if (age >= DEATH_EMIT_DURATION) {
+        deathEmitters.splice(e, 1)
+        continue
+      }
+      // First-tick attack burst (matches a real key press's ATTACK_BURST).
+      if (!em.burstFired) {
+        em.burstFired = true
+        for (let b = 0; b < ATTACK_BURST; b++) {
+          const ox = em.x + (Math.random() - 0.5) * em.width
+          const oy = em.centerY + (Math.random() - 0.5) * em.length
+          emitParticleAt(
+            ox,
+            oy,
+            0,
+            em.velocity,
+            true,
+            cr,
+            cg,
+            cb,
+            1.0,
+            BASE_UP_SPEED * userSpeed,
+            userLifetime * LIFETIME_SCALE,
+          )
+        }
+      }
+      const target = userCount * dtFactor * (0.55 + em.velocity * 0.6)
+      em.emitAccum += target
+      while (em.emitAccum >= 1.0) {
+        em.emitAccum -= 1.0
+        const ox = em.x + (Math.random() - 0.5) * em.width
+        const oy = em.centerY + (Math.random() - 0.5) * em.length
+        emitParticleAt(
+          ox,
+          oy,
+          0,
+          em.velocity,
+          false,
+          cr,
+          cg,
+          cb,
+          1.0,
+          BASE_UP_SPEED * userSpeed,
+          userLifetime * LIFETIME_SCALE,
+        )
+      }
+      if (em.emitAccum > 0 && Math.random() < em.emitAccum) {
+        em.emitAccum -= 1.0
+        const ox = em.x + (Math.random() - 0.5) * em.width
+        const oy = em.centerY + (Math.random() - 0.5) * em.length
+        emitParticleAt(
+          ox,
+          oy,
+          0,
+          em.velocity,
+          false,
+          cr,
+          cg,
+          cb,
+          1.0,
+          BASE_UP_SPEED * userSpeed,
+          userLifetime * LIFETIME_SCALE,
+        )
       }
     }
 
