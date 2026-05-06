@@ -197,20 +197,11 @@ export function moveNotes(
   // --- Pitch shift clamping (toward 0 from the requested k) ---
   // Search from |deltaSemitones| down to 1 in the same direction; the
   // first |k| where every moved note's post-shift pitch is in range and
-  // collision-free wins. This gives "stop at the obstacle, but jump past
-  // when the cursor goes further" without any per-gesture state.
-  //
-  // Single-note vs multi-select: when only one note is moving, ANY
-  // existing note at the target pitch blocks (regardless of time
-  // overlap). This eliminates the "moved note momentarily lands directly
-  // below/above the obstacle" flash that happened when the cursor swept
-  // through an obstacle pitch whose time interval didn't overlap the
-  // moved note — visually it read as the dragged note pausing on top of
-  // the obstacle's column for no apparent reason. For multi-select
-  // (chord / phrase transposition), only time-overlapping obstacles
-  // block; otherwise a single distant same-pitch note anywhere in the
-  // song would freeze every chord shift.
-  const strictPitchBlock = moved.length === 1
+  // time-overlap-free wins. This gives "stop at the obstacle, but jump
+  // past when the cursor goes further" without per-gesture state, while
+  // still permitting placement at a same-pitch slot when no time
+  // collision exists (e.g. moving a note past another at the same pitch
+  // that's elsewhere in the song).
   let appliedSemis = 0
   if (deltaSemitones !== 0) {
     const dir = deltaSemitones > 0 ? 1 : -1
@@ -222,7 +213,6 @@ export function moveNotes(
         const mEnd = m.time + m.duration
         for (const o of others) {
           if (o.midi !== newMidi) continue
-          if (strictPitchBlock) return false
           if (m.time < o.time + o.duration && mEnd > o.time) return false
         }
       }

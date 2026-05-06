@@ -3,6 +3,7 @@ import { scheduleCountIn, type CountInHandle } from './click'
 import { ensureAudioReady } from './midiInput'
 import { recorder } from './recorder'
 import { useStore } from '../store'
+import type { ParsedSong } from '../midi/types'
 
 /**
  * Single entry point for the record button behaviour. Lives outside React
@@ -25,6 +26,28 @@ export const COUNT_IN_BPM = 100
 let activeCountIn: CountInHandle | null = null
 const emptyStopListeners = new Set<() => void>()
 
+// Snapshot of the song that was loaded when Record was pressed. Stashed
+// at start so we can restore it if (a) the recording finishes empty
+// (no notes captured), or (b) the user cancels the count-in by pressing
+// Record again. Without this, an accidental Record press silently
+// destroys whatever the user had open. Cleared on a successful
+// non-empty stop — there the recorder's auto-load takes over.
+let preRecordSnapshot: { song: ParsedSong; wasClean: boolean } | null = null
+
+function restorePreRecordSnapshot(): void {
+  if (!preRecordSnapshot) return
+  const { song, wasClean } = preRecordSnapshot
+  preRecordSnapshot = null
+  const store = useStore.getState()
+  store.setSong(song)
+  audioEngine.loadSong(song)
+  store.setTransport('stopped')
+  // setSong always flips dirty=true; restore the prior clean state if
+  // the song was a saved (clean) project before recording started so
+  // the user's File save indicator stays accurate.
+  if (wasClean) store.markClean()
+}
+
 export function isCountingIn(): boolean {
   return activeCountIn !== null
 }
@@ -44,7 +67,18 @@ export async function toggleRecord(): Promise<void> {
   if (recorder.getState() === 'recording') {
     const wasEmpty = recorder.getCurrentEventCount() === 0
     recorder.stop()
-    if (wasEmpty) notifyEmptyStop()
+    if (wasEmpty) {
+      // Nothing was captured — put the user's previous song back so
+      // an accidental Record press isn't a silent way to lose work.
+      restorePreRecordSnapshot()
+      notifyEmptyStop()
+    } else {
+      // A take was finalized; the recorder's `addFinalizedListener`
+      // (Toolbar) auto-loads it as the active song, so the snapshot is
+      // no longer needed. Drop it so a *future* empty record doesn't
+      // resurrect a stale song.
+      preRecordSnapshot = null
+    }
     return
   }
   // Currently counting-in → cancel (button feels like a "nope" press).
@@ -52,6 +86,10 @@ export async function toggleRecord(): Promise<void> {
     activeCountIn.cancel()
     activeCountIn = null
     useStore.getState().setCountInBeat(0)
+    // Cancelled before any recording happened; restore for the same
+    // reason we do on empty stop — pressing Record then bailing out
+    // shouldn't destroy the loaded song.
+    restorePreRecordSnapshot()
     return
   }
 
@@ -67,7 +105,16 @@ export async function toggleRecord(): Promise<void> {
     if (!ok) return
   }
 
-  const { setSong, setTransport, countInEnabled, setCountInBeat } = useStore.getState()
+  const state = useStore.getState()
+  // Capture the pre-record song (if any) BEFORE clearing it — that's
+  // what we'll restore on empty-stop / count-in-cancel. `wasClean`
+  // tracks whether the song was a saved project so the dirty indicator
+  // stays accurate across the round-trip.
+  preRecordSnapshot = state.song
+    ? { song: state.song, wasClean: !state.dirty }
+    : null
+
+  const { setSong, setTransport, countInEnabled, setCountInBeat } = state
   setSong(null)
   audioEngine.unloadSong()
   setTransport('stopped')
