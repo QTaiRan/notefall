@@ -17,6 +17,7 @@ import {
   TrashIcon,
 } from "./icons";
 import { useStore } from "../store";
+import { audioEngine } from "../audio/engine";
 import { previewNote } from "../audio/preview";
 import { deleteNotes, setNotesVelocity } from "../midi/edit";
 import { midiToName } from "../midi/noteName";
@@ -26,6 +27,17 @@ const ASPECT = 16 / 9;
 // movement while the song is playing. Matches the rough cadence of video
 // players; long enough that brief pauses to read the timestamp don't dismiss.
 const IDLE_HIDE_MS = 2000;
+
+// Wheel-to-seek sensitivity. 0.005s per CSS pixel of deltaY → a typical
+// mouse wheel notch (~100px) advances the song by ~0.5s, while trackpads
+// scrub at finer increments naturally. Direction: deltaY > 0 (wheel down)
+// scrubs forward in time, matching the "scrolling down a timeline" mental
+// model.
+const WHEEL_SECONDS_PER_PX = 0.005;
+// Normalise WheelEvent.deltaMode (0=px, 1=line, 2=page) into pixels so the
+// same sensitivity coefficient works regardless of input device.
+const LINE_PX = 16;
+const PAGE_PX = 800;
 
 // How long the transport feedback badge stays at full opacity before it
 // pops back out. Plus the ~250ms transition this gives roughly a second of
@@ -547,6 +559,41 @@ export function Viewport() {
     });
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // Wheel-to-seek over the canvas while in edit mode. Reaching for the
+  // seek bar every time interrupts the editing flow — scrolling lets the
+  // user scrub time without leaving the cursor. Listener is on the inner
+  // letterboxed div so it covers the canvas + SeekBar + indicators but
+  // NOT the Inspector / Toolbar (those keep native scroll behaviour).
+  // Gated on edit mode (song loaded, not playing, sampler not loading)
+  // so the wheel doesn't fight the play surface or fire during the
+  // sample download. `passive: false` is required to call preventDefault.
+  useEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const s = useStore.getState();
+      if (!s.song) return;
+      if (s.transport === "playing") return;
+      if (s.loadStatus.state === "loading") return;
+      const unit =
+        e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? PAGE_PX : 1;
+      const dt = e.deltaY * unit * WHEEL_SECONDS_PER_PX;
+      if (dt === 0) return;
+      e.preventDefault();
+      // Source of truth is the engine's clock, not the store's
+      // currentTime — the store only updates on SeekBar drags / skip
+      // buttons and would lag the actual playhead in the paused state.
+      const cur = audioEngine.currentSongTime();
+      const duration = s.song.duration;
+      const next = Math.max(0, Math.min(duration, cur + dt));
+      if (next === cur) return;
+      audioEngine.seek(next);
+      s.setCurrentTime(next);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
   // Drag-and-drop is now wired at the window level (`useFileDrop` in

@@ -156,10 +156,16 @@ export function deleteNotes(song: ParsedSong, ids: Iterable<number>): ParsedSong
  *
  * Collision behavior — moved notes are SOLID and STOP at existing notes
  * of the same pitch instead of overwriting them:
- *   - The pitch shift is all-or-nothing across the whole moved set. If
- *     ANY moved note's original interval overlaps an existing note at
- *     the new pitch, the pitch shift is reverted entirely (preserves
- *     the multi-select's shape).
+ *   - The pitch shift clamps in the direction of intent: we try the
+ *     requested shift first, and if any moved note would land on an
+ *     existing note we step |k| toward 0 by one semitone at a time and
+ *     re-check, picking the largest valid shift. This means a single
+ *     occupied semitone in the way blocks at the slot before it, but if
+ *     the user drags PAST the obstacle (target lands on a free pitch
+ *     beyond), the moved set jumps over — "stop at collision until you
+ *     push further, then leap past". Multi-select shifts as one block,
+ *     so the most-restrictive member governs the clamp and the
+ *     selection's shape is preserved.
  *   - The time shift is clamped uniformly: we compute the smallest
  *     "room to move" across all moved notes (forward + backward) and
  *     scale the delta back so no moved note crosses into an existing
@@ -188,27 +194,47 @@ export function moveNotes(
   }
   if (moved.length === 0) return song
 
-  // --- Pitch shift validation (all-or-nothing) ---
-  let appliedSemis = deltaSemitones
-  if (appliedSemis !== 0) {
-    let valid = true
-    for (const m of moved) {
-      const newMidi = m.midi + appliedSemis
-      if (newMidi < 0 || newMidi > 127) {
-        valid = false
-        break
-      }
-      const mEnd = m.time + m.duration
-      for (const o of others) {
-        if (o.midi !== newMidi) continue
-        if (m.time < o.time + o.duration && mEnd > o.time) {
-          valid = false
-          break
+  // --- Pitch shift clamping (toward 0 from the requested k) ---
+  // Search from |deltaSemitones| down to 1 in the same direction; the
+  // first |k| where every moved note's post-shift pitch is in range and
+  // collision-free wins. This gives "stop at the obstacle, but jump past
+  // when the cursor goes further" without any per-gesture state.
+  //
+  // Single-note vs multi-select: when only one note is moving, ANY
+  // existing note at the target pitch blocks (regardless of time
+  // overlap). This eliminates the "moved note momentarily lands directly
+  // below/above the obstacle" flash that happened when the cursor swept
+  // through an obstacle pitch whose time interval didn't overlap the
+  // moved note — visually it read as the dragged note pausing on top of
+  // the obstacle's column for no apparent reason. For multi-select
+  // (chord / phrase transposition), only time-overlapping obstacles
+  // block; otherwise a single distant same-pitch note anywhere in the
+  // song would freeze every chord shift.
+  const strictPitchBlock = moved.length === 1
+  let appliedSemis = 0
+  if (deltaSemitones !== 0) {
+    const dir = deltaSemitones > 0 ? 1 : -1
+    const maxAbs = Math.abs(deltaSemitones)
+    const isValidShift = (k: number): boolean => {
+      for (const m of moved) {
+        const newMidi = m.midi + k
+        if (newMidi < 0 || newMidi > 127) return false
+        const mEnd = m.time + m.duration
+        for (const o of others) {
+          if (o.midi !== newMidi) continue
+          if (strictPitchBlock) return false
+          if (m.time < o.time + o.duration && mEnd > o.time) return false
         }
       }
-      if (!valid) break
+      return true
     }
-    if (!valid) appliedSemis = 0
+    for (let absK = maxAbs; absK >= 1; absK--) {
+      const k = dir * absK
+      if (isValidShift(k)) {
+        appliedSemis = k
+        break
+      }
+    }
   }
 
   // --- Time shift clamping ---
