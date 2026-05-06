@@ -11,11 +11,18 @@ import { midiInput } from '../audio/midiInput'
 import { parseMidi } from '../midi/parse'
 import { openProjectFromFile } from '../projects/actions'
 import { PROJECT_FILE_EXTENSION } from '../projects/types'
+import { showAlert } from './confirm'
 import { useGlobalShortcuts } from './useGlobalShortcuts'
 
-const isProjectName = (name: string) =>
-  name.toLowerCase().endsWith(PROJECT_FILE_EXTENSION)
-const isMidiName = (name: string) => /\.midi?$/i.test(name)
+// Accepted file types. Match case-insensitively so files renamed in
+// uppercase (`.NFZ`, `.MID`) still load.
+const PROJECT_EXT_RE = new RegExp(
+  `${PROJECT_FILE_EXTENSION.replace('.', '\\.')}$`,
+  'i',
+)
+const MIDI_EXT_RE = /\.midi?$/i
+const isProjectName = (name: string) => PROJECT_EXT_RE.test(name)
+const isMidiName = (name: string) => MIDI_EXT_RE.test(name)
 
 export function Layout() {
   const settings = useStore((s) => s.settings)
@@ -128,7 +135,13 @@ export function Layout() {
         if (isProjectName(fileItem.name)) {
           const file = await fileItem.getFile()
           const result = await openProjectFromFile(file)
-          if (result.kind === 'error') window.alert(result.message)
+          if (result.kind === 'error') {
+            void showAlert({
+              title: 'Could not open project',
+              message: `"${fileItem.name}" could not be loaded.\n\n${result.message}`,
+              tone: 'error',
+            })
+          }
           return
         }
         if (isMidiName(fileItem.name)) {
@@ -141,12 +154,22 @@ export function Layout() {
             audioEngine.loadSong(parsed)
             store.setTransport('stopped')
           } catch (err) {
-            window.alert(
-              `MIDI parse failed: ${err instanceof Error ? err.message : String(err)}`,
-            )
+            void showAlert({
+              title: 'Could not load MIDI',
+              message: `"${fileItem.name}" could not be parsed.\n\n${err instanceof Error ? err.message : String(err)}`,
+              tone: 'error',
+            })
           }
+          return
         }
-        // Unknown extensions — silently ignored.
+        // Unsupported extension — surface a clear message rather than
+        // silently ignoring the drop. Users were left wondering whether
+        // the drop registered at all.
+        void showAlert({
+          title: 'Unsupported file type',
+          message: `"${fileItem.name}" is not a supported format. Drop a .nfz project or a .mid / .midi file.`,
+          tone: 'error',
+        })
       }}
     >
       {({ isDropTarget }) => (

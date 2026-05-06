@@ -25,6 +25,7 @@ import { newProject, openProject, openRecent, saveProject, saveProjectAs } from 
 import { hasFileSystemAccess } from '../projects/io'
 import { clearAllRecent, getRecent, subscribeRecent } from '../projects/recent'
 import { SAMPLES } from '../samples'
+import { showAlert } from './confirm'
 import { DownloadIcon, MetronomeIcon, PauseIcon, PlayIcon, PlaylistIcon, RecordIcon, StopIcon, TrashIcon } from './icons'
 
 // Display modifier symbols for the File menu's keyboard hints. Mac uses
@@ -219,22 +220,28 @@ export function Toolbar() {
   // Project actions. Dirty-confirm for `newProject` and `openProject`
   // lives inside the action itself so the keyboard shortcut path
   // (Cmd+O in useGlobalShortcuts) stays in sync with the menu path.
+  // Shared error surface for project actions. Wraps the in-app alert
+  // modal so the loading-modal visual language is preserved (vs the
+  // jarring native window.alert popup).
+  const reportError = (title: string, message: string) =>
+    void showAlert({ title, message, tone: 'error' })
+
   const onNewProject = async () => {
     const result = await newProject()
     if (result.kind === 'ok') setActiveRecordingId(null)
   }
   const onOpenProject = async () => {
     const result = await openProject()
-    if (result.kind === 'error') window.alert(result.message)
+    if (result.kind === 'error') reportError('Could not open project', result.message)
     else if (result.kind === 'ok') setActiveRecordingId(null)
   }
   const onSaveProject = async () => {
     const result = await saveProject()
-    if (result.kind === 'error') window.alert(result.message)
+    if (result.kind === 'error') reportError('Could not save project', result.message)
   }
   const onSaveProjectAs = async () => {
     const result = await saveProjectAs()
-    if (result.kind === 'error') window.alert(result.message)
+    if (result.kind === 'error') reportError('Could not save project', result.message)
   }
   // Recents subscription — empty array on browsers without FSA since
   // `addRecent` no-ops there, so the submenu naturally hides itself
@@ -242,7 +249,7 @@ export function Toolbar() {
   const recents = useSyncExternalStore(subscribeRecent, getRecent, getRecent)
   const onOpenRecent = async (entry: (typeof recents)[number]) => {
     const result = await openRecent(entry)
-    if (result.kind === 'error') window.alert(result.message)
+    if (result.kind === 'error') reportError('Could not open project', result.message)
     else if (result.kind === 'ok') setActiveRecordingId(null)
   }
 

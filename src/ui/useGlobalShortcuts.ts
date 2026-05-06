@@ -4,6 +4,7 @@ import { toggleRecord } from '../audio/recordControl'
 import { openProject, saveProject, saveProjectAs } from '../projects/actions'
 import { useStore } from '../store'
 import { deleteNotes, moveNotes } from '../midi/edit'
+import { showAlert } from './confirm'
 
 /**
  * Window-level keyboard shortcuts for the app's most common actions.
@@ -102,7 +103,13 @@ export function useGlobalShortcuts(): void {
       e.stopImmediatePropagation()
       const action = e.shiftKey ? saveProjectAs : saveProject
       void action().then((result) => {
-        if (result.kind === 'error') window.alert(result.message)
+        if (result.kind === 'error') {
+          void showAlert({
+            title: 'Could not save project',
+            message: result.message,
+            tone: 'error',
+          })
+        }
       })
     }
 
@@ -118,7 +125,13 @@ export function useGlobalShortcuts(): void {
       e.preventDefault()
       e.stopImmediatePropagation()
       void openProject().then((result) => {
-        if (result.kind === 'error') window.alert(result.message)
+        if (result.kind === 'error') {
+          void showAlert({
+            title: 'Could not open project',
+            message: result.message,
+            tone: 'error',
+          })
+        }
       })
     }
 
