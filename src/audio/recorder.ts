@@ -35,6 +35,18 @@ export type Recording = {
   duration: number
   /** Captured events in their original order. */
   events: RecEvent[]
+  /**
+   * Has the user seen this recording in the popover yet? Drives the
+   * "unread badge" on the recordings list button. Set false on
+   * finalize, flipped to true en-masse when the popover closes (we
+   * pick close, not open, so the unread row indicators stay visible
+   * while the user is actually reading the list).
+   *
+   * Optional in the type so older entries persisted before this field
+   * existed parse cleanly; the hydrate path defaults missing values to
+   * `true` so the deploy doesn't surface every prior recording as new.
+   */
+  read?: boolean
 }
 
 class RecorderManager {
@@ -63,6 +75,11 @@ class RecorderManager {
     if (stored.length === 0) return
     // Sort newest-first to match the in-session ordering (unshift on stop).
     stored.sort((a, b) => b.createdAt - a.createdAt)
+    // Backfill `read` for entries persisted before the field existed —
+    // treat them as already-seen so the unread badge doesn't suddenly
+    // light up with every prior recording on first deploy of this
+    // feature.
+    for (const r of stored) if (r.read === undefined) r.read = true
     this.recordings = stored
     this.notify()
   }
@@ -105,6 +122,7 @@ class RecorderManager {
         createdAt,
         duration,
         events: this.currentEvents,
+        read: false,
       }
       this.recordings.unshift(finalized)
       saveRecording(finalized)
@@ -150,6 +168,31 @@ class RecorderManager {
     this.recordings = []
     clearAllRecordingsFromDb()
     this.notify()
+  }
+
+  /**
+   * Flip every recording's `read` flag to true. Called by the toolbar
+   * when the recordings popover closes — by the time the popover went
+   * down, the user has had a chance to scan the list, so the badge can
+   * drop to zero. Persists each changed entry so the cleared state
+   * survives a reload.
+   */
+  markAllRead(): void {
+    let changed = false
+    for (const r of this.recordings) {
+      if (!r.read) {
+        r.read = true
+        saveRecording(r)
+        changed = true
+      }
+    }
+    if (changed) this.notify()
+  }
+
+  getUnreadCount(): number {
+    let n = 0
+    for (const r of this.recordings) if (!r.read) n++
+    return n
   }
 
   getState(): RecState {

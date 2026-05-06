@@ -131,6 +131,11 @@ export function Toolbar() {
   // song. Lets the per-row button toggle between play (load + play) and
   // pause (stop the running playback) instead of always restarting.
   const [activeRecordingId, setActiveRecordingId] = useState<string | null>(null)
+  // Controlled-mode `DialogTrigger` for the recordings popover so we can
+  // hook the close transition to `markAllRead`. Clearing on close (not
+  // open) lets the user actually see WHICH rows are unread before the
+  // dot indicators disappear.
+  const [recordingsOpen, setRecordingsOpen] = useState(false)
   // Brief inline notice shown when the user stops a recording without
   // having pressed any keys — the empty take is silently dropped, so
   // without this the Stop click would feel like nothing happened.
@@ -568,12 +573,33 @@ export function Toolbar() {
           >
             <MetronomeIcon className="h-4 w-4" />
           </Button>
-          <DialogTrigger>
+          <DialogTrigger
+            isOpen={recordingsOpen}
+            onOpenChange={(open) => {
+              setRecordingsOpen(open)
+              // Mark on CLOSE so unread dots remain visible while the
+              // user is reading the list. The badge count clears as
+              // soon as the popover dismisses.
+              if (!open) rec.markAllRead()
+            }}
+          >
             <Button
-              aria-label="Show recordings"
-              className="flex items-center justify-center rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
+              aria-label={
+                rec.unreadCount > 0
+                  ? `Show recordings (${rec.unreadCount} new)`
+                  : 'Show recordings'
+              }
+              className="relative flex items-center justify-center rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
             >
               <PlaylistIcon className="h-4 w-4" />
+              {rec.unreadCount > 0 && (
+                <span
+                  aria-hidden
+                  className="absolute -right-1 -top-1 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-sky-500 px-1 font-mono text-[9px] font-bold leading-none text-neutral-950 ring-2 ring-neutral-950"
+                >
+                  {rec.unreadCount > 99 ? '99+' : rec.unreadCount}
+                </span>
+              )}
             </Button>
             <Popover
               placement="bottom start"
@@ -622,6 +648,18 @@ export function Toolbar() {
                               : 'hover:bg-neutral-800/60')
                           }
                         >
+                          {/* Unread dot. Always reserves 8px so read /
+                              unread rows align to the same left edge —
+                              otherwise the row contents would shift
+                              horizontally when the dot is cleared on
+                              popover close. */}
+                          <span
+                            aria-label={r.read ? undefined : 'Unread'}
+                            className={
+                              'h-2 w-2 shrink-0 rounded-full ' +
+                              (r.read ? 'bg-transparent' : 'bg-sky-400')
+                            }
+                          />
                           <div className="flex flex-1 flex-col overflow-hidden">
                             {editingId === r.id ? (
                               <input
