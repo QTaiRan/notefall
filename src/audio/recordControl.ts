@@ -115,8 +115,15 @@ export async function toggleRecord(): Promise<void> {
     : null
 
   const { setSong, setTransport, countInEnabled, setCountInBeat } = state
-  setSong(null)
-  audioEngine.unloadSong()
+  // Only clear if there's actually something to clear. `setSong(null)`
+  // unconditionally flips `dirty: true`, which would falsely surface
+  // the "Unsaved" badge when the user records nothing on a fresh New
+  // project — there was no song to begin with, so the empty stop
+  // should leave the project in its clean state.
+  if (state.song) {
+    setSong(null)
+    audioEngine.unloadSong()
+  }
   setTransport('stopped')
 
   if (countInEnabled) {

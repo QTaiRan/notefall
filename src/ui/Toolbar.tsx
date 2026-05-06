@@ -826,19 +826,39 @@ export function Toolbar() {
 
       </div>
 
-      <div className="flex items-center gap-1.5 truncate text-[11px] text-neutral-500">
-        {/* Dirty indicator. Only meaningful when a project is loaded —
-            "no project" doesn't have a save target so the dot would be
-            misleading there. */}
-        {currentFile && dirty && (
-          <span aria-label="Unsaved changes" className="text-amber-400">●</span>
+      <div className="flex min-w-0 items-center gap-2 text-[11px] text-neutral-500">
+        {/* Unsaved-changes badge. Shown whenever `dirty` is true — even
+            for unnamed (post-New, post-Open-MIDI) sessions, since the
+            user has work to lose either way. The earlier
+            `dirty && currentFile` gate suppressed the badge entirely
+            for new projects, which made it look like edits were
+            "saved" when they weren't. Filename slot picks up an
+            "Untitled" fallback so the layout doesn't collapse to just
+            the badge. The pulsing dot + explicit "Unsaved" label is
+            far more legible than the previous bare ● glyph, which
+            users were missing entirely. `shrink-0` keeps the badge
+            fully visible while the filename next to it absorbs any
+            container shrinkage. */}
+        {dirty && (
+          <span
+            aria-label="Unsaved changes"
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-amber-200"
+          >
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400/70" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+            </span>
+            Unsaved
+          </span>
         )}
         {currentFile ? (
-          <span className="text-neutral-300">{currentFile.name}</span>
+          <span className="truncate text-neutral-300">{currentFile.name}</span>
         ) : song ? (
-          song.name
+          <span className="truncate">{song.name}</span>
+        ) : dirty ? (
+          <span className="truncate italic">Untitled</span>
         ) : (
-          'No file loaded'
+          <span className="truncate">No file loaded</span>
         )}
       </div>
     </header>

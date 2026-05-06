@@ -135,13 +135,16 @@ export function useGlobalShortcuts(): void {
       })
     }
 
-    // Warn before navigating away if there are unsaved changes for an
-    // already-named project. We deliberately don't prompt for an unnamed
-    // session — there's no save target to point the user at, and the
-    // friction of a blocking confirm() on every reload would be tiring.
+    // Warn before navigating away whenever there are unsaved changes —
+    // even for unnamed (post-New) sessions, since reloading away from a
+    // dirty Untitled project loses the work just as much as a named
+    // one. Earlier we gated on `currentFile !== null` to spare unnamed
+    // sessions, but that made New-then-edit silently lose work; the
+    // `dirty` flag itself is already specific enough — a fresh page
+    // load with no edits stays clean and won't prompt.
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      const { dirty, currentFile } = useStore.getState()
-      if (dirty && currentFile !== null) {
+      const { dirty } = useStore.getState()
+      if (dirty) {
         e.preventDefault()
         // Required for some older browsers; modern ones ignore the string.
         e.returnValue = ''
