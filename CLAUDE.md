@@ -382,6 +382,8 @@ The seek slider uses `SliderTrackRenderProps.isHovered` + `state.isThumbDragging
 
 `Toolbar.tsx`: `<FileTrigger>` for "Open MIDI"; recording UI (Record button with elapsed + last-note + count display, Metronome toggle, Recordings list popover with rename / load+play / download / delete-with-confirm). Open MIDI / sample buttons disable while recording.
 
+`Toolbar.tsx`'s **Help menu** (rightmost `?` button on the left cluster) is the single in-app entry point for user feedback — `Report a bug…` / `Request a feature…` / `View on GitHub`. The bug / feature items open `https://github.com/ekkx/notefall/issues/new?template=<bug|feature>.yml&environment=<encoded>` in a new tab; the templates live in `.github/ISSUE_TEMPLATE/{bug,feature}.yml` and expose a textarea field with `id: environment` that the URL query pre-fills (GitHub Issue Forms feature). `buildEnvironmentBlock()` only collects browser / viewport / FSA-support info — never the user's notes / settings / project content. `config.yml` disables blank issues so users always land on a template.
+
 `Inspector.tsx` color rows are `<ColorPicker>` + `<ColorArea>` + `<ColorSlider>` + `<ColorField>` in a `<Popover>` (no native `<input type="color">`).
 
 `Viewport` adds a window-level `contextmenu` listener that `preventDefault()`s when the target is the canvas — the right-click is repurposed for delete; outside the canvas (Inspector / Toolbar / popovers) the browser menu stays untouched.

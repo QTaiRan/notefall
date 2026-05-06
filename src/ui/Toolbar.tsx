@@ -44,6 +44,55 @@ const SHORTCUT_SAVE_AS = IS_MAC ? '⇧⌘S' : 'Ctrl+Shift+S'
 // module load since FSA support doesn't change at runtime.
 const RECENT_AVAILABLE = hasFileSystemAccess()
 
+// GitHub repo for the Help menu's bug / feature / browse links. Kept as
+// a constant rather than read from package.json at runtime — the repo
+// URL doesn't change without a code change anyway, and a constant keeps
+// the bundle from pulling extra metadata.
+const REPO_URL = 'https://github.com/ekkx/notefall'
+
+/**
+ * Diagnostic info auto-attached to bug reports / feature requests.
+ *
+ * Kept intentionally narrow: only browser / OS / viewport / FSA support
+ * — nothing about the user's notes, recordings, or settings. The
+ * environment field in the issue template renders this as a code block
+ * so it stays visually distinct from the user's prose. Reads `window`
+ * lazily so the template URL is only built when the menu item fires
+ * (irrelevant in practice but cheap to do right).
+ */
+function buildEnvironmentBlock(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'
+  const w = typeof window !== 'undefined' ? window.innerWidth : 0
+  const h = typeof window !== 'undefined' ? window.innerHeight : 0
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1
+  const fsa = hasFileSystemAccess() ? 'yes' : 'no'
+  return [
+    `notefall: v${__APP_VERSION__}`,
+    `User-Agent: ${ua}`,
+    `Viewport: ${w}×${h} (DPR ${dpr})`,
+    `File System Access: ${fsa}`,
+  ].join('\n')
+}
+
+/**
+ * Build a "new issue" URL with the given form template, pre-filling
+ * the `environment` field. Pre-fill works because `bug.yml` and
+ * `feature.yml` both expose a textarea with `id: environment` — query
+ * parameters with matching ids populate the corresponding form field
+ * (see GitHub Docs: "Syntax for issue forms").
+ */
+function buildIssueUrl(template: 'bug' | 'feature'): string {
+  const env = encodeURIComponent(buildEnvironmentBlock())
+  return `${REPO_URL}/issues/new?template=${template}.yml&environment=${env}`
+}
+
+const openExternal = (url: string) => {
+  // `noopener,noreferrer` keeps the new tab from getting `window.opener`
+  // back to the app — standard hygiene for any externally-controlled
+  // URL even though our destinations are hard-coded.
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 // Shared className strings for File menu items. Centralised so the three
 // project items, the MIDI import, and the demo-song items stay visually
 // consistent when something changes.
@@ -272,8 +321,17 @@ export function Toolbar() {
 
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-950 px-3">
-      <div className="flex items-center gap-2">
-        <span className="flex items-baseline gap-1.5 mr-2">
+      {/* Section spacing: every border-l divider has 12px (`pl-3` /
+          `pr-3`) padding on BOTH sides. The outer flex therefore runs
+          gap-less; intra-section spacing comes from each section's own
+          flex gap. Result: every border has symmetric room around it
+          and the toolbar's visual rhythm stays even. */}
+      <div className="flex items-center">
+        {/* Section 1 — branding + file ops. No left border (it sits at
+            the toolbar's start), so only `pr-3` to leave 12px before
+            the next divider. */}
+        <div className="flex items-center gap-2 pr-3">
+        <span className="flex items-baseline gap-1.5">
           <span className="text-sm font-semibold tracking-wide text-neutral-200">notefall</span>
           <span className="font-mono text-[10px] text-neutral-500">v{__APP_VERSION__}</span>
         </span>
@@ -454,10 +512,11 @@ export function Toolbar() {
             </Popover>
           </DialogTrigger>
         )}
+        </div>
 
-        {/* Record / stop / save group. Captures live input (PC keyboard,
-            on-screen, MIDI device) into a downloadable .mid. */}
-        <div className="relative ml-2 flex items-center gap-1 border-l border-neutral-800 pl-3">
+        {/* Section 2 — recording group. `px-3` for symmetric padding
+            inside both the preceding and following borders. */}
+        <div className="relative flex items-center gap-1 border-l border-neutral-800 px-3">
           <Button
             onPress={onToggleRecord}
             aria-label={
@@ -676,6 +735,55 @@ export function Toolbar() {
           >
             No notes captured — recording was empty
           </div>
+        </div>
+
+        {/* Section 3 — Help menu. Single entry point for "tell us
+            something" (bug / feature reports + repo link). The issue
+            URLs pre-fill the template's `environment` textarea with
+            browser / viewport / FSA info so the maintainer doesn't
+            have to ask. Last section, so only `pl-3` to mirror the
+            previous border's 12px right side. */}
+        <div className="flex items-center border-l border-neutral-800 pl-3">
+        <MenuTrigger>
+          <Button
+            aria-label="Help and feedback"
+            className="flex h-7 w-7 items-center justify-center rounded-full border border-neutral-800 text-xs font-semibold text-neutral-400 outline-none hover:border-neutral-600 hover:text-neutral-200 focus-visible:border-sky-500 data-[pressed]:bg-neutral-800"
+          >
+            ?
+          </Button>
+          <Popover
+            placement="bottom end"
+            className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
+          >
+            <Menu
+              aria-label="Help"
+              className="flex w-56 flex-col gap-0.5 outline-none"
+            >
+              <MenuItem
+                onAction={() => openExternal(buildIssueUrl('bug'))}
+                textValue="Report a bug"
+                className={menuItemClass}
+              >
+                <span>Report a bug…</span>
+              </MenuItem>
+              <MenuItem
+                onAction={() => openExternal(buildIssueUrl('feature'))}
+                textValue="Request a feature"
+                className={menuItemClass}
+              >
+                <span>Request a feature…</span>
+              </MenuItem>
+              <Separator className="my-1 h-px bg-neutral-800" />
+              <MenuItem
+                onAction={() => openExternal(REPO_URL)}
+                textValue="View on GitHub"
+                className={menuItemClass}
+              >
+                <span>View on GitHub</span>
+              </MenuItem>
+            </Menu>
+          </Popover>
+        </MenuTrigger>
         </div>
 
       </div>

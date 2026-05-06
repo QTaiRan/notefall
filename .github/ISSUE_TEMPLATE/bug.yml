@@ -1,0 +1,40 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in notefall.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more specific you can be, the faster it can be fixed — screenshots, screen recordings, or a minimal `.nfz` project that reproduces the issue help a lot.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of what went wrong.
+      placeholder: e.g. The note disappeared when I dragged it past another note at the same pitch.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Load a project with two overlapping notes
+        2. Click and drag the lower note up
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Auto-filled from the app. No need to edit unless you're filing this issue from a different setup.
+      render: text
+    validations:
+      required: false
