@@ -1013,6 +1013,12 @@ export function FallingNotes() {
       gl.domElement.style.cursor = ''
       return
     }
+    // Note planes extend below the hit line geometrically (the SDF-clip in
+    // the fragment shader hides those fragments visually, but raycasts
+    // still hit the geometry). Reject hits whose world-y is below the hit
+    // line so clicks on the keyboard area don't grab visually-hidden
+    // notes; let the event fall through for other handlers to pick up.
+    if (e.point.y < noteHitYWorld(settings.keyboardY)) return
     const instId = e.instanceId
     if (instId === undefined) return
     const noteId = instanceToNoteId.current[instId]
@@ -1065,6 +1071,12 @@ export function FallingNotes() {
     // While playing, click-on-note shouldn't preempt the play/pause toggle.
     // We let the event continue past us so PlayToggleArea handles it.
     if (transport === 'playing') return
+    // Skip hits whose world-y is below the hit line. The note plane
+    // extends below it geometrically (clipped per-fragment in the shader),
+    // so without this guard a click on the keyboard area would land on a
+    // visually-hidden note. Don't stopPropagation — let the event reach
+    // EditTools / Keyboard as if we missed.
+    if (e.point.y < noteHitYWorld(settings.keyboardY)) return
     // In edit mode we own every click on the note plane geometry. Stop
     // propagation up-front so EditTools' empty-area clear-selection
     // handler can't fire on the same gesture even if the instance lookup
@@ -1182,6 +1194,7 @@ export function FallingNotes() {
   // between the first and second click.
   const onDoubleClickNote = (e: ThreeEvent<MouseEvent>) => {
     if (transport === 'playing') return
+    if (e.point.y < noteHitYWorld(settings.keyboardY)) return
     e.stopPropagation()
     if (!audioEngine.isReady()) {
       void ensureSamplerLoaded()
