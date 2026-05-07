@@ -16,7 +16,7 @@ Browser-based piano visualizer. Notes fall onto a flat 88-key keyboard while a M
 
 ```
 src/
-├ App.tsx               renders Layout, or UnsupportedScreen on screens < 1024px
+├ App.tsx               renders Layout, WebGLUnavailableScreen if no WebGL, or UnsupportedScreen on screens < 1024px
 ├ main.tsx
 ├ store.ts              Zustand store: settings, song, transport, loadStatus, loop, fastForward,
 │                       countIn, editor state (selection, history, contextMenu, rangeSelectRect),
@@ -76,6 +76,7 @@ src/
    ├ LoadingOverlay.tsx   centered sample-loading progress
    ├ PageLoader.tsx       initial app-load spinner before React mounts
    ├ UnsupportedScreen.tsx fallback for screens < 1024px (no Layout / Canvas mounted)
+   ├ WebGLUnavailableScreen.tsx fallback when the browser refuses a WebGL context (HW accel disabled)
    ├ controls.tsx         SliderRow / SwitchRow / SelectRow / ColorRow primitives
    ├ icons.tsx            Solar-paste-friendly SVG icon components
    └ useGlobalShortcuts.ts window-level keyboard shortcuts (transport, record, editor)
@@ -358,7 +359,7 @@ The whole menu disables during recording — any of these would clobber the in-p
 
 ## UI layout
 
-`App.tsx` renders `<Layout />` only when the viewport is ≥ 1024 px (Tailwind `lg`, watched via `matchMedia`). Below that → `<UnsupportedScreen />`; the 3D Canvas and audio engine never initialise.
+`App.tsx` renders `<Layout />` only when (a) the browser can give us a WebGL context (`detectWebGLAvailable()` probes `webgl2` then `webgl`), and (b) the viewport is ≥ 1024 px (Tailwind `lg`, watched via `matchMedia`). WebGL failure → `<WebGLUnavailableScreen />` (with reload button + per-browser instructions for enabling hardware acceleration). Small viewport → `<UnsupportedScreen />`. Either fallback prevents the 3D Canvas and audio engine from ever initialising. WebGL takes precedence over viewport-size since a desktop without WebGL is just as broken as a phone.
 
 ```
 ┌─ Toolbar ────────────────────────────────────┐
