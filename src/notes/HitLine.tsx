@@ -231,8 +231,21 @@ export function HitLine() {
     waveMaterial.uniforms.uGrain.value = settings.hitLineWaveGrain
   }, [waveMaterial, settings.hitLineWaveGrain])
 
+  // Wrap uTime so the shader's noise inputs stay in float32-precise
+  // territory. `performance.now()` grows unboundedly per page session,
+  // and once `uTime * scrollSpeed` (and the downstream `* 4.0`, `* 12.0`
+  // multipliers feeding fbm/hash21) reaches the hundreds-of-thousands
+  // range, GLSL's `sin()` argument reduction loses precision — the
+  // hash output collapses toward a near-constant value, which manifests
+  // as the wave drifting downward (mean of `n1` no longer ≈ 0.5),
+  // halo/grain dynamic range dropping, and the line becoming flat.
+  // Wrapping at a long-enough period keeps the inputs bounded; the
+  // discontinuity at the wrap is one-frame and falls inside the wave's
+  // continuous morph so users don't perceive it as a glitch.
+  const TIME_WRAP_SECONDS = 600
   useFrame(() => {
-    waveMaterial.uniforms.uTime.value = performance.now() / 1000
+    waveMaterial.uniforms.uTime.value =
+      (performance.now() / 1000) % TIME_WRAP_SECONDS
   })
 
   if (!settings.hitLineEnabled) return null
