@@ -1,15 +1,19 @@
 // Piano: 88 keys, MIDI 21 (A0) .. 108 (C8)
-// Top-down flat layout: all keys live in the XY plane.
+// Top-down layout viewed straight on. White keys are flat planes in XY (a
+// keyboard of 88 boxes filled the perspective edges with their side colour
+// and tore visible gaps); black keys are boxes that protrude in +Z so the
+// flash light at the hit line can cast their silhouette as shadow on the
+// adjacent white surfaces.
 //   x = lateral position
 //   y = position along the keyboard (front=0, back=WHITE_KEY_LENGTH)
-//   z = thin extrusion (visually flat from the front camera)
+//   z = 0 for white keys (plane). Black keys span [0, BLACK_KEY_THICKNESS].
 export const MIDI_MIN = 21
 export const MIDI_MAX = 108
 export const KEY_COUNT = MIDI_MAX - MIDI_MIN + 1 // 88
 
 // Proportions follow a real grand piano (mid-spec) at 1mm = 0.01 world units:
 //   white key 23.5 × 147.5 mm
-//   black key 13.7 × 95 mm
+//   black key 13.7 × 95 mm × ~9 mm tall above the white surface
 // 52 × 0.235 = 12.22 world units total — matches the visible width of the
 // default 16:9 viewport (FOV 32, z = 12 → ~12.23) so the keyboard spans
 // edge-to-edge with no side gap.
@@ -17,7 +21,10 @@ export const WHITE_KEY_WIDTH = 0.235
 export const WHITE_KEY_LENGTH = 1.475
 export const BLACK_KEY_WIDTH = 0.137
 export const BLACK_KEY_LENGTH = 0.95
-export const KEY_THICKNESS = 0.06
+// Vertical extrusion of the black keys above the white surface. Drives the
+// per-fragment shadow projection in the white-key shader (taller key →
+// longer shadow), and the press-down animation depth.
+export const BLACK_KEY_THICKNESS = 0.09
 
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10])
 
@@ -74,12 +81,13 @@ function buildLayout(): { keys: KeyInfo[]; totalWidth: number; whiteCount: numbe
       // key's back edge so there's no sub-pixel sliver of white showing
       // through at the shared edge.
       yLocal: black ? WHITE_KEY_LENGTH - BLACK_KEY_LENGTH / 2 + 0.01 : WHITE_KEY_LENGTH / 2,
-      // Black keys clearly in front of white keys (well beyond depth-buffer
-      // precision at typical camera distances).
-      zCenter: black ? 0.04 : 0,
+      // White keys are flat planes (z=0). Black keys are boxes whose
+      // BOTTOM sits on z=0; their box-center is at half-thickness so the
+      // top face lands at z=BLACK_KEY_THICKNESS.
+      zCenter: black ? BLACK_KEY_THICKNESS / 2 : 0,
       width: black ? BLACK_KEY_WIDTH : WHITE_KEY_WIDTH,
       length: black ? BLACK_KEY_LENGTH : WHITE_KEY_LENGTH,
-      thickness: KEY_THICKNESS,
+      thickness: black ? BLACK_KEY_THICKNESS : 0,
     })
   }
   return { keys, totalWidth, whiteCount }
@@ -91,6 +99,26 @@ export function keyForMidi(midi: number): KeyInfo | null {
   const idx = midi - MIDI_MIN
   if (idx < 0 || idx >= KEY_COUNT) return null
   return KEYBOARD_LAYOUT.keys[idx]
+}
+
+/**
+ * Adjacent black keys for a given white key. White keys can have at most
+ * two black neighbours (one on each side, at ±1 semitone). Used by the
+ * shadow shader: the white surface only needs to project its immediate
+ * neighbours, never every black key on the keyboard.
+ */
+export function adjacentBlackKeys(midi: number): {
+  left: KeyInfo | null
+  right: KeyInfo | null
+} {
+  const k = keyForMidi(midi)
+  if (!k || k.isBlack) return { left: null, right: null }
+  const candidateLeft = keyForMidi(midi - 1)
+  const candidateRight = keyForMidi(midi + 1)
+  return {
+    left: candidateLeft && candidateLeft.isBlack ? candidateLeft : null,
+    right: candidateRight && candidateRight.isBlack ? candidateRight : null,
+  }
 }
 
 // Notes hit the back edge of the keyboard.
