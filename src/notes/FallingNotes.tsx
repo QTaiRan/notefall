@@ -86,9 +86,9 @@ const FRAGMENT_SHADER = /* glsl */ `
   // component so 0 = every note identical, 1 = full random offset per note.
   uniform float uTextureVariation;
   uniform float uTextureContrast;
-  uniform vec3 uRimColor;
-  uniform float uRimWidth;
-  uniform float uRimIntensity;
+  uniform vec3 uEdgeColor;
+  uniform float uEdgeWidth;
+  uniform float uEdgeIntensity;
   // 'custom' preset — user image. uHasCustomTexture is 1 when a real texture
   // is bound, 0 otherwise (so the shader can fall back to the tint colour
   // and not display the placeholder 1x1 default).
@@ -255,7 +255,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     return mix(uColor, sampled * uColor, uHasCustomTexture);
   }
 
-  // 'liquid': domain-warped FBM (molten metal flow). Rim is composited in
+  // 'liquid': domain-warped FBM (molten metal flow). Edge is composited in
   // main() so it isn't subject to uEmissive.
   vec3 textureLiquid(vec2 p, float d) {
     // Per-note offset so each note samples a different region of the noise
@@ -284,8 +284,8 @@ const FRAGMENT_SHADER = /* glsl */ `
     float aa = max(fwidth(d), 0.0001);
     float alpha = clamp(-d / aa + 0.5, 0.0, 1.0);
 
-    // Texture functions return JUST the fill — rim is composited below so
-    // the user's Rim Color / Intensity are not magnified by the note's
+    // Texture functions return JUST the fill — edge is composited below so
+    // the user's Edge Color / Intensity are not magnified by the note's
     // Emissive setting (which is meant to drive Bloom on the note body).
     vec3 fill;
     if (uTextureMode == ${TEXTURE_LIQUID}) {
@@ -298,14 +298,14 @@ const FRAGMENT_SHADER = /* glsl */ `
       // 'solid' — flat tint.
       fill = uColor;
     }
-    // Emissive boost feeds Bloom — applies only to the fill so rim stays
+    // Emissive boost feeds Bloom — applies only to the fill so edge stays
     // strictly user-controlled via its own Color + Intensity.
     fill *= (1.0 + uEmissive);
 
-    float rim = smoothstep(uRimWidth, 0.0, abs(d));
-    vec3 rimCol = uRimColor * rim * uRimIntensity;
+    float edge = smoothstep(uEdgeWidth, 0.0, abs(d));
+    vec3 edgeCol = uEdgeColor * edge * uEdgeIntensity;
 
-    vec3 finalColor = fill + rimCol;
+    vec3 finalColor = fill + edgeCol;
 
     // Selection treatment. Has to remain perceptible against every
     // possible fill colour AND luminance — a single-colour treatment
@@ -441,9 +441,9 @@ export function FallingNotes() {
         uTextureBlur: { value: settings.noteTextureBlur },
         uTextureVariation: { value: settings.noteTextureVariation },
         uTextureContrast: { value: settings.noteTextureContrast },
-        uRimColor: { value: new THREE.Color(settings.noteRimColor) },
-        uRimWidth: { value: settings.noteRimWidth },
-        uRimIntensity: { value: settings.noteRimIntensity },
+        uEdgeColor: { value: new THREE.Color(settings.noteEdgeColor) },
+        uEdgeWidth: { value: settings.noteEdgeWidth },
+        uEdgeIntensity: { value: settings.noteEdgeIntensity },
         uCustomTexture: { value: PLACEHOLDER_TEXTURE },
         uHasCustomTexture: { value: 0 },
       },
@@ -469,11 +469,11 @@ export function FallingNotes() {
     material.uniforms.uTextureBlur.value = settings.noteTextureBlur
     material.uniforms.uTextureVariation.value = settings.noteTextureVariation
     material.uniforms.uTextureContrast.value = settings.noteTextureContrast
-    material.uniforms.uRimColor.value.set(settings.noteRimColor)
-    // Rim is gated by zeroing width/intensity instead of unmounting; this
+    material.uniforms.uEdgeColor.value.set(settings.noteEdgeColor)
+    // Edge is gated by zeroing width/intensity instead of unmounting; this
     // keeps the user's slider values intact for a clean re-enable.
-    material.uniforms.uRimWidth.value = settings.rimEnabled ? settings.noteRimWidth : 0
-    material.uniforms.uRimIntensity.value = settings.rimEnabled ? settings.noteRimIntensity : 0
+    material.uniforms.uEdgeWidth.value = settings.edgeEnabled ? settings.noteEdgeWidth : 0
+    material.uniforms.uEdgeIntensity.value = settings.edgeEnabled ? settings.noteEdgeIntensity : 0
   }, [
     material,
     settings.noteColor,
@@ -489,10 +489,10 @@ export function FallingNotes() {
     settings.noteTextureBlur,
     settings.noteTextureVariation,
     settings.noteTextureContrast,
-    settings.rimEnabled,
-    settings.noteRimColor,
-    settings.noteRimWidth,
-    settings.noteRimIntensity,
+    settings.edgeEnabled,
+    settings.noteEdgeColor,
+    settings.noteEdgeWidth,
+    settings.noteEdgeIntensity,
   ])
 
   useEffect(() => {

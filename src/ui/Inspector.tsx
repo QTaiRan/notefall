@@ -81,7 +81,7 @@ export function Inspector() {
         <SliderRow label="Emissive" value={s.noteEmissive} min={0} max={20} step={0.1} onChange={(v) => update({ noteEmissive: v })} defaultValue={def.noteEmissive} />
         <SliderRow label="Opacity" value={s.noteOpacity} min={0} max={1} step={0.01} onChange={(v) => update({ noteOpacity: v })} defaultValue={def.noteOpacity} />
         <SliderRow label="Width" value={s.noteWidthScale} min={0.2} max={1.5} step={0.01} onChange={(v) => update({ noteWidthScale: v })} defaultValue={def.noteWidthScale} />
-        <SliderRow label="Corner Radius" value={s.noteCornerRadius} min={0} max={0.2} step={0.005} onChange={(v) => update({ noteCornerRadius: v })} defaultValue={def.noteCornerRadius} />
+        <SliderRow label="Corner Radius" value={s.noteCornerRadius} min={0} max={0.3} step={0.005} onChange={(v) => update({ noteCornerRadius: v })} defaultValue={def.noteCornerRadius} />
         <SliderRow label="Min Length" value={s.noteMinLength} min={0} max={0.6} step={0.01} onChange={(v) => update({ noteMinLength: v })} defaultValue={def.noteMinLength} />
         <SelectRow
           label="Texture"
@@ -123,7 +123,7 @@ export function Inspector() {
           </div>
         )}
         {/* Texture Scale / Animation / Contrast only matter for the
-            generative or image-based presets — Solid is a flat tint. Rim
+            generative or image-based presets — Solid is a flat tint. Edge
             applies to every preset and is always shown below. */}
         {s.noteTexture !== 'solid' && (
           // Generative presets benefit from a wider range (denser cells /
@@ -166,11 +166,11 @@ export function Inspector() {
           <SliderRow label="Texture Contrast" value={s.noteTextureContrast} min={0.3} max={20} step={0.1} onChange={(v) => update({ noteTextureContrast: v })} defaultValue={def.noteTextureContrast} />
         )}
 
-        <SectionTitle>Rim</SectionTitle>
-        <SwitchRow label="Enabled" value={s.rimEnabled} onChange={(v) => update({ rimEnabled: v })} defaultValue={def.rimEnabled} />
-        <ColorRow label="Color" value={s.noteRimColor} onChange={(v) => update({ noteRimColor: v })} defaultValue={def.noteRimColor} />
-        <SliderRow label="Width" value={s.noteRimWidth} min={0} max={0.1} step={0.001} onChange={(v) => update({ noteRimWidth: v })} defaultValue={def.noteRimWidth} />
-        <SliderRow label="Intensity" value={s.noteRimIntensity} min={0} max={5} step={0.05} onChange={(v) => update({ noteRimIntensity: v })} defaultValue={def.noteRimIntensity} />
+        <SectionTitle>Edge</SectionTitle>
+        <SwitchRow label="Enabled" value={s.edgeEnabled} onChange={(v) => update({ edgeEnabled: v })} defaultValue={def.edgeEnabled} />
+        <ColorRow label="Color" value={s.noteEdgeColor} onChange={(v) => update({ noteEdgeColor: v })} defaultValue={def.noteEdgeColor} />
+        <SliderRow label="Width" value={s.noteEdgeWidth} min={0} max={0.1} step={0.001} onChange={(v) => update({ noteEdgeWidth: v })} defaultValue={def.noteEdgeWidth} />
+        <SliderRow label="Intensity" value={s.noteEdgeIntensity} min={0} max={5} step={0.05} onChange={(v) => update({ noteEdgeIntensity: v })} defaultValue={def.noteEdgeIntensity} />
 
         <SectionTitle>Flash</SectionTitle>
         <SwitchRow label="Enabled" value={s.flashEnabled} onChange={(v) => update({ flashEnabled: v })} defaultValue={def.flashEnabled} />

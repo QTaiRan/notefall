@@ -1,7 +1,5 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate'
-import { migrateManifest } from './migrate'
 import {
-  CURRENT_SCHEMA_VERSION,
   PROJECT_FILE_DESCRIPTION,
   PROJECT_FILE_EXTENSION,
   PROJECT_MIME_TYPE,
@@ -55,7 +53,6 @@ export function pack(project: Project): Blob {
     ? `note-texture${extFromImageMime(project.customTexture.mime)}`
     : null
   const manifest: ProjectManifest = {
-    schemaVersion: CURRENT_SCHEMA_VERSION,
     appVersion: __APP_VERSION__,
     name: project.name,
     createdAt: project.createdAt,
@@ -105,7 +102,10 @@ export async function unpack(buf: ArrayBuffer): Promise<Project> {
   } catch {
     throw new Error('Not a valid notefall project (manifest.json is not JSON)')
   }
-  const manifest = migrateManifest(raw)
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Not a valid notefall project (manifest.json is not an object)')
+  }
+  const manifest = raw as ProjectManifest
 
   // Helper for asset bytes — copies into a fresh ArrayBuffer so the
   // rest of the unzipped tree can be GC'd while only the asset is kept,

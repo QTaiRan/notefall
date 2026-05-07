@@ -14,9 +14,22 @@ import {
   stripExtension,
   unpack,
 } from './io'
-import { NewerVersionError, loadSettings } from './migrate'
 import { addRecent, removeRecent, type RecentEntry } from './recent'
 import type { FileRef, Project } from './types'
+import { defaultSettings, type Settings } from '../store'
+
+/**
+ * Lenient merge of saved partial settings on top of current defaults.
+ * Missing keys fill from `defaultSettings`; unknown keys drop silently
+ * — that's what makes adding/removing a settings key a free change.
+ * Inlined here (rather than living in a separate module) since the
+ * project is pre-1.0 with no users, so we don't need a versioned
+ * migration system; if a saved key is renamed in the future we'll add
+ * one back at that point.
+ */
+function loadSettings(saved: Partial<Settings> | undefined): Settings {
+  return { ...defaultSettings, ...(saved ?? {}) }
+}
 
 /**
  * Top-level project actions used by the Toolbar buttons and global
@@ -35,7 +48,6 @@ export type ActionResult =
   | { kind: 'error'; message: string }
 
 function describeError(e: unknown): string {
-  if (e instanceof NewerVersionError) return e.message
   if (e instanceof Error) return e.message
   return 'Something went wrong'
 }

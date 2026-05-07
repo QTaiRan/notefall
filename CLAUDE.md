@@ -28,8 +28,7 @@ src/
 │  ├ serialize.ts       ParsedSong → SMF bytes (counterpart of parse; used by project Save)
 │  └ edit.ts            editor mutation helpers (delete/move/add/split/setVelocity/resolveOverlaps)
 ├ projects/
-│  ├ types.ts           ProjectManifest / Project / FileRef + CURRENT_SCHEMA_VERSION + extensions
-│  ├ migrate.ts         migrations table + loadSettings lenient merge + NewerVersionError
+│  ├ types.ts           ProjectManifest / Project / FileRef + extensions
 │  ├ io.ts              fflate zip pack/unpack + FSA wrapper + <input>/download fallback
 │  ├ actions.ts         newProject / openProject / openRecent / saveProject / saveProjectAs orchestration
 │  └ recent.ts          IndexedDB-backed recent files list (FSA only) + subscribe channel
@@ -127,7 +126,7 @@ Per-instance attributes:
 - `instanceSelected` (float) — drives the bright white outline for editor selection
 - `instanceAlpha` (float) — drives the 1→0 linear fade for delete-ghost notes (see noteDeathFx)
 
-Fragment shader: clip `vWorldY < uHitY` per-pixel (NOT z-occlusion), then rounded-box SDF, then texture preset (solid / liquid / gem / custom), then rim, then selection outline. Final alpha multiplies by `vAlpha` so dying ghosts can fade.
+Fragment shader: clip `vWorldY < uHitY` per-pixel (NOT z-occlusion), then rounded-box SDF, then texture preset (solid / liquid / gem / custom), then edge (the bright glassy outline), then selection outline. Final alpha multiplies by `vAlpha` so dying ghosts can fade.
 
 CPU-side per `useFrame`:
 - Iterate `song.notes`, place visible bars at `[head, head + max(minLength, naturalLength)]`
@@ -305,18 +304,13 @@ Why file-based and not IndexedDB:
 - `audioTrack` (future) — user-supplied piano audio + sync offset, when that feature ships
 - `name`, `createdAt`, `updatedAt`
 
-**Schema versioning.** Files carry `schemaVersion: number` and `appVersion: string` (from package.json — diagnostic only, never used for branching). Strategy:
-- Settings load is a **lenient merge**: `{ ...defaultSettings, ...saved }`. Missing keys fill with defaults; unknown keys drop silently (`migrate.ts:loadSettings`)
-- `schemaVersion` only increments for **breaking** shape changes (key rename, type change, semantic flip). Each break adds an entry to `migrate.ts:migrations[oldV] = (data) => migratedData`
-- `schemaVersion > CURRENT_SCHEMA_VERSION` → throws `NewerVersionError`, surfaced as an alert ("saved in a newer version"). Failure mode: stale tab loading something the new app saved
-
-So: **adding or removing a settings key needs no migration**. Only renames / restructures cost a migration step.
+**Versioning (pre-1.0).** No schema-version field, no migration table — the project is in beta with no real users, so a breaking shape change just means re-saving any local files. Settings load via a **lenient merge** (`actions.ts:loadSettings` → `{ ...defaultSettings, ...saved }`); missing keys fill with defaults, unknown keys drop silently, renames silently lose the old value. `appVersion` is recorded for diagnostic purposes only. Once we ship to real users, reintroduce a versioned migration step.
 
 **File format.** `.nfz` is a zip (via `fflate`). The container is a regular zip — `unzip my.nfz` works for inspection:
 
 ```
 my-project.nfz  (zip)
-├ manifest.json   { schemaVersion, appVersion, name, createdAt, updatedAt, settings,
+├ manifest.json   { appVersion, name, createdAt, updatedAt, settings,
 │                   songRef: "song.mid" | null,
 │                   customTexture: { ref, mime, fileName } | null }
 └ assets/
@@ -352,10 +346,10 @@ The whole menu disables during recording — any of these would clobber the in-p
 
 **Keyboard shortcuts.** `Cmd/Ctrl+O` (open), `Cmd/Ctrl+S` (save), `Cmd/Ctrl+Shift+S` (save as) are wired in `useGlobalShortcuts.ts` on the **capture phase**, same rationale as `Space`: must beat both the browser's native dialogs (Save Page / Open File) AND any focused react-aria button that might otherwise consume the key event.
 
-**Rules of thumb when changing settings:**
-- New key → add to `defaultSettings`. Old projects load via lenient merge. No migration
-- Removed key → just delete it. Unknown key drops on load. No migration
-- Renamed / type-changed / semantically-changed key → `CURRENT_SCHEMA_VERSION++` and add `migrations[oldV]` that rewrites the field
+**Rules of thumb when changing settings (pre-1.0):**
+- New key → add to `defaultSettings`. Old projects load via lenient merge.
+- Removed key → just delete it. Unknown key drops on load.
+- Renamed / type-changed / semantically-changed key → just rename. Old saved values silently drop and the user re-tweaks; acceptable while there are no real users. Reintroduce a versioned migration step before shipping 1.0.
 
 ## UI layout
 

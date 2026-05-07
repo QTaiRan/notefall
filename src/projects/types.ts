@@ -3,17 +3,14 @@ import type { Settings } from '../store'
 /**
  * On-disk schema for `.nfz` (notefall zip) project files.
  *
- * # Versioning policy
+ * # Versioning policy (pre-1.0)
  *
- * Bump `CURRENT_SCHEMA_VERSION` and add an entry to `migrations` (see
- * `migrate.ts`) ONLY for breaking shape changes:
- *   - renaming a settings key
- *   - changing a settings value's type or units
- *   - changing the meaning of an existing key
- *
- * Adding or removing a settings key is FREE — `loadSettings` lenient-merges
- * over `defaultSettings`, so missing keys fill with defaults and unknown
- * keys drop silently. Most app evolution lives in this category.
+ * No migration / schema-version system right now — the project is in
+ * beta with no real users, so a breaking shape change just requires
+ * re-saving any local files. Settings load via a lenient merge
+ * (`actions.ts:loadSettings`) so adding/removing keys is free; renames
+ * silently drop the old key. Add a migration step back in once we
+ * actually ship to users.
  *
  * # Layout inside the .nfz zip
  *
@@ -26,8 +23,6 @@ import type { Settings } from '../store'
  * so the zip stays self-describing on hand-extraction and avoids the 33%
  * inflation of base64 — MIDI is typically the largest payload in a project.
  */
-
-export const CURRENT_SCHEMA_VERSION = 1 as const
 
 // `.nfz` = "notefall zip". Three-letter extension matches the convention
 // used by other creative tools (.psd, .fig, .als) and keeps file lists
@@ -57,7 +52,7 @@ export type AssetRef = {
  * doesn't need a schema bump because old loaders ignore unknown keys.
  */
 export type ProjectManifest = {
-  schemaVersion: number
+  /** Diagnostic only — recorded for debugging, not used for branching. */
   appVersion: string
   name: string
   createdAt: number
@@ -65,10 +60,9 @@ export type ProjectManifest = {
   settings: Partial<Settings>
   songRef: string | null
   /**
-   * User-uploaded image for the `noteTexture: 'custom'` preset. Optional
-   * — old projects (or projects that never picked an image) won't carry
-   * this field, and pre-`customTexture` versions of the loader simply
-   * ignore it. No schema bump needed for the addition.
+   * User-uploaded image for the `noteTexture: 'custom'` preset.
+   * Optional — projects that never picked an image (or were saved by an
+   * older build that pre-dates this field) simply omit it.
    */
   customTexture?: AssetRef | null
 }

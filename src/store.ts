@@ -14,7 +14,7 @@ export type FallDirection = 'down' | 'up'
  * Surface treatment applied to falling-note instances. Add new entries here
  * AND add a matching code path inside FallingNotes' fragment shader.
  * - 'solid'  — flat tinted fill (legacy behavior)
- * - 'liquid' — molten-metal flow with bright glassy rim, FBM-driven
+ * - 'liquid' — molten-metal flow with bright glassy edge, FBM-driven
  * - 'gem'    — cut-crystal facets with bright cell edges, Voronoi-driven
  * - 'custom' — user-provided image (managed via useCustomTexture store)
  */
@@ -71,16 +71,15 @@ export type Settings = {
   // Push factor on bright spots — higher = more contrast between dark and
   // highlight regions of the pattern.
   noteTextureContrast: number
-  // Bright rim around the SDF edge — applies to every texture preset
-  // (including 'solid'). The rim is a polished outline drawn on top of the
-  // note's fill, intended for the "glassy edge" highlight regardless of
-  // the surface treatment.
-  rimEnabled: boolean
-  noteRimColor: string
-  // Rim thickness in world units. 0 = no rim.
-  noteRimWidth: number
-  // Rim brightness multiplier on the chosen color.
-  noteRimIntensity: number
+  // Bright outline around the SDF edge — applies to every texture preset
+  // (including 'solid'). Drawn on top of the note's fill, intended for the
+  // "glassy edge" highlight regardless of the surface treatment.
+  edgeEnabled: boolean
+  noteEdgeColor: string
+  // Edge thickness in world units. 0 = no edge.
+  noteEdgeWidth: number
+  // Edge brightness multiplier on the chosen color.
+  noteEdgeIntensity: number
   // White flash that appears at the contact line while a note is held
   flashEnabled: boolean
   // When true, flash uses noteColor instead of the explicit flashColor.
@@ -261,10 +260,10 @@ export const defaultSettings: Settings = {
   noteTextureBlur: 0.0,
   noteTextureVariation: 0.0,
   noteTextureContrast: 2.5,
-  rimEnabled: true,
-  noteRimColor: '#ffffff',
-  noteRimWidth: 0,
-  noteRimIntensity: 1.0,
+  edgeEnabled: true,
+  noteEdgeColor: '#ffffff',
+  noteEdgeWidth: 0,
+  noteEdgeIntensity: 1.0,
   flashEnabled: true,
   flashFollowNote: true,
   flashBrightness: 0.5,
