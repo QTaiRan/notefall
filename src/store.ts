@@ -173,6 +173,9 @@ export type Settings = {
   // Keyboard
   whiteKeyColor: string
   blackKeyColor: string
+  // Wood chassis tint (the strip below each white-key cap, visible
+  // through the 4% inter-key gap and any black-key notches).
+  woodColor: string
   keyboardBrightness: number
   keyGlowEnabled: boolean
   // When true, keyboard press-glow uses noteColor. When false, the user's
@@ -317,6 +320,7 @@ export const defaultSettings: Settings = {
   backgroundColor: '#05060a',
   whiteKeyColor: '#f5f5f5',
   blackKeyColor: '#161616',
+  woodColor: '#362A1B',
   keyboardBrightness: 0.5,
   keyGlowEnabled: true,
   keyGlowFollowNote: true,

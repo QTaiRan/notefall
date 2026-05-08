@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  adjacentBlackKeys,
   BLACK_KEY_LENGTH,
   BLACK_KEY_THICKNESS,
   BLACK_KEY_WIDTH,
@@ -8,8 +9,8 @@ import {
 } from "./layout";
 
 // Wood chassis below the white cap, visible through the 4% inter-key gap.
-export const WHITE_BODY_HEIGHT = 0.12;
-export const WOOD_COLOR = "#c8a878";
+export const WHITE_BODY_HEIGHT = 0.22;
+export const WOOD_COLOR = "#362A1B";
 export const WOOD_TOP_GAP = 0.001;
 export const WHITE_CAP_THICKNESS = 0.01;
 const WHITE_CAP_CORNER_RADIUS = 0.025;
@@ -19,7 +20,7 @@ const WHITE_CAP_CORNER_RADIUS = 0.025;
 const BLACK_SLOPE_ANGLE_DEG = 55;
 const BLACK_SLOPE_Y =
   BLACK_KEY_THICKNESS / Math.tan((BLACK_SLOPE_ANGLE_DEG * Math.PI) / 180);
-const BLACK_KEY_PIERCE = 0.06;
+const BLACK_KEY_PIERCE = 0.18;
 // Top-face front/back recess and fillet z-rise (in cross-section). The
 // slope ends at z = t - INSET; a fillet ring rounds the remaining INSET
 // in z while inseting INSET in y at the front/back. In x the fillet does
@@ -622,23 +623,72 @@ function averageSharedNormals(geom: THREE.BufferGeometry) {
   nrm.needsUpdate = true;
 }
 
+// Padding between the white-key notch outline and the adjacent black-key
+// footprint. Matches the visible 4% inter-key gap so the black key sits in
+// its socket with a thin black seam around it instead of touching white.
+const WHITE_NOTCH_PAD = 0.006;
+
+// Black-key extent inside an adjacent white key's mesh-local frame. The
+// black key center sits at world x = whiteX ± WHITE_KEY_WIDTH/2 (boundary
+// between the two whites), and extends ± BLACK_KEY_WIDTH·0.96/2 around
+// that. The overlapping x-range with the white begins this far inside the
+// boundary.
+const BLACK_HALF_W_RENDERED = (BLACK_KEY_WIDTH * 0.96) / 2;
+// Distance from the white-key boundary inward to the black-key edge.
+const NOTCH_INSET_FROM_BOUNDARY =
+  WHITE_KEY_WIDTH / 2 - BLACK_HALF_W_RENDERED - WHITE_NOTCH_PAD;
+// Black-key front-edge y in white's mesh-local frame, padded toward the
+// white-key front so the notch corner has breathing room.
+const NOTCH_FRONT_Y =
+  WHITE_KEY_LENGTH / 2 - BLACK_KEY_LENGTH + 0.01 - WHITE_NOTCH_PAD;
+
 // White cap — rounded-corner extruded solid. Visible top at mesh-local
 // z=0; cap extends to z=-WHITE_CAP_THICKNESS where the wood chassis
 // takes over.
-function createRoundedWhiteGeometry(): THREE.BufferGeometry {
+//
+// `leftBlack`/`rightBlack` notch out the back-left/back-right corner so
+// adjacent black keys sit in actual sockets — when a black key dips on
+// press it stays visible from above instead of being clipped by the
+// white-cap top plane it would otherwise be sliding below.
+function createRoundedWhiteGeometry(
+  leftBlack: boolean,
+  rightBlack: boolean,
+): THREE.BufferGeometry {
   const halfW = (WHITE_KEY_WIDTH * 0.96) / 2;
   const halfL = WHITE_KEY_LENGTH / 2;
   const r = WHITE_CAP_CORNER_RADIUS;
+  const nRX = NOTCH_INSET_FROM_BOUNDARY; // right-notch inner x (>0)
+  const nLX = -NOTCH_INSET_FROM_BOUNDARY; // left-notch inner x (<0)
+  const nY = NOTCH_FRONT_Y; // notch front edge y (negative-ish)
+
   const shape = new THREE.Shape();
+  // CCW from front-left rounded corner.
   shape.moveTo(-halfW + r, -halfL);
   shape.lineTo(+halfW - r, -halfL);
   shape.quadraticCurveTo(+halfW, -halfL, +halfW, -halfL + r);
-  shape.lineTo(+halfW, +halfL - r);
-  shape.quadraticCurveTo(+halfW, +halfL, +halfW - r, +halfL);
-  shape.lineTo(-halfW + r, +halfL);
-  shape.quadraticCurveTo(-halfW, +halfL, -halfW, +halfL - r);
+  if (rightBlack) {
+    // Right side runs straight up to the notch front, then jogs in along
+    // the black key's footprint and continues to the back edge at the
+    // notch's inner x.
+    shape.lineTo(+halfW, nY);
+    shape.lineTo(+nRX, nY);
+    shape.lineTo(+nRX, +halfL);
+  } else {
+    shape.lineTo(+halfW, +halfL - r);
+    shape.quadraticCurveTo(+halfW, +halfL, +halfW - r, +halfL);
+  }
+  if (leftBlack) {
+    // Mirror of the right notch, traversed in CCW direction.
+    shape.lineTo(nLX, +halfL);
+    shape.lineTo(nLX, nY);
+    shape.lineTo(-halfW, nY);
+  } else {
+    shape.lineTo(-halfW + r, +halfL);
+    shape.quadraticCurveTo(-halfW, +halfL, -halfW, +halfL - r);
+  }
   shape.lineTo(-halfW, -halfL + r);
   shape.quadraticCurveTo(-halfW, -halfL, -halfW + r, -halfL);
+
   const geom = new THREE.ExtrudeGeometry(shape, {
     depth: WHITE_CAP_THICKNESS,
     bevelEnabled: false,
@@ -649,19 +699,85 @@ function createRoundedWhiteGeometry(): THREE.BufferGeometry {
   return geom;
 }
 
-export const BLACK_KEY_GEOMETRY = createChamferedBlackGeometry();
-export const WHITE_KEY_GEOMETRY = createRoundedWhiteGeometry();
-export const WHITE_BODY_GEOMETRY = new THREE.BoxGeometry(
-  WHITE_KEY_WIDTH,
-  WHITE_KEY_LENGTH,
-  WHITE_BODY_HEIGHT,
-);
+// Cache by neighbor configuration — only 4 unique cap shapes across all
+// 52 white keys.
+const WHITE_GEOM_CACHE = new Map<string, THREE.BufferGeometry>();
+export function whiteKeyGeometryFor(midi: number): THREE.BufferGeometry {
+  const { left, right } = adjacentBlackKeys(midi);
+  const key = `${left ? "L" : "_"}${right ? "R" : "_"}`;
+  let g = WHITE_GEOM_CACHE.get(key);
+  if (!g) {
+    g = createRoundedWhiteGeometry(!!left, !!right);
+    WHITE_GEOM_CACHE.set(key, g);
+  }
+  return g;
+}
 
-// Wood-body top face uses a darker material than its sides so the inter-key
-// gap reads as black-between-the-keys instead of a yellow stripe.
-// BoxGeometry face order is [+X, -X, +Y, -Y, +Z, -Z].
+export const BLACK_KEY_GEOMETRY = createChamferedBlackGeometry();
+
+// Wood body — extruded with the SAME notch shape as the white cap, but at
+// the full key width (no 4% inset; sides fill the inter-key gap so it
+// reads as the body of the keyboard chassis). Carving the notch through
+// the body removes the dark-top fill that would otherwise show through
+// the cap notch when the black key dips, leaving a real cavity for the
+// black key to sink into.
+function buildWhiteBodyShape(
+  leftBlack: boolean,
+  rightBlack: boolean,
+): THREE.Shape {
+  const halfW = WHITE_KEY_WIDTH / 2;
+  const halfL = WHITE_KEY_LENGTH / 2;
+  const nRX = NOTCH_INSET_FROM_BOUNDARY;
+  const nLX = -NOTCH_INSET_FROM_BOUNDARY;
+  const nY = NOTCH_FRONT_Y;
+
+  const shape = new THREE.Shape();
+  shape.moveTo(-halfW, -halfL);
+  shape.lineTo(+halfW, -halfL);
+  if (rightBlack) {
+    shape.lineTo(+halfW, nY);
+    shape.lineTo(+nRX, nY);
+    shape.lineTo(+nRX, +halfL);
+  } else {
+    shape.lineTo(+halfW, +halfL);
+  }
+  if (leftBlack) {
+    shape.lineTo(nLX, +halfL);
+    shape.lineTo(nLX, nY);
+    shape.lineTo(-halfW, nY);
+  } else {
+    shape.lineTo(-halfW, +halfL);
+  }
+  shape.lineTo(-halfW, -halfL);
+  return shape;
+}
+
+const WHITE_BODY_GEOM_CACHE = new Map<string, THREE.BufferGeometry>();
+export function whiteBodyGeometryFor(midi: number): THREE.BufferGeometry {
+  const { left, right } = adjacentBlackKeys(midi);
+  const key = `${left ? "L" : "_"}${right ? "R" : "_"}`;
+  let g = WHITE_BODY_GEOM_CACHE.get(key);
+  if (!g) {
+    const shape = buildWhiteBodyShape(!!left, !!right);
+    g = new THREE.ExtrudeGeometry(shape, {
+      depth: WHITE_BODY_HEIGHT,
+      bevelEnabled: false,
+      curveSegments: 1,
+    });
+    // Top face at mesh-local z=0, bottom at z=-WHITE_BODY_HEIGHT.
+    g.translate(0, 0, -WHITE_BODY_HEIGHT);
+    WHITE_BODY_GEOM_CACHE.set(key, g);
+  }
+  return g;
+}
+
+// ExtrudeGeometry assigns material index 0 to the front+back caps and
+// index 1 to the side walls. Top cap is what's visible through the cap's
+// 4% inter-key gap; sides are the chassis sides.
 const WHITE_BODY_TOP_COLOR = "#0a0a0a";
-const WHITE_BODY_WOOD_MATERIAL = new THREE.MeshStandardMaterial({
+// Exported so Keyboard.tsx can drive `color` from `settings.woodColor`
+// per frame without needing per-key materials.
+export const WHITE_BODY_WOOD_MATERIAL = new THREE.MeshStandardMaterial({
   color: WOOD_COLOR,
   roughness: 0.85,
   metalness: 0,
@@ -672,10 +788,6 @@ const WHITE_BODY_TOP_MATERIAL = new THREE.MeshStandardMaterial({
   metalness: 0,
 });
 export const WHITE_BODY_MATERIALS: THREE.Material[] = [
-  WHITE_BODY_WOOD_MATERIAL, // +X
-  WHITE_BODY_WOOD_MATERIAL, // -X
-  WHITE_BODY_WOOD_MATERIAL, // +Y
-  WHITE_BODY_WOOD_MATERIAL, // -Y
-  WHITE_BODY_TOP_MATERIAL, // +Z (the visible top through the gap)
-  WHITE_BODY_WOOD_MATERIAL, // -Z
+  WHITE_BODY_TOP_MATERIAL, // group 0: caps (top + bottom; top visible)
+  WHITE_BODY_WOOD_MATERIAL, // group 1: side walls (outer + inner notch)
 ];

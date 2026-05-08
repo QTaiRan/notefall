@@ -242,6 +242,7 @@ export function Inspector() {
         <SliderRow label="Brightness" value={s.keyboardBrightness} min={0} max={2} step={0.01} onChange={(v) => update({ keyboardBrightness: v })} defaultValue={def.keyboardBrightness} />
         <ColorRow label="White Keys" value={s.whiteKeyColor} onChange={(v) => update({ whiteKeyColor: v })} defaultValue={def.whiteKeyColor} />
         <ColorRow label="Black Keys" value={s.blackKeyColor} onChange={(v) => update({ blackKeyColor: v })} defaultValue={def.blackKeyColor} />
+        <ColorRow label="Wood" value={s.woodColor} onChange={(v) => update({ woodColor: v })} defaultValue={def.woodColor} />
         <SwitchRow label="Glow Enabled" value={s.keyGlowEnabled} onChange={(v) => update({ keyGlowEnabled: v })} defaultValue={def.keyGlowEnabled} />
         <SwitchRow label="Glow Follows Note" value={s.keyGlowFollowNote} onChange={(v) => update({ keyGlowFollowNote: v })} defaultValue={def.keyGlowFollowNote} />
         {!s.keyGlowFollowNote && (

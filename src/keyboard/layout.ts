@@ -24,7 +24,7 @@ export const BLACK_KEY_LENGTH = 0.95
 // Vertical extrusion of the black keys above the white surface. Drives the
 // per-fragment shadow projection in the white-key shader (taller key →
 // longer shadow), and the press-down animation depth.
-export const BLACK_KEY_THICKNESS = 0.125
+export const BLACK_KEY_THICKNESS = 0.09
 
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10])
 

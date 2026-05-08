@@ -7,11 +7,25 @@ import { KEYBOARD_LAYOUT } from "./layout";
 export const LIGHT_Z = 0.4;
 // `exp(-(dx²·X + dy²·Y))`. X dominates so a fragment off to the side dims
 // visibly even though the back-edge light is always ≥1 wu in front of it.
-const LIGHT_FALLOFF_X = 1.5;
-const LIGHT_FALLOFF_Y = 1.0;
-const LIGHT_BOOST = 1.7;
+// These are *base* values mapped to user-facing flash settings:
+//   uFalloffX = LIGHT_FALLOFF_X_BASE / (flashWidth / DEFAULT_FLASH_WIDTH)
+//   uFalloffY = LIGHT_FALLOFF_Y_BASE / (flashSize  / DEFAULT_FLASH_SIZE)
+//   uLightBoost = LIGHT_BOOST_BASE * (flashIntensity / DEFAULT_FLASH_INT)
+//   uShadowHalo = SHADOW_HALO_BASE * (flashHaloWidth / DEFAULT_FLASH_HALO)
+// At default settings the values reproduce the prior hardcoded look.
+export const LIGHT_FALLOFF_X_BASE = 1.5;
+export const LIGHT_FALLOFF_Y_BASE = 1.0;
+export const LIGHT_BOOST_BASE = 1.7;
+export const SHADOW_HALO_BASE = 0.01;
+// Power applied to (flashHaloWidth / DEFAULT) before scaling SHADOW_HALO_BASE.
+// 1 = linear; >1 makes the slider more sensitive away from its default
+// without shifting the default value itself.
+export const SHADOW_HALO_RESPONSE = 3;
+export const DEFAULT_FLASH_INTENSITY = 1.1;
+export const DEFAULT_FLASH_SIZE = 2.5;
+export const DEFAULT_FLASH_WIDTH = 2.5;
+export const DEFAULT_FLASH_HALO = 0.5;
 const SHADOW_FEATHER = 0.005;
-const SHADOW_HALO = 0.01;
 // >1.0 pushes the lit-area formula negative inside the silhouette so the
 // surface is actively darkened, not just stripped of the additive boost.
 const SHADOW_OPACITY = 1.0;
@@ -60,6 +74,10 @@ export type SharedLightUniforms = {
   uLightStrength: { value: number };
   uBlackGlow: { value: Float32Array };
   uActiveShadowGrow: { value: number };
+  uLightBoost: { value: number };
+  uFalloffX: { value: number };
+  uFalloffY: { value: number };
+  uShadowHalo: { value: number };
 };
 
 // Patch MeshStandardMaterial: ADD per-flash light + black-key shadow
@@ -105,6 +123,10 @@ export function patchWhiteKeyMaterial(
         uniform float uBlackKeyTop;
         uniform float uLightStrength;
         uniform float uActiveShadowGrow;
+        uniform float uLightBoost;
+        uniform float uFalloffX;
+        uniform float uFalloffY;
+        uniform float uShadowHalo;
         varying vec2 vGroupXY;
 
         // Reverse-project this fragment through L onto z=uBlackKeyTop and
@@ -122,7 +144,7 @@ export function patchWhiteKeyMaterial(
           float sdf = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
           return 1.0 - smoothstep(
             -${SHADOW_FEATHER.toFixed(4)},
-            ${SHADOW_HALO.toFixed(4)},
+            uShadowHalo,
             sdf
           );
         }
@@ -156,14 +178,14 @@ export function patchWhiteKeyMaterial(
             float dx = vGroupXY.x - L.x;
             float dy = vGroupXY.y - L.y;
             float falloff = exp(
-              -dx * dx * ${LIGHT_FALLOFF_X.toFixed(3)}
-              -dy * dy * ${LIGHT_FALLOFF_Y.toFixed(3)}
+              -dx * dx * uFalloffX
+              -dy * dy * uFalloffY
             );
             float shadow = maxShadow(L);
             float effective = intensity * falloff * (
               1.0 - shadow * falloff * ${SHADOW_OPACITY.toFixed(3)}
             );
-            totalContribution += vec3(${LIGHT_BOOST.toFixed(3)}) * uLightStrength * effective;
+            totalContribution += vec3(uLightBoost) * uLightStrength * effective;
           }
           // Clamp: protects against stacked shadows crushing to black /
           // dense chords saturating to white.

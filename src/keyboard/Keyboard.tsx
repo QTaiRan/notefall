@@ -15,11 +15,11 @@ import {
 } from "./layout";
 import {
   BLACK_KEY_GEOMETRY,
-  WHITE_BODY_GEOMETRY,
-  WHITE_BODY_HEIGHT,
   WHITE_BODY_MATERIALS,
+  WHITE_BODY_WOOD_MATERIAL,
   WHITE_CAP_THICKNESS,
-  WHITE_KEY_GEOMETRY,
+  whiteBodyGeometryFor,
+  whiteKeyGeometryFor,
   WOOD_TOP_GAP,
 } from "./geometry";
 import {
@@ -27,8 +27,17 @@ import {
   BLACK_KEY_BOUNDS,
   BLACK_KEY_COUNT,
   BLACK_KEY_INDICES,
+  DEFAULT_FLASH_HALO,
+  DEFAULT_FLASH_INTENSITY,
+  DEFAULT_FLASH_SIZE,
+  DEFAULT_FLASH_WIDTH,
+  LIGHT_BOOST_BASE,
+  LIGHT_FALLOFF_X_BASE,
+  LIGHT_FALLOFF_Y_BASE,
   LIGHT_Z,
   MAX_LIGHTS,
+  SHADOW_HALO_BASE,
+  SHADOW_HALO_RESPONSE,
   patchWhiteKeyMaterial,
   type SharedLightUniforms,
   type WhiteKeyUniforms,
@@ -44,8 +53,8 @@ import { audioEngine } from "../audio/engine";
 const PRESS_TC = 0.022;
 const WHITE_PRESS_DEPTH = 0.12;
 const BLACK_PRESS_DEPTH = 0.08;
-const WHITE_PIVOT_DIP = 0.018;
-const BLACK_PIVOT_DIP = 0.022;
+const WHITE_PIVOT_DIP = 0.035;
+const BLACK_PIVOT_DIP = 0.05;
 const WHITE_PRESS_ANGLE =
   (WHITE_PRESS_DEPTH - WHITE_PIVOT_DIP) / WHITE_KEY_LENGTH;
 const BLACK_PRESS_ANGLE =
@@ -60,6 +69,17 @@ const SLOPE_TINT_FACTOR = 0.12;
 // gray, multiplied by keyboardBrightness in useFrame. Static, not derived
 // from blackKeyColor, so the seam stays visible regardless of theme.
 const FILLET_FRONT_COLOR = new THREE.Color("#808080");
+
+// Black-key press tint: when held, lerp every surface (body / slope /
+// fillet-front) toward the glow color by `glow × this`. Without this,
+// only the emissive channel carried the press color, which read as
+// "lit from inside" on the flat top but barely registered on the
+// slope / sides because their dark base color dominated under shading.
+// Tinting the actual base color makes the entire key visibly take on
+// the press color, not just the most directly-lit face.
+const BLACK_PRESS_TINT_STRENGTH = 0.85;
+// Reusable scratch instance — lerping the press tint allocates nothing.
+const PRESS_TINT_SCRATCH = new THREE.Color();
 
 export function Keyboard() {
   const settings = useStore((s) => s.settings);
@@ -135,6 +155,10 @@ export function Keyboard() {
       uLightStrength: { value: 0 },
       uBlackGlow: { value: new Float32Array(BLACK_KEY_COUNT) },
       uActiveShadowGrow: { value: ACTIVE_SHADOW_GROW },
+      uLightBoost: { value: LIGHT_BOOST_BASE },
+      uFalloffX: { value: LIGHT_FALLOFF_X_BASE },
+      uFalloffY: { value: LIGHT_FALLOFF_Y_BASE },
+      uShadowHalo: { value: SHADOW_HALO_BASE },
     }),
     [],
   );
@@ -344,12 +368,22 @@ export function Keyboard() {
         : settings.whiteKeyColor;
       mat.color.set(baseColor).multiplyScalar(brightness);
       const e = glow[i];
-      if (e > 0.001 && settings.keyGlowEnabled) {
-        mat.emissive.set(
-          settings.keyGlowFollowNote
-            ? settings.noteColor
-            : settings.keyGlowColor,
+      const glowOn = e > 0.001 && settings.keyGlowEnabled;
+      const glowColorHex = settings.keyGlowFollowNote
+        ? settings.noteColor
+        : settings.keyGlowColor;
+      // Black-key surface tint: bring the actual color toward the glow
+      // color, scaled brightness. White keys keep their pristine surface
+      // (the additive emissive already reads cleanly off light gray).
+      if (glowOn && k.isBlack) {
+        PRESS_TINT_SCRATCH.set(glowColorHex).multiplyScalar(brightness);
+        mat.color.lerp(
+          PRESS_TINT_SCRATCH,
+          Math.min(1, e * BLACK_PRESS_TINT_STRENGTH),
         );
+      }
+      if (glowOn) {
+        mat.emissive.set(glowColorHex);
         mat.emissiveIntensity = e * settings.keyGlowIntensity * brightness;
       } else {
         mat.emissiveIntensity = 0;
@@ -364,6 +398,13 @@ export function Keyboard() {
           .set(baseColor)
           .lerp(SLOPE_TINT_TARGET, SLOPE_TINT_FACTOR)
           .multiplyScalar(brightness);
+        if (glowOn) {
+          PRESS_TINT_SCRATCH.set(glowColorHex).multiplyScalar(brightness);
+          slopeMat.color.lerp(
+            PRESS_TINT_SCRATCH,
+            Math.min(1, e * BLACK_PRESS_TINT_STRENGTH),
+          );
+        }
         slopeMat.emissive.copy(mat.emissive);
         slopeMat.emissiveIntensity = mat.emissiveIntensity;
       }
@@ -372,10 +413,23 @@ export function Keyboard() {
       const filletMat = filletMatRefs.current[i];
       if (filletMat) {
         filletMat.color.copy(FILLET_FRONT_COLOR).multiplyScalar(brightness);
+        if (glowOn) {
+          PRESS_TINT_SCRATCH.set(glowColorHex).multiplyScalar(brightness);
+          filletMat.color.lerp(
+            PRESS_TINT_SCRATCH,
+            Math.min(1, e * BLACK_PRESS_TINT_STRENGTH),
+          );
+        }
         filletMat.emissive.copy(mat.emissive);
         filletMat.emissiveIntensity = mat.emissiveIntensity;
       }
     }
+
+    // Wood chassis tint — single shared material, single color.set per
+    // frame. Brightness multiplied so it dims with the rest of the keys.
+    WHITE_BODY_WOOD_MATERIAL.color
+      .set(settings.woodColor)
+      .multiplyScalar(brightness);
 
     const lightXYs = sharedLightUniforms.uLightXYs.value;
     const lightIntensities = sharedLightUniforms.uLightIntensities.value;
@@ -383,6 +437,19 @@ export function Keyboard() {
     sharedLightUniforms.uLightStrength.value = settings.flashEnabled
       ? settings.flashBrightness
       : 0;
+    // Mirror flash UI sliders into the white-key shadow shader so the
+    // glow on the white surface matches the LandingFlashes plane visually.
+    // Mapping is calibrated so each slider's *default* reproduces the
+    // pre-uniform hardcoded look.
+    sharedLightUniforms.uLightBoost.value =
+      LIGHT_BOOST_BASE * (settings.flashIntensity / DEFAULT_FLASH_INTENSITY);
+    sharedLightUniforms.uFalloffX.value =
+      LIGHT_FALLOFF_X_BASE * (DEFAULT_FLASH_WIDTH / Math.max(0.01, settings.flashWidth));
+    sharedLightUniforms.uFalloffY.value =
+      LIGHT_FALLOFF_Y_BASE * (DEFAULT_FLASH_SIZE / Math.max(0.01, settings.flashSize));
+    sharedLightUniforms.uShadowHalo.value =
+      SHADOW_HALO_BASE *
+      Math.pow(settings.flashHaloWidth / DEFAULT_FLASH_HALO, SHADOW_HALO_RESPONSE);
     for (let bk = 0; bk < BLACK_KEY_COUNT; bk++) {
       blackGlow[bk] = Math.min(1, glow[BLACK_KEY_INDICES[bk]]);
     }
@@ -460,7 +527,9 @@ export function Keyboard() {
               // White: imperative material (shadow-projection patch).
               // Black: declarative material child below.
               material={isBlack ? undefined : (customMat ?? undefined)}
-              geometry={isBlack ? BLACK_KEY_GEOMETRY : WHITE_KEY_GEOMETRY}
+              geometry={
+                isBlack ? BLACK_KEY_GEOMETRY : whiteKeyGeometryFor(k.midi)
+              }
             >
               {isBlack && (
                 <>
@@ -490,14 +559,15 @@ export function Keyboard() {
             </mesh>
             {!isBlack && (
               <mesh
+                // ExtrudeGeometry's top cap sits at mesh-local z=0 (after
+                // translate); position the mesh so that lands at
+                // -CAP-GAP, matching the cap's underside.
                 position={[
                   0,
                   -k.length / 2,
-                  -WHITE_CAP_THICKNESS -
-                    WOOD_TOP_GAP -
-                    WHITE_BODY_HEIGHT / 2,
+                  -WHITE_CAP_THICKNESS - WOOD_TOP_GAP,
                 ]}
-                geometry={WHITE_BODY_GEOMETRY}
+                geometry={whiteBodyGeometryFor(k.midi)}
                 material={WHITE_BODY_MATERIALS}
               />
             )}
