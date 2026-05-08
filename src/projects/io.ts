@@ -174,6 +174,21 @@ const ACCEPT_TYPES = [
     accept: { [PICKER_MIME]: [PROJECT_FILE_EXTENSION] },
   },
 ]
+// Accept list for the unified Open dialog: notefall projects (`.nfz`)
+// and raw MIDI files combined into a single group. Splitting them into
+// two entries (one per MIME) makes the picker render two filters and
+// — on macOS — grays out whichever isn't currently selected. A single
+// entry with all extensions keeps both file types selectable at once.
+// MIME stays neutral (`application/octet-stream`) so the picker filters
+// purely by the extension list.
+const OPEN_ACCEPT_TYPES = [
+  {
+    description: 'notefall project or MIDI',
+    accept: {
+      [PICKER_MIME]: [PROJECT_FILE_EXTENSION, '.mid', '.midi'],
+    },
+  },
+]
 
 // ───────── Open ─────────
 
@@ -182,7 +197,7 @@ export async function showOpen(): Promise<{ buf: ArrayBuffer; ref: FileRef } | n
     let handles: FileSystemFileHandle[]
     try {
       handles = await (window as any).showOpenFilePicker({
-        types: ACCEPT_TYPES,
+        types: OPEN_ACCEPT_TYPES,
         multiple: false,
         excludeAcceptAllOption: false,
       })
@@ -192,9 +207,13 @@ export async function showOpen(): Promise<{ buf: ArrayBuffer; ref: FileRef } | n
     }
     const handle = handles[0]
     const file = await handle.getFile()
+    // MIDI files don't get a write handle stored — there's no Save
+    // path back to a `.mid`, so a handle would be misleading. Project
+    // files keep theirs for in-place Cmd+S.
+    const isMidi = isMidiName(file.name)
     return {
       buf: await file.arrayBuffer(),
-      ref: { name: file.name, handle },
+      ref: { name: file.name, handle: isMidi ? null : handle },
     }
   }
 
@@ -202,7 +221,7 @@ export async function showOpen(): Promise<{ buf: ArrayBuffer; ref: FileRef } | n
   return new Promise((resolve, reject) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = PROJECT_FILE_EXTENSION
+    input.accept = `${PROJECT_FILE_EXTENSION},.mid,.midi,audio/midi,audio/x-midi`
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) {
@@ -223,6 +242,16 @@ export async function showOpen(): Promise<{ buf: ArrayBuffer; ref: FileRef } | n
     // cancel; the caller treats no-call as a no-op.
     input.click()
   })
+}
+
+/** True for filenames ending in .mid / .midi (case-insensitive). */
+export function isMidiName(name: string): boolean {
+  return /\.midi?$/i.test(name)
+}
+
+/** True for filenames ending in `.nfz` (case-insensitive). */
+export function isProjectName(name: string): boolean {
+  return name.toLowerCase().endsWith(PROJECT_FILE_EXTENSION)
 }
 
 /**

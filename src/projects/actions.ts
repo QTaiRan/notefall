@@ -6,6 +6,8 @@ import { useStore } from '../store'
 import { showConfirm } from '../ui/confirm'
 import {
   ensureExtension,
+  isMidiName,
+  isProjectName,
   openFromHandle,
   pack,
   saveTo,
@@ -45,7 +47,7 @@ function loadSettings(saved: Partial<Settings> | undefined): Settings {
 export type ActionResult =
   | { kind: 'ok' }
   | { kind: 'cancelled' }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; title?: string }
 
 function describeError(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -54,6 +56,10 @@ function describeError(e: unknown): string {
 
 function suggestedFilename(): string {
   const s = useStore.getState()
+  // Explicit user-edited project name wins so Save As / new-file Save
+  // both reflect a recently-typed rename even when an existing
+  // currentFile is in play.
+  if (s.projectName) return ensureExtension(s.projectName)
   if (s.currentFile) return s.currentFile.name
   // Prefer the loaded MIDI's filename (without .mid) as the seed; otherwise
   // a generic name. The user can rename in the Save As dialog anyway.
@@ -69,7 +75,10 @@ function buildProjectFromState(name: string): Project {
   const tex = useCustomTexture.getState()
   const now = Date.now()
   return {
-    name: stripExtension(name),
+    // User-edited project name takes precedence over the on-disk
+    // filename so a rename without subsequent Save As still persists
+    // into manifest.name.
+    name: s.projectName || stripExtension(name),
     createdAt: now,
     updatedAt: now,
     settings: s.settings,
@@ -104,7 +113,41 @@ async function confirmDiscardIfDirty(messagePrefix: string, confirmLabel: string
  * `openRecent` (handle from the recents list) so the unpack / migrate /
  * audio sync / recent-list update logic stays in one place.
  */
-async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef): Promise<ActionResult> {
+/**
+ * Apply a raw MIDI file's bytes — replaces the loaded song while
+ * leaving settings and the custom texture alone (the user opened a
+ * MIDI, not a whole project). `ref` is recorded so the title bar can
+ * show the filename, but `currentFile` stays null since `Save` /
+ * `Save As` always produce `.nfz`, never `.mid`.
+ */
+async function applyOpenedMidi(buf: ArrayBuffer, name: string): Promise<ActionResult> {
+  let parsed
+  try {
+    parsed = await parseMidi(buf, name)
+  } catch (e) {
+    return {
+      kind: 'error',
+      title: 'Could not load MIDI',
+      message: `"${name}" could not be parsed.\n\n${describeError(e)}`,
+    }
+  }
+  // Seed projectName from the MIDI filename (minus extension) so a
+  // subsequent Save As suggests something meaningful instead of
+  // "Untitled". setSong marks dirty, so this load reads as unsaved
+  // work the user must explicitly Save / Save As — same as before.
+  // If the user has already typed a custom projectName for the
+  // current session, keep it: opening a MIDI replaces only the song,
+  // so a name they intentionally chose shouldn't be clobbered.
+  const existing = useStore.getState().projectName
+  const seedName = name.replace(/\.midi?$/i, '') || 'Untitled'
+  useStore.getState().setSong(parsed)
+  if (!existing) useStore.setState({ projectName: seedName })
+  audioEngine.loadSong(parsed)
+  useStore.getState().setTransport('stopped')
+  return { kind: 'ok' }
+}
+
+async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef | null): Promise<ActionResult> {
   let project: Project
   try {
     project = await unpack(buf)
@@ -123,7 +166,7 @@ async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef): Promise<Actio
     }
   }
 
-  useStore.getState().loadProject(settings, song, ref)
+  useStore.getState().loadProject(settings, song, ref, project.name)
   if (song) audioEngine.loadSong(song)
   else audioEngine.unloadSong()
   useStore.getState().setTransport('stopped')
@@ -140,25 +183,28 @@ async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef): Promise<Actio
   }
 
   // Move-to-top in the recents list. No-op on browsers without FSA
-  // (ref.handle === null), see `recent.ts`.
-  void addRecent(ref)
+  // (ref.handle === null), see `recent.ts`. Skipped entirely for demo
+  // loads (ref === null) — bundled demos aren't user files and
+  // shouldn't pollute the recents menu.
+  if (ref) void addRecent(ref)
 
   return { kind: 'ok' }
 }
 
 /**
- * Show the file picker, load the chosen .nfz, and apply it to the
- * session. Replaces settings + song + currentFile atomically and marks
- * the session clean.
+ * Show the unified Open picker — accepts both `.nfz` projects and raw
+ * MIDI files — and dispatches to the right loader by filename. `.nfz`
+ * replaces the whole session (settings + song + texture); `.mid`
+ * replaces only the loaded song.
  *
  * Gates on the `dirty` flag via the in-app confirm modal — opening a
- * project is destructive (it discards everything in the current session)
- * so we don't proceed silently when there's unsaved work. Single source
- * of truth so Toolbar + Cmd+O behave identically.
+ * file is destructive (it discards in-session edits) so we don't
+ * proceed silently. Single source of truth so Toolbar + Cmd+O behave
+ * identically.
  */
 export async function openProject(): Promise<ActionResult> {
   const proceed = await confirmDiscardIfDirty(
-    'Opening a project will replace the current session.',
+    'Opening a file will replace the current session.',
     'Discard & Open',
   )
   if (!proceed) return { kind: 'cancelled' }
@@ -171,15 +217,19 @@ export async function openProject(): Promise<ActionResult> {
   }
   if (!opened) return { kind: 'cancelled' }
 
+  if (isMidiName(opened.ref.name)) {
+    return applyOpenedMidi(opened.buf, opened.ref.name)
+  }
   return applyOpenedProject(opened.buf, opened.ref)
 }
 
 /**
- * Apply a `.nfz` file that the caller already has in hand (e.g. from a
- * drag-and-drop into the canvas). Same dirty-confirm + apply pipeline
- * as `openProject`, but skips the picker. `handle` ends up null since
- * dropped files don't carry an FSA write handle — `Save` therefore
- * falls through to `Save As` until the user picks a destination.
+ * Apply a file the caller already has in hand (e.g. from a drag-and-drop
+ * into the canvas). Dispatches to the project or MIDI loader by
+ * filename. Same dirty-confirm + apply pipeline as `openProject`, but
+ * skips the picker. `handle` ends up null since dropped files don't
+ * carry an FSA write handle — `Save` therefore falls through to
+ * `Save As` until the user picks a destination.
  */
 export async function openProjectFromFile(file: File): Promise<ActionResult> {
   const proceed = await confirmDiscardIfDirty(
@@ -194,7 +244,16 @@ export async function openProjectFromFile(file: File): Promise<ActionResult> {
   } catch (e) {
     return { kind: 'error', message: describeError(e) }
   }
-  return applyOpenedProject(buf, { name: file.name, handle: null })
+  if (isMidiName(file.name)) {
+    return applyOpenedMidi(buf, file.name)
+  }
+  if (isProjectName(file.name)) {
+    return applyOpenedProject(buf, { name: file.name, handle: null })
+  }
+  return {
+    kind: 'error',
+    message: `Unsupported file type: "${file.name}". Drop a .nfz or .mid/.midi file.`,
+  }
 }
 
 /**
@@ -221,6 +280,33 @@ export async function openRecent(entry: RecentEntry): Promise<ActionResult> {
   }
 
   return applyOpenedProject(opened.buf, opened.ref)
+}
+
+// ───────── Demo ─────────
+
+/**
+ * Load a bundled `.nfz` demo project from a static URL. Same dirty
+ * confirm + apply pipeline as `openProjectFromFile`, but the project
+ * loads with `currentFile = null` so it doesn't appear "saved" — Save
+ * falls through to Save As, letting the user fork the demo into their
+ * own file. Demos are not added to the recents list.
+ */
+export async function loadDemoProject(label: string, url: string): Promise<ActionResult> {
+  const proceed = await confirmDiscardIfDirty(
+    `Loading the "${label}" demo will replace the current session.`,
+    'Discard & Load',
+  )
+  if (!proceed) return { kind: 'cancelled' }
+
+  let buf: ArrayBuffer
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    buf = await res.arrayBuffer()
+  } catch (e) {
+    return { kind: 'error', message: `Could not load demo: ${describeError(e)}` }
+  }
+  return applyOpenedProject(buf, null)
 }
 
 // ───────── Save / Save As ─────────

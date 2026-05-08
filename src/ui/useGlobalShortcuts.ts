@@ -127,7 +127,7 @@ export function useGlobalShortcuts(): void {
       void openProject().then((result) => {
         if (result.kind === 'error') {
           void showAlert({
-            title: 'Could not open project',
+            title: result.title ?? 'Could not open file',
             message: result.message,
             tone: 'error',
           })

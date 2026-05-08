@@ -479,6 +479,13 @@ type AppState = {
   // belongs to the project (e.g. `useCustomTexture`'s loaded image).
   markDirty: () => void
 
+  // User-editable project display name. Persisted into manifest.name on
+  // save and used as the Save As suggested filename. Empty string means
+  // "not explicitly set" — display falls back to currentFile.name (minus
+  // extension) → song.name → "Untitled" in that order.
+  projectName: string
+  setProjectName: (name: string) => void
+
   // Atomic project load. Replaces settings + song + currentFile in one
   // step and marks clean. Bypasses the per-mutation dirty flag since the
   // session now represents exactly what's on disk. Editor state (history,
@@ -486,7 +493,8 @@ type AppState = {
   loadProject: (
     nextSettings: Settings,
     nextSong: ParsedSong | null,
-    ref: FileRef,
+    ref: FileRef | null,
+    projectName: string,
   ) => void
 
   // Clear to a blank session — equivalent to a fresh page load. Resets
@@ -687,11 +695,21 @@ export const useStore = create<AppState>((set) => ({
   markClean: () => set({ dirty: false }),
   markDirty: () => set({ dirty: true }),
 
-  loadProject: (nextSettings, nextSong, ref) =>
+  projectName: '',
+  // Renaming doesn't flip the dirty flag — the project name is metadata
+  // that lives outside the song / settings the user is iterating on, so
+  // a rename shouldn't trigger the "Discard unsaved changes?" gate when
+  // they open a different file. The next Save still picks up the new
+  // name; users who rename and close without saving lose only the
+  // rename, not real edits.
+  setProjectName: (name) => set({ projectName: name }),
+
+  loadProject: (nextSettings, nextSong, ref, projectName) =>
     set({
       settings: nextSettings,
       song: nextSong,
       currentFile: ref,
+      projectName,
       dirty: false,
       editHistory: [],
       editFuture: [],
@@ -705,6 +723,7 @@ export const useStore = create<AppState>((set) => ({
       settings: defaultSettings,
       song: null,
       currentFile: null,
+      projectName: '',
       dirty: false,
       editHistory: [],
       editFuture: [],

@@ -2,10 +2,8 @@ import {
   Button,
   Dialog,
   DialogTrigger,
-  Header,
   Menu,
   MenuItem,
-  MenuSection,
   MenuTrigger,
   Popover,
   Separator,
@@ -21,10 +19,17 @@ import { ensureAudioReady } from '../audio/midiInput'
 import { useMidiInput } from '../audio/useMidiInput'
 import { useRecorder } from '../audio/useRecorder'
 import { parseMidi } from '../midi/parse'
-import { newProject, openProject, openRecent, saveProject, saveProjectAs } from '../projects/actions'
+import {
+  loadDemoProject,
+  newProject,
+  openProject,
+  openRecent,
+  saveProject,
+  saveProjectAs,
+} from '../projects/actions'
 import { hasFileSystemAccess } from '../projects/io'
 import { clearAllRecent, getRecent, subscribeRecent } from '../projects/recent'
-import { SAMPLES } from '../samples'
+import { DEMOS, loadDemoManifestNames } from '../demos'
 import { showAlert } from './confirm'
 import { DownloadIcon, MetronomeIcon, PauseIcon, PlayIcon, PlaylistIcon, RecordIcon, StopIcon, TrashIcon } from './icons'
 
@@ -121,6 +126,8 @@ export function Toolbar() {
   const rec = useRecorder()
   const transport = useStore((s) => s.transport)
   const currentFile = useStore((s) => s.currentFile)
+  const projectName = useStore((s) => s.projectName)
+  const setProjectName = useStore((s) => s.setProjectName)
   const dirty = useStore((s) => s.dirty)
   const countInEnabled = useStore((s) => s.countInEnabled)
   const setCountInEnabled = useStore((s) => s.setCountInEnabled)
@@ -178,35 +185,33 @@ export function Toolbar() {
     }
   }, [])
 
-  const onFile = async (file: File) => {
-    const buf = await file.arrayBuffer()
-    const parsed = await parseMidi(buf, file.name)
-    setSong(parsed)
-    audioEngine.loadSong(parsed)
-    setTransport('stopped')
-    setActiveRecordingId(null)
-  }
-
-  // MenuItem replaces the old FileTrigger button, so we open the file
-  // picker programmatically from the click handler. Same accept list
-  // FileTrigger was using.
-  const onOpenMidi = () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.mid,.midi,audio/midi,audio/x-midi'
-    input.onchange = () => {
-      const f = input.files?.[0]
-      if (f) void onFile(f)
+  // Resolved manifest names for each demo, keyed by URL. Populated
+  // once on mount via a parallel fetch+unzip of every demo's
+  // `manifest.json` so the menu shows the project's real display name
+  // instead of the filename. Falls back to filename until the
+  // promise settles (or forever, for entries that fail to load).
+  const [demoNames, setDemoNames] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    let cancelled = false
+    if (DEMOS.length === 0) return
+    void loadDemoManifestNames().then((names) => {
+      if (!cancelled) setDemoNames(names)
+    })
+    return () => {
+      cancelled = true
     }
-    input.click()
-  }
+  }, [])
 
-  const onLoadSample = (build: () => ReturnType<typeof parseMidi> extends Promise<infer T> ? T : never) => {
-    const parsed = build()
-    setSong(parsed)
-    audioEngine.loadSong(parsed)
-    setTransport('stopped')
-    setActiveRecordingId(null)
+  const onLoadDemo = async (label: string, url: string) => {
+    const result = await loadDemoProject(label, url)
+    if (result.kind === 'ok') setActiveRecordingId(null)
+    else if (result.kind === 'error') {
+      void showAlert({
+        title: 'Could not load demo',
+        message: result.message,
+        tone: 'error',
+      })
+    }
   }
 
   // Click handler for the MIDI button — request access on the first open
@@ -286,7 +291,7 @@ export function Toolbar() {
   }
   const onOpenProject = async () => {
     const result = await openProject()
-    if (result.kind === 'error') reportError('Could not open project', result.message)
+    if (result.kind === 'error') reportError(result.title ?? 'Could not open file', result.message)
     else if (result.kind === 'ok') setActiveRecordingId(null)
   }
   const onSaveProject = async () => {
@@ -429,30 +434,40 @@ export function Toolbar() {
                 <span>Save As…</span>
                 <span className={menuShortcutClass}>{SHORTCUT_SAVE_AS}</span>
               </MenuItem>
-              <Separator className="my-1 h-px bg-neutral-800" />
-              <MenuItem
-                onAction={onOpenMidi}
-                textValue="Open MIDI"
-                className={menuItemClass}
-              >
-                <span>Open MIDI…</span>
-              </MenuItem>
-              <Separator className="my-1 h-px bg-neutral-800" />
-              <MenuSection className="flex flex-col gap-0.5">
-                <Header className="px-2 pt-0.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Demo Songs
-                </Header>
-                {SAMPLES.map((sample) => (
-                  <MenuItem
-                    key={sample.label}
-                    onAction={() => onLoadSample(sample.build)}
-                    textValue={sample.label}
-                    className={menuItemClass}
-                  >
-                    <span>{sample.label}</span>
+              {DEMOS.length > 0 && (
+                <Separator className="my-1 h-px bg-neutral-800" />
+              )}
+              {DEMOS.length > 0 && (
+                <SubmenuTrigger>
+                  <MenuItem className={menuItemClass} textValue="Demo Songs">
+                    <span>Demo Songs</span>
+                    <span className={menuShortcutClass}>▸</span>
                   </MenuItem>
-                ))}
-              </MenuSection>
+                  <Popover
+                    placement="end top"
+                    className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
+                  >
+                    <Menu
+                      aria-label="Demo Songs"
+                      className="flex w-64 flex-col gap-0.5 outline-none"
+                    >
+                      {DEMOS.map((demo) => {
+                        const label = demoNames.get(demo.url) ?? demo.fallbackLabel
+                        return (
+                          <MenuItem
+                            key={demo.url}
+                            onAction={() => void onLoadDemo(label, demo.url)}
+                            textValue={label}
+                            className={menuItemClass}
+                          >
+                            <span className="truncate">{label}</span>
+                          </MenuItem>
+                        )
+                      })}
+                    </Menu>
+                  </Popover>
+                </SubmenuTrigger>
+              )}
             </Menu>
           </Popover>
         </MenuTrigger>
@@ -851,16 +866,113 @@ export function Toolbar() {
             Unsaved
           </span>
         )}
-        {currentFile ? (
-          <span className="truncate text-neutral-300">{currentFile.name}</span>
-        ) : song ? (
-          <span className="truncate">{song.name}</span>
-        ) : dirty ? (
-          <span className="truncate italic">Untitled</span>
-        ) : (
-          <span className="truncate">No file loaded</span>
-        )}
+        <ProjectNameField
+          projectName={projectName}
+          fallback={
+            currentFile
+              ? currentFile.name.replace(/\.nfz$/i, '')
+              : song
+                ? song.name.replace(/\.midi?$/i, '')
+                : dirty
+                  ? 'Untitled'
+                  : ''
+          }
+          placeholder={!song && !currentFile && !dirty ? 'No file loaded' : 'Untitled'}
+          onCommit={setProjectName}
+        />
+
       </div>
     </header>
+  )
+}
+
+/**
+ * Inline-editable project name. Renders as a span until the user
+ * clicks (or focuses via Tab); becomes a text input where Enter / blur
+ * commits and Escape reverts. Empty commit clears the override so the
+ * display falls back to the filename / song name. Width sizes to the
+ * current text so the toolbar doesn't reflow as the user types.
+ */
+function ProjectNameField({
+  projectName,
+  fallback,
+  placeholder,
+  onCommit,
+}: {
+  projectName: string
+  fallback: string
+  placeholder: string
+  onCommit: (name: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  const display = projectName || fallback
+  const isFallback = !projectName
+
+  const enterEdit = () => {
+    setDraft(display)
+    setEditing(true)
+  }
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
+
+  const commit = () => {
+    const trimmed = draft.trim()
+    // Only push to the store if the value actually changed — avoids
+    // spuriously marking the project dirty on a click-and-blur with no
+    // edits.
+    if (trimmed !== projectName) onCommit(trimmed)
+    setEditing(false)
+  }
+  const cancel = () => setEditing(false)
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            cancel()
+          }
+          // Stop propagation so global shortcuts (Cmd+S, Space, etc.)
+          // don't fire while the user is typing into the rename field.
+          e.stopPropagation()
+        }}
+        spellCheck={false}
+        aria-label="Project name"
+        placeholder={placeholder}
+        className="min-w-0 max-w-[24ch] truncate rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 text-xs text-neutral-100 outline-none focus:border-sky-500"
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={enterEdit}
+      onFocus={enterEdit}
+      title="Rename project"
+      className={
+        isFallback
+          ? 'min-w-0 max-w-[24ch] cursor-text truncate rounded border border-transparent px-1.5 py-0.5 text-left italic outline-none hover:border-neutral-700 focus-visible:border-sky-500'
+          : 'min-w-0 max-w-[24ch] cursor-text truncate rounded border border-transparent px-1.5 py-0.5 text-left text-neutral-300 outline-none hover:border-neutral-700 focus-visible:border-sky-500'
+      }
+    >
+      {display || placeholder}
+    </button>
   )
 }
