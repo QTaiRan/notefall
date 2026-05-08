@@ -15,7 +15,7 @@ export const LIGHT_Z = 0.4;
 // At default settings the values reproduce the prior hardcoded look.
 export const LIGHT_FALLOFF_X_BASE = 1.5;
 export const LIGHT_FALLOFF_Y_BASE = 1.0;
-export const LIGHT_BOOST_BASE = 1.7;
+export const LIGHT_BOOST_BASE = 2.0;
 export const SHADOW_HALO_BASE = 0.01;
 // Power applied to (flashHaloWidth / DEFAULT) before scaling SHADOW_HALO_BASE.
 // 1 = linear; >1 makes the slider more sensitive away from its default
@@ -78,6 +78,7 @@ export type SharedLightUniforms = {
   uFalloffX: { value: number };
   uFalloffY: { value: number };
   uShadowHalo: { value: number };
+  uLightColor: { value: THREE.Color };
 };
 
 // Patch MeshStandardMaterial: ADD per-flash light + black-key shadow
@@ -127,6 +128,7 @@ export function patchWhiteKeyMaterial(
         uniform float uFalloffX;
         uniform float uFalloffY;
         uniform float uShadowHalo;
+        uniform vec3 uLightColor;
         varying vec2 vGroupXY;
 
         // Reverse-project this fragment through L onto z=uBlackKeyTop and
@@ -185,7 +187,7 @@ export function patchWhiteKeyMaterial(
             float effective = intensity * falloff * (
               1.0 - shadow * falloff * ${SHADOW_OPACITY.toFixed(3)}
             );
-            totalContribution += vec3(uLightBoost) * uLightStrength * effective;
+            totalContribution += uLightColor * uLightBoost * uLightStrength * effective;
           }
           // Clamp: protects against stacked shadows crushing to black /
           // dense chords saturating to white.

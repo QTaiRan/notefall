@@ -82,6 +82,11 @@ const BLACK_PRESS_TINT_STRENGTH = 0.85;
 // Reusable scratch instance — lerping the press tint allocates nothing.
 const PRESS_TINT_SCRATCH = new THREE.Color();
 
+// Target the shader light color is lerped toward by flashBrightness, so
+// the keyboard glow's "spark" core matches the LandingFlashes plane's
+// brightness-lifted look.
+const WHITE_LIGHT_TARGET = new THREE.Color(1, 1, 1);
+
 export function Keyboard() {
   const settings = useStore((s) => s.settings);
   const setLoadStatus = useStore((s) => s.setLoadStatus);
@@ -160,6 +165,7 @@ export function Keyboard() {
       uFalloffX: { value: LIGHT_FALLOFF_X_BASE },
       uFalloffY: { value: LIGHT_FALLOFF_Y_BASE },
       uShadowHalo: { value: SHADOW_HALO_BASE },
+      uLightColor: { value: new THREE.Color(1, 1, 1) },
     }),
     [],
   );
@@ -458,6 +464,13 @@ export function Keyboard() {
     sharedLightUniforms.uShadowHalo.value =
       SHADOW_HALO_BASE *
       Math.pow(settings.flashHaloWidth / DEFAULT_FLASH_HALO, SHADOW_HALO_RESPONSE);
+    // Light color follows the same source as the LandingFlashes plane —
+    // noteColor when "Follows Note" is on, otherwise the explicit
+    // flashColor — and is then lifted toward white by flashBrightness so
+    // a saturated colour can still keep a bright "spark" core.
+    sharedLightUniforms.uLightColor.value
+      .set(settings.flashFollowNote ? settings.noteColor : settings.flashColor)
+      .lerp(WHITE_LIGHT_TARGET, settings.flashBrightness);
     for (let bk = 0; bk < BLACK_KEY_COUNT; bk++) {
       blackGlow[bk] = Math.min(1, glow[BLACK_KEY_INDICES[bk]]);
     }

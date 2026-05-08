@@ -725,25 +725,19 @@ function createRoundedWhiteGeometry(
   // dark band between the bright top face and the body's white front.
   // Override front-section vertex normals to +Z so the front section
   // catches the same diffuse contribution as the top face.
-  flattenCapFrontNormals(geom, -WHITE_KEY_LENGTH / 2, halfW);
+  flattenCapFrontNormals(geom, -WHITE_KEY_LENGTH / 2);
   return geom;
 }
 
-// Cap normal hacks. Two effects:
-//   • Front section (front side wall + top/bottom bevels + rounded
-//     front-left/right corners) → normal +Z so the surface lights up
-//     like the top face; otherwise the natural -Y outward normal misses
-//     the only directional light and reads as a thin dark band.
-//   • Left / right side walls → normal -Z so they get ambient-only
-//     light, intentionally darker than the top so the cap reads as a
-//     three-dimensional volume instead of a flat wash of white.
-// The body width inset (cap and body share 4% inset) means the cap's
-// side wall vertices sit on x = ±halfW where halfW is `cap-half-width`;
-// detecting by |x| ≥ halfW − ε is robust regardless of bevel.
+// Override every vertex on the cap's front-section (front side wall +
+// top/bottom bevel curves + rounded front-left/right corner curves) to
+// a +Z normal so the surface receives the same diffuse light as the cap
+// top. The earlier version excluded the bottom-bevel outer rim (where
+// `z` rounded down to the bottom face plane), which left a thin dark
+// band right under the top edge.
 function flattenCapFrontNormals(
   geom: THREE.BufferGeometry,
   frontY: number,
-  halfW: number,
 ): void {
   const positions = (geom.getAttribute("position") as THREE.BufferAttribute)
     .array as Float32Array;
@@ -751,20 +745,12 @@ function flattenCapFrontNormals(
   const normals = normalAttr.array as Float32Array;
   const vertexCount = positions.length / 3;
   const yBound = frontY + WHITE_CAP_CORNER_RADIUS + 1e-5;
-  const sideXBound = halfW - 1e-5;
   for (let v = 0; v < vertexCount; v++) {
-    const x = positions[v * 3];
     const y = positions[v * 3 + 1];
     if (y >= frontY - 1e-5 && y < yBound) {
-      // Front section → +Z (bright like top face).
       normals[v * 3 + 0] = 0;
       normals[v * 3 + 1] = 0;
       normals[v * 3 + 2] = 1;
-    } else if (Math.abs(x) > sideXBound) {
-      // Side wall → -Z (ambient-only, darker than top).
-      normals[v * 3 + 0] = 0;
-      normals[v * 3 + 1] = 0;
-      normals[v * 3 + 2] = -1;
     }
   }
   normalAttr.needsUpdate = true;
@@ -904,13 +890,10 @@ function tagWhiteBodyFrontFace(
   }
   flushRun(triCount, runFlag);
 
-  // Two normal hacks on the body side wall:
-  //   • Front-face triangles → +Z so the white-coated front face lights
-  //     up like the cap top (otherwise -Y outward normal misses the
-  //     directional light at +Y +Z).
-  //   • Left / right side wall vertices (|x| ≈ halfW) → -Z so the wood
-  //     sides drop to ambient only at idle. The cap's flash shader then
-  //     adds light contribution on top when a key is pressed.
+  // Override front-face vertex normals so the surface receives the same
+  // diffuse light as the cap top (whose normal is +Z). Without this the
+  // front face faces -Y and the only directional light (at +Y +Z) misses
+  // it entirely, leaving the front lit by ambient alone.
   const normalAttr = geom.getAttribute("normal") as THREE.BufferAttribute;
   const normals = normalAttr.array as Float32Array;
   for (let t = 0; t < triCount; t++) {
@@ -921,22 +904,6 @@ function tagWhiteBodyFrontFace(
       normals[v * 3 + 0] = 0;
       normals[v * 3 + 1] = 0;
       normals[v * 3 + 2] = 1;
-    }
-  }
-  // Side wall darkening — applies to ALL vertices in the geometry whose
-  // |x| sits on the outline boundary, including bottom/back side wall
-  // vertices outside the side group. Iterating all vertices is fine
-  // because non-side vertices either have |x| < bound (top/bottom faces
-  // with bevel inset, or interior of the shape) or are on the front/back
-  // face where x is also typically inside.
-  const halfW = WHITE_KEY_WIDTH * 0.96 / 2; // matches buildWhiteBodyShape
-  const sideXBound = halfW - 1e-5;
-  const vertexCount = positions.length / 3;
-  for (let v = 0; v < vertexCount; v++) {
-    if (Math.abs(positions[v * 3]) > sideXBound) {
-      normals[v * 3 + 0] = 0;
-      normals[v * 3 + 1] = 0;
-      normals[v * 3 + 2] = -1;
     }
   }
   normalAttr.needsUpdate = true;
