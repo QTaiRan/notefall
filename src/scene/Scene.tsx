@@ -1,8 +1,9 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
 import * as THREE from 'three'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { recorder } from '../audio/recorder'
 import { Keyboard } from '../keyboard/Keyboard'
 import { FallingNotes } from '../notes/FallingNotes'
 import { LandingFlashes } from '../notes/LandingFlashes'
@@ -44,12 +45,17 @@ export function Scene() {
 function SceneContents() {
   const s = useStore((st) => st.settings)
   const transport = useStore((st) => st.transport)
-  const song = useStore((st) => st.song)
-  // Edit mode = song loaded AND not currently playing. Mounting EditTools
+  // Mirror the recorder singleton's state so we can suppress edit-mode
+  // mounting while a take is in progress — clicks during recording must
+  // not spawn notes on the (cleared) song.
+  const [recState, setRecState] = useState(recorder.getState())
+  useEffect(() => recorder.addListener(() => setRecState(recorder.getState())), [])
+  // Edit mode = not currently playing or recording. Mounting EditTools
   // (instead of PlayToggleArea) flips the meaning of every empty-area
   // click — "toggle play" becomes "select / range / add note". Live
-  // performance / fast-forward UX stays untouched while playing.
-  const editMode = transport !== 'playing' && song !== null
+  // performance / fast-forward UX stays untouched while playing. With
+  // no song loaded the first added note bootstraps an empty song.
+  const editMode = transport !== 'playing' && recState !== 'recording'
   return (
     <>
       <ambientLight intensity={0.35} />

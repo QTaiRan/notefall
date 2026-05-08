@@ -5,6 +5,7 @@ import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { ensureSamplerLoaded, previewNote } from '../audio/preview'
 import { addNote, deleteNotes, moveNotes } from '../midi/edit'
+import type { ParsedSong } from '../midi/types'
 import {
   clickXToMidi,
   clickYToTime,
@@ -56,6 +57,18 @@ import {
 // a defensive default.
 const FALLBACK_DURATION = 0.25
 const FALLBACK_VELOCITY = 0.7
+
+// Synthesised when the first note is added with no song loaded — gives
+// us a valid ParsedSong baseline so the existing edit pipeline
+// (setSongPreview / pushUndoSnapshot / addNote) works unchanged. Undo
+// after the very first add restores this empty state, then a second
+// undo is a no-op (history exhausted).
+const EMPTY_SONG: ParsedSong = {
+  name: 'Untitled',
+  duration: 0,
+  notes: [],
+  pedals: [],
+}
 
 // CSS-standard "no/cancel" cursor — the OS-native circle-with-slash
 // icon. Used while the right-click eraser drag is active so the cursor
@@ -302,10 +315,18 @@ export function EditTools() {
     startClient: { x: number; y: number },
   ) => {
     const cur = useStore.getState()
-    if (!cur.song) return
     const settings = cur.settings
     const hitY = noteHitYWorld(settings.keyboardY)
     if (startWorld.y <= hitY) return // below hit line: no-op
+
+    // Bootstrap an empty song on first add when nothing is loaded so
+    // the user can compose from scratch. setSong wipes editHistory, so
+    // we capture the empty baseline as the very first undo snapshot
+    // ourselves below.
+    const baseSong: ParsedSong = cur.song ?? EMPTY_SONG
+    if (!cur.song) {
+      useStore.getState().setSong(baseSong)
+    }
 
     const t = audioEngine.currentSongTime()
     const time = clickYToTime(startWorld.y, t, settings)
@@ -319,10 +340,10 @@ export function EditTools() {
 
     // Push the pre-add snapshot first so a single undo step fully
     // reverses the click + any subsequent drag motion.
-    cur.pushUndoSnapshot(cur.song)
+    useStore.getState().pushUndoSnapshot(baseSong)
 
     const result = addNote(
-      cur.song,
+      baseSong,
       midi,
       Math.max(0, time),
       newDuration,
