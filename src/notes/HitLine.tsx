@@ -259,16 +259,17 @@ export function HitLine() {
   // avoids depth-sort flicker if it's ever enabled.
   return (
     <>
-      {/* Sit in front of the now-3D black keys (top face at z=BLACK_KEY_THICKNESS
-          = 0.09). Earlier these planes were at 0.061/0.062 — fine when every
-          key was a flat plane at z≈0, but the 3D black keys would have hidden
-          the bar/wave behind their tops near the back edge. */}
-      <mesh position={[0, hitY + settings.hitLineBarY, 0.11]}>
+      {/* Sit in front of the now-3D black keys (top face at
+          z=BLACK_KEY_THICKNESS = 0.125). Earlier these planes were at
+          0.061/0.062 — fine when every key was a flat plane at z≈0, but
+          the 3D black keys would have hidden the bar/wave behind their
+          tops near the back edge. */}
+      <mesh position={[0, hitY + settings.hitLineBarY, 0.14]}>
         <planeGeometry args={[planeWidth, BAR_PLANE_HEIGHT]} />
         <primitive object={barMaterial} attach="material" />
       </mesh>
       {settings.hitLineWaveEnabled && (
-        <mesh position={[0, hitY + settings.hitLineWaveY, 0.111]}>
+        <mesh position={[0, hitY + settings.hitLineWaveY, 0.141]}>
           <planeGeometry args={[planeWidth, WAVE_PLANE_HEIGHT]} />
           <primitive object={waveMaterial} attach="material" />
         </mesh>
