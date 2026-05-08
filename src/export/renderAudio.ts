@@ -1,0 +1,273 @@
+import { Scheduler } from 'smplr'
+import type { ParsedSong } from '../midi/types'
+import type { Settings } from '../store'
+import { createPiano } from '../audio/sampler'
+
+/**
+ * Offline render of `song` with the given `settings` into a stereo
+ * `AudioBuffer`. Mirrors the realtime AudioEngine's scheduling so the
+ * exported audio sounds identical to live playback at rate=1, with the
+ * same per-note attack lookahead, stop buffer, and pedal-sustain
+ * semantics.
+ *
+ * Live (touch / MIDI input) notes are NOT rendered — only the song
+ * timeline. Loop / playbackRate / fast-forward are also ignored: a
+ * single linear pass from t=0 through `song.duration + TAIL_SECONDS`.
+ *
+ * Implemented as a single `OfflineAudioContext.startRendering()` call.
+ * That means everything must be scheduled up-front; we don't get
+ * incremental progress callbacks during the render itself, only the
+ * up-front sample-load progress.
+ */
+
+// Mirror engine.ts. The lookahead has no audible-click concern in an
+// offline render (samples are perfectly quantum-aligned), but matching
+// the live engine's offset means a re-rendered take lines up sample-
+// for-sample with what the user heard during preview.
+const LOOKAHEAD = 0.015
+const STOP_BUFFER = 0.02
+// Same SONG_TAIL_SECONDS as the engine — the visual layer's reverb wash
+// + landing flashes need this window to play out, and offline audio
+// must match so the wash isn't trimmed mid-decay.
+const TAIL_SECONDS = 5
+
+export type AudioRenderProgress =
+  | { phase: 'loading'; loaded: number; total: number }
+  | { phase: 'rendering'; progress: number }
+  | { phase: 'done' }
+
+/**
+ * Thrown when the caller's `AbortSignal` aborts during a render. Surfaces
+ * so the UI layer can skip the download and quietly tear down the modal
+ * without the generic "could not export audio" error toast.
+ */
+export class AudioRenderAborted extends Error {
+  constructor() {
+    super('Audio render aborted')
+    this.name = 'AudioRenderAborted'
+  }
+}
+
+/**
+ * Race a promise against an AbortSignal so that cancel is responsive
+ * even during long awaits (sample fetching, OfflineAudioContext.
+ * startRendering()) we can't otherwise interrupt. The underlying
+ * promise keeps running in the background — caller is responsible
+ * for letting that GPU/network/audio work get GC'd by dropping
+ * references to the OfflineAudioContext / encoder it's tied to.
+ */
+function raceWithAbort<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return p
+  if (signal.aborted) return Promise.reject(new AudioRenderAborted())
+  return new Promise<T>((resolve, reject) => {
+    p.then(resolve, reject)
+    signal.addEventListener('abort', () => reject(new AudioRenderAborted()), { once: true })
+  })
+}
+
+/** 0..1 → 0..1 with engine.shapeVelocity's gamma + floor/cap clip. */
+function shapeVelocity(v: number, gamma: number, floor: number, cap: number): number {
+  const curved = Math.pow(v, gamma)
+  return Math.max(floor, Math.min(cap, curved))
+}
+
+/**
+ * Convert pedal CC events into closed [start,end] sustain ranges. A note
+ * whose natural off-time falls inside any range is held until that
+ * range's end (the realtime engine's `pedalHeld` deferred-release
+ * behaviour, expressed declaratively for offline scheduling).
+ *
+ * If the song ends with the pedal still down, the open range is
+ * truncated at `endTime` so trailing notes still release within the
+ * rendered window.
+ */
+function buildPedalRanges(
+  events: ParsedSong['pedals'],
+  endTime: number,
+): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = []
+  let down = false
+  let downStart = 0
+  for (const ev of events) {
+    const isDown = ev.value >= 0.5
+    if (isDown && !down) {
+      down = true
+      downStart = ev.time
+    } else if (!isDown && down) {
+      down = false
+      ranges.push({ start: downStart, end: ev.time })
+    }
+  }
+  if (down) ranges.push({ start: downStart, end: endTime })
+  return ranges
+}
+
+function findRangeContaining(
+  ranges: Array<{ start: number; end: number }>,
+  t: number,
+): { start: number; end: number } | null {
+  // Linear scan — pedal range counts are small (dozens at most for a
+  // typical piano piece), and ranges are sorted, so a binary search
+  // would just be ceremony for no measurable win.
+  for (const r of ranges) {
+    if (t < r.start) return null
+    if (t < r.end) return r
+  }
+  return null
+}
+
+export async function renderSongAudio(
+  song: ParsedSong,
+  settings: Settings,
+  sampleRate: number,
+  onProgress?: (p: AudioRenderProgress) => void,
+  signal?: AbortSignal,
+): Promise<AudioBuffer> {
+  if (signal?.aborted) throw new AudioRenderAborted()
+  const totalDuration = song.duration + TAIL_SECONDS
+  const length = Math.max(1, Math.ceil(totalDuration * sampleRate))
+
+  const ctx = new OfflineAudioContext({
+    numberOfChannels: 2,
+    length,
+    sampleRate,
+  })
+
+  // Bring the piano up against the offline context. Reuses the
+  // realtime-engine's effect-chain wiring (master → 6-band EQ → split →
+  // dry / pre-delay → reverb → wet) verbatim — same setters, same IR
+  // synthesis — so render parity with live playback is "free".
+  //
+  // The custom scheduler is critical: smplr's default Scheduler defers
+  // any event scheduled more than ~100 ms ahead to a setInterval-driven
+  // dispatcher. That dispatcher never gets a chance to run during
+  // OfflineAudioContext.startRendering() (the render is one synchronous
+  // microtask burst from the caller's perspective), so the default
+  // would dispatch only the first ~100 ms of notes and silently drop
+  // everything afterward. A Scheduler with an effectively-infinite
+  // lookahead forces every `piano.start()` call to dispatch its voice
+  // synchronously, scheduling each AudioBufferSourceNode at the
+  // correct absolute time via `source.start(time)` — sample-accurate
+  // because Web Audio honours the absolute time even on offline ctx.
+  onProgress?.({ phase: 'loading', loaded: 0, total: 1 })
+  // Race against the abort signal so Cancel is responsive even during
+  // the ~60 MB sample fetch — without this, `await createPiano` blocks
+  // for the entire load before the next signal check fires.
+  const piano = await raceWithAbort(
+    createPiano(
+      ctx,
+      (p) => {
+        onProgress?.({ phase: 'loading', loaded: p.loaded, total: p.total })
+      },
+      {
+        scheduler: new Scheduler(ctx, { lookaheadMs: Number.POSITIVE_INFINITY }),
+      },
+    ),
+    signal,
+  )
+
+  // Apply settings BEFORE scheduling any notes so the render pass sees
+  // them at currentTime=0. setTargetAtTime ramps complete in well under
+  // a millisecond at the given time constants, so notes scheduled at
+  // t=LOOKAHEAD already inherit the final values.
+  piano.setVolume(settings.volume)
+  piano.setReverbDry(settings.reverbDry)
+  piano.setReverbWet(settings.reverbEnabled ? settings.reverbWet : 0)
+  piano.setReverbSize(settings.reverbSize)
+  piano.setReverbDecayTime(settings.reverbDecayTime)
+  piano.setReverbDecay(settings.reverbDecay)
+  piano.setReverbPreDelay(settings.reverbPreDelay)
+  piano.setReverbDamping(settings.reverbDamping)
+  piano.setReverbHiCut(settings.reverbHiCut)
+  piano.setReverbLowCut(settings.reverbLowCut)
+  piano.setReleaseTime(settings.releaseTime)
+  piano.setDetune(settings.samplerDetune)
+  for (let i = 0; i < settings.eqBands.length; i++) {
+    piano.setEqBand(i, settings.eqBands[i])
+  }
+
+  // Pedal handling. Mirror the engine: when settings.pedalEnabled is off,
+  // ignore the song's pedal track entirely (notes release at their
+  // natural offTime).
+  const pedalRanges = settings.pedalEnabled
+    ? buildPedalRanges(song.pedals, totalDuration)
+    : []
+
+  for (const n of song.notes) {
+    const playedMidi = n.midi + settings.transpose
+    if (playedMidi < 0 || playedMidi > 127) continue
+
+    const shaped = shapeVelocity(
+      n.velocity,
+      settings.velocityGamma,
+      settings.velocityFloor,
+      settings.velocityCap,
+    )
+    const onTime = n.time + LOOKAHEAD
+    const naturalOff = n.time + n.duration
+    const range = findRangeContaining(pedalRanges, naturalOff)
+    const actualOff = range ? range.end : naturalOff
+
+    const stopFn = piano.start(playedMidi, shaped, onTime, `s${n.id}`)
+    stopFn(actualOff + STOP_BUFFER)
+  }
+
+  if (signal?.aborted) {
+    piano.dispose()
+    throw new AudioRenderAborted()
+  }
+
+  // Poll `ctx.currentTime` to report rendering progress. OfflineAudioContext
+  // doesn't fire a progress event, but `currentTime` does advance during
+  // rendering (the engine processes blocks off the main thread and updates
+  // the timeline). 100 ms is fine-grained enough for a smooth progress bar
+  // without burning main-thread cycles. We always emit a final 1.0 after
+  // the promise resolves so the bar settles at 100% before the modal
+  // dismisses.
+  onProgress?.({ phase: 'rendering', progress: 0 })
+  const renderPromise = ctx.startRendering()
+  const pollHandle = window.setInterval(() => {
+    onProgress?.({
+      phase: 'rendering',
+      progress: Math.min(1, ctx.currentTime / totalDuration),
+    })
+  }, 100)
+  let buffer: AudioBuffer
+  try {
+    // Race the offline render against the abort signal — once
+    // `startRendering()` is called there's no way to actually stop
+    // the offline context, but at least surface the cancel
+    // synchronously so the modal dismisses immediately, and tear
+    // down the piano + chain so the still-pending render finishes
+    // near-instantly with silence rather than burning CPU on the
+    // convolver + voice graph.
+    buffer = await raceWithAbort(renderPromise, signal)
+  } catch (e) {
+    // dispose() severs the entire effect chain — see sampler.ts.
+    // Without this, the OfflineAudioContext can hog CPU for tens of
+    // seconds after Cancel, leaving the page unresponsive even
+    // through a reload (the browser's reload waits for the running
+    // task to yield).
+    piano.dispose()
+    throw e
+  } finally {
+    window.clearInterval(pollHandle)
+  }
+  onProgress?.({ phase: 'rendering', progress: 1 })
+
+  // Belt-and-suspenders: if abort fired in the narrow window between
+  // raceWithAbort resolving and now, still dispose + bail.
+  if (signal?.aborted) {
+    piano.dispose()
+    throw new AudioRenderAborted()
+  }
+
+  onProgress?.({ phase: 'done' })
+
+  // Free the smplr-internal AudioNodes once rendering is complete. The
+  // OfflineAudioContext itself is single-use and will be GC'd once we
+  // return.
+  piano.dispose()
+
+  return buffer
+}

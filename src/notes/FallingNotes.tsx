@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
+import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
 import { useCustomTexture } from './customTexture'
 import { deleteNotes, moveNotes, splitNote } from '../midi/edit'
@@ -552,7 +553,7 @@ export function FallingNotes() {
     material.uniforms.uHitY.value = hitY
     // Wall clock — used by texture presets (e.g. liquid flow). Pause-friendly
     // (keeps animating) since the texture should breathe even when stopped.
-    material.uniforms.uTime.value = performance.now() / 1000
+    material.uniforms.uTime.value = now()
 
     // Compute how far above the keyboard a note spawns so that the spawn line
     // sits comfortably outside the visible frustum. Approximate the visible
@@ -649,7 +650,7 @@ export function FallingNotes() {
     // independent of the song direction setting.
     const liveNotes = audioEngine.getLiveNotes()
     if (liveNotes.length > 0) {
-      const liveNow = performance.now() / 1000
+      const liveNow = now()
       for (let i = 0; i < liveNotes.length; i++) {
         const ln = liveNotes[i]
         const headT = liveNow - ln.startTime
@@ -700,7 +701,7 @@ export function FallingNotes() {
     // Dying-note ghosts (right-click delete + eraser drag). Renders the
     // same shader as a regular note with a per-instance alpha multiplier
     // ramped 1 → 0 over DEATH_FADE_DURATION on a plain linear curve.
-    const nowSec = performance.now() / 1000
+    const nowSec = now()
     noteDeathFx.prune(nowSec)
     const dying = noteDeathFx.list()
     for (let i = 0; i < dying.length; i++) {

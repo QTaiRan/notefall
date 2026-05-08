@@ -30,7 +30,22 @@ import {
 import { hasFileSystemAccess } from '../projects/io'
 import { clearAllRecent, getRecent, subscribeRecent } from '../projects/recent'
 import { DEMOS, loadDemoManifestNames } from '../demos'
+import { exportSongToWav } from '../export/exportAudio'
+import { playExportCompleteChime } from '../audio/exportChime'
+import {
+  computeVideoBitrateKbps,
+  DEFAULT_AUDIO_CONFIG,
+  exportSongToMp4,
+  VIDEO_RESOLUTIONS,
+} from '../export/exportVideo'
+import { isVideoExportSupported } from '../export/renderVideo'
 import { showAlert } from './confirm'
+import { ExportProgressModal, type ExportProgressState } from './ExportProgressModal'
+import {
+  DEFAULT_EXPORT_SETTINGS,
+  ExportSettingsDialog,
+  type ExportSettingsValues,
+} from './ExportSettingsDialog'
 import { DownloadIcon, MetronomeIcon, PauseIcon, PlayIcon, PlaylistIcon, RecordIcon, StopIcon, TrashIcon } from './icons'
 
 // Display modifier symbols for the File menu's keyboard hints. Mac uses
@@ -119,6 +134,7 @@ function fmtCreatedAt(epochMs: number): string {
 
 export function Toolbar() {
   const song = useStore((s) => s.song)
+  const settings = useStore((s) => s.settings)
   const setSong = useStore((s) => s.setSong)
   const setTransport = useStore((s) => s.setTransport)
   const setLoadStatus = useStore((s) => s.setLoadStatus)
@@ -148,6 +164,38 @@ export function Toolbar() {
   // without this the Stop click would feel like nothing happened.
   const [emptyToast, setEmptyToast] = useState(false)
   const emptyToastTimerRef = useRef<number | null>(null)
+  // Offline-export modal state. `null` when idle; the renderer feeds
+  // title + phase + progress + ETA while a render is in flight.
+  // Shared across the WAV / video-only / video+audio paths — they
+  // all run the same UX pattern (modal, progress bar, cancel). The
+  // AbortController ref ties Cancel to the active render. The menu
+  // item reads `exportState !== null` to disable re-entry while a
+  // render is running.
+  const [exportState, setExportState] = useState<ExportProgressState>(null)
+  const exportAbortRef = useRef<AbortController | null>(null)
+  // Wall-clock baseline for ETA calculation. Set when the export
+  // begins; the onProgress handler diffs against this to project
+  // remaining time from the current progress fraction.
+  const exportStartedAtRef = useRef<number>(0)
+  // Rolling window of recent (elapsed, progress) samples — used to
+  // compute a smoothed ETA from the current rate instead of the
+  // global `elapsed × (1/p − 1)` formula. The global formula
+  // assumes a linear progress curve, but our progress is not linear
+  // in wall-clock (sample-loading vs render vs encoding all run at
+  // different rates), so the global ETA grows during the slow-start
+  // phase before falling — a confusing UX. A windowed rate adapts
+  // to the *current* speed and shrinks monotonically.
+  const exportRateWindowRef = useRef<{ elapsed: number; progress: number }[]>([])
+  // Open / close + remembered defaults for the export-settings
+  // dialog. Defaults persist across the session so reopening the
+  // dialog shows the user's last choice.
+  const [exportSettingsOpen, setExportSettingsOpen] = useState(false)
+  const [exportDefaults, setExportDefaults] =
+    useState<ExportSettingsValues>(DEFAULT_EXPORT_SETTINGS)
+  // Memoise once — `isVideoExportSupported` reads global typeof
+  // checks that don't change at runtime, no point re-evaluating per
+  // render.
+  const videoExportSupported = isVideoExportSupported()
   // Inline rename state for the recordings list.
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingDraft, setEditingDraft] = useState('')
@@ -302,6 +350,166 @@ export function Toolbar() {
     const result = await saveProjectAs()
     if (result.kind === 'error') reportError('Could not save project', result.message)
   }
+
+  // Open the unified export-settings dialog. The dialog itself
+  // figures out whether this is a WAV / silent MP4 / A+V MP4 export
+  // and calls back via `onSubmitExportSettings` with the chosen
+  // values.
+  const onOpenExportDialog = () => {
+    if (!song || exportState !== null) return
+    setExportSettingsOpen(true)
+  }
+  const onCloseExportDialog = () => setExportSettingsOpen(false)
+
+  // Update the progress modal with a fresh phase + fraction, plus a
+  // wall-clock-based ETA. ETA is computed from the *current* rate
+  // over the last several seconds of progress samples (not from
+  // total elapsed/progress), so it shrinks monotonically even when
+  // the underlying work has heterogeneous rates (sample loading vs
+  // offline render vs encoding).
+  const ETA_WINDOW_SECONDS = 8
+  const updateExportProgress = (
+    title: string,
+    phaseLabel: string,
+    progress: number,
+  ) => {
+    const elapsedSec = (performance.now() - exportStartedAtRef.current) / 1000
+    const window = exportRateWindowRef.current
+    window.push({ elapsed: elapsedSec, progress })
+    const cutoff = elapsedSec - ETA_WINDOW_SECONDS
+    while (window.length > 0 && window[0].elapsed < cutoff) window.shift()
+
+    let eta: number | null = null
+    if (window.length >= 2) {
+      const oldest = window[0]
+      const dt = elapsedSec - oldest.elapsed
+      const dp = progress - oldest.progress
+      // Wait for at least 1 s of useful samples so the rate isn't
+      // dominated by the initial setup burst. Skip negative or zero
+      // dp (would imply progress went backwards or stalled).
+      if (dt >= 1 && dp > 0) {
+        const ratePerSec = dp / dt
+        eta = Math.max(0, (1 - progress) / ratePerSec)
+      }
+    }
+    setExportState({ title, phaseLabel, progress, etaSeconds: eta })
+  }
+
+  // Build the output filename. Includes resolution / fps / quality
+  // tags so a user who exports the same song at multiple settings
+  // can tell the files apart at a glance:
+  //   song-1080p60-high.mp4
+  //   song-1080p60-high-silent.mp4
+  //   song-720p30-standard.mp4
+  //   song.wav
+  const buildExportFileName = (values: ExportSettingsValues): string => {
+    const songName = song?.name ?? ''
+    const base = songName
+      .trim()
+      .replace(/\.(mid|midi)$/i, '')
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const fallback = `notefall-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`
+    const stem = base || fallback
+    if (values.format === 'audio-only') return `${stem}.wav`
+    const resLabel = VIDEO_RESOLUTIONS[values.resolution].label.toLowerCase()
+    const tag = `${resLabel}${values.fps}-${values.quality}`
+    const silent = values.format === 'video-only' ? '-silent' : ''
+    return `${stem}-${tag}${silent}.mp4`
+  }
+
+  // Run the actual export with the dialog's chosen values. Closes
+  // the settings dialog, opens the progress modal, dispatches to
+  // the right pipeline (WAV / MP4), maps progress to the unified
+  // shape, and surfaces errors.
+  const onSubmitExportSettings = async (values: ExportSettingsValues) => {
+    if (!song) return
+    setExportDefaults(values)
+    setExportSettingsOpen(false)
+
+    const abort = new AbortController()
+    exportAbortRef.current = abort
+    exportStartedAtRef.current = performance.now()
+    exportRateWindowRef.current = []
+
+    const isAudioOnly = values.format === 'audio-only'
+    const title = isAudioOnly ? 'Exporting audio' : 'Exporting video'
+    setExportState({ title, phaseLabel: 'Preparing', progress: 0, etaSeconds: null })
+
+    try {
+      const fileName = buildExportFileName(values)
+
+      if (isAudioOnly) {
+        const result = await exportSongToWav(song, settings, {
+          fileName,
+          signal: abort.signal,
+          onProgress: (p) => {
+            if (p.phase === 'loading') {
+              const fraction = p.total > 0 ? p.loaded / p.total : 0
+              updateExportProgress(title, 'Loading samples', fraction)
+            } else if (p.phase === 'rendering') {
+              updateExportProgress(title, 'Rendering audio', p.progress)
+            }
+          },
+        })
+        if (result.kind === 'error') {
+          reportError('Could not export audio', result.message)
+        } else if (result.kind === 'ok' && values.playSoundOnComplete) {
+          playExportCompleteChime()
+        }
+      } else {
+        if (!videoExportSupported) {
+          reportError(
+            'Video export not supported',
+            'Your browser is missing the WebCodecs API. Use Chrome, Edge, or Safari 16.4+ to export video.',
+          )
+          return
+        }
+        const includeAudio = values.format === 'video-audio'
+        const resInfo = VIDEO_RESOLUTIONS[values.resolution]
+        const videoBitrateKbps = computeVideoBitrateKbps(
+          values.resolution,
+          values.fps,
+          values.quality,
+        )
+        const result = await exportSongToMp4(song, settings, {
+          width: resInfo.width,
+          height: resInfo.height,
+          fps: values.fps,
+          videoBitrateKbps,
+          audio: includeAudio ? DEFAULT_AUDIO_CONFIG : null,
+          fileName,
+          signal: abort.signal,
+          onProgress: (p) => {
+            if (p.phase === 'preparing') {
+              updateExportProgress(title, 'Preparing', 0)
+            } else if (p.phase === 'rendering') {
+              updateExportProgress(title, 'Rendering', p.progress)
+            } else if (p.phase === 'finalizing') {
+              updateExportProgress(title, 'Finalizing', 1)
+            }
+          },
+        })
+        if (result.kind === 'error') {
+          reportError('Could not export video', result.message)
+        } else if (result.kind === 'unsupported') {
+          reportError(
+            'Video export not supported',
+            'Your browser is missing the WebCodecs API.',
+          )
+        } else if (result.kind === 'ok' && values.playSoundOnComplete) {
+          playExportCompleteChime()
+        }
+      }
+    } finally {
+      exportAbortRef.current = null
+      setExportState(null)
+    }
+  }
+  const onCancelExport = () => {
+    exportAbortRef.current?.abort()
+  }
   // Recents subscription — empty array on browsers without FSA since
   // `addRecent` no-ops there, so the submenu naturally hides itself
   // via the recents.length === 0 check below.
@@ -330,6 +538,7 @@ export function Toolbar() {
   }
 
   return (
+    <>
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-950 px-3">
       {/* Section spacing: every border-l divider has 12px (`pl-3` /
           `pr-3`) padding on BOTH sides. The outer flex therefore runs
@@ -433,6 +642,15 @@ export function Toolbar() {
               >
                 <span>Save As…</span>
                 <span className={menuShortcutClass}>{SHORTCUT_SAVE_AS}</span>
+              </MenuItem>
+              <Separator className="my-1 h-px bg-neutral-800" />
+              <MenuItem
+                onAction={() => onOpenExportDialog()}
+                textValue="Export"
+                isDisabled={!song || exportState !== null}
+                className={menuItemClass}
+              >
+                <span>Export…</span>
               </MenuItem>
               {DEMOS.length > 0 && (
                 <Separator className="my-1 h-px bg-neutral-800" />
@@ -883,6 +1101,16 @@ export function Toolbar() {
 
       </div>
     </header>
+    <ExportSettingsDialog
+      isOpen={exportSettingsOpen}
+      onClose={onCloseExportDialog}
+      onExport={(values) => void onSubmitExportSettings(values)}
+      songDuration={song?.duration ?? 0}
+      videoExportSupported={videoExportSupported}
+      defaults={exportDefaults}
+    />
+    <ExportProgressModal state={exportState} onCancel={onCancelExport} />
+    </>
   )
 }
 

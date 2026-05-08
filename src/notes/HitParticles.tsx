@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
+import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH, WHITE_KEY_WIDTH } from '../keyboard/layout'
 import { sampleCurl, dirFromXY } from './curlNoise'
 import { noteDeathFx } from './noteDeathFx'
@@ -316,7 +317,7 @@ export function HitParticles() {
     return a
   }, [])
   const writeIdx = useRef(0)
-  const lastFrame = useRef(performance.now() / 1000)
+  const lastFrame = useRef(now())
   const colorVec = useMemo(() => new THREE.Color(), [])
   // Reused scratch buffers — avoid per-frame allocation in the hot loop.
   const curlScratch = useMemo<[number, number, number]>(() => [0, 0, 0], [])
@@ -331,7 +332,7 @@ export function HitParticles() {
         lastVelocity[idx] = ev.velocity
         pendingBurst[idx] += ATTACK_BURST
         emitAccum[idx] = 0
-        noteOnTime[idx] = performance.now() / 1000
+        noteOnTime[idx] = now()
       } else {
         heldCount[idx] = Math.max(0, heldCount[idx] - 1)
       }
@@ -366,7 +367,7 @@ export function HitParticles() {
         width: d.width,
         length: d.length,
         velocity: d.velocity,
-        startTime: performance.now() / 1000,
+        startTime: now(),
         emitAccum: 0,
         burstFired: false,
       })
@@ -375,11 +376,11 @@ export function HitParticles() {
   }, [])
 
   useFrame(() => {
-    const now = performance.now() / 1000
-    const dt = Math.min(0.05, now - lastFrame.current)
-    lastFrame.current = now
+    const nowSec = now()
+    const dt = Math.min(0.05, nowSec - lastFrame.current)
+    lastFrame.current = nowSec
 
-    material.uniforms.uTime.value = now
+    material.uniforms.uTime.value = nowSec
     material.uniforms.uHitY.value = settings.keyboardY + WHITE_KEY_LENGTH
 
     if (!settings.particlesEnabled) return
@@ -426,7 +427,7 @@ export function HitParticles() {
     const dtFactor = dt * 60.0
     // Z-axis time evolution — slides the noise sample point so the wind
     // landscape drifts over time. flowSpeed = 0 freezes the field.
-    const tNoise = now * flowSpeed
+    const tNoise = nowSec * flowSpeed
     // Frame-rate-independent EMA blending coefficient for the curl
     // smoothing filter. α = 1 − exp(−dt/τ); at 60fps with τ=60ms this
     // is ≈ 0.245.
@@ -435,7 +436,7 @@ export function HitParticles() {
     let positionDirty = false
     for (let i = 0; i < MAX_PARTICLES; i++) {
       const birth = births[i]
-      const age = now - birth
+      const age = nowSec - birth
       if (age < 0 || age > lifetimes[i]) continue
 
       const i3 = i * 3
@@ -568,7 +569,7 @@ export function HitParticles() {
       writeIdx.current = (writeIdx.current + 1) % MAX_PARTICLES
       const i3 = slot * 3
 
-      births[slot] = now
+      births[slot] = nowSec
       lifetimes[slot] = lifetimeSec
       positions[i3 + 0] = ox
       positions[i3 + 1] = oy
@@ -627,7 +628,7 @@ export function HitParticles() {
       // min-emission window since the last note-on. Lets staccato notes
       // produce a particle plume that lasts as long as the falling-note
       // visual bar (which is also extended to noteMinLength).
-      const effectiveHeld = heldCount[i] > 0 || now < noteOnTime[i] + minEmitDurationSec
+      const effectiveHeld = heldCount[i] > 0 || nowSec < noteOnTime[i] + minEmitDurationSec
       if (!effectiveHeld) continue
 
       // Stochastic-rounded emission count this frame so per-frame rates
@@ -656,7 +657,7 @@ export function HitParticles() {
     const deathEmitters = deathEmittersRef.current
     for (let e = deathEmitters.length - 1; e >= 0; e--) {
       const em = deathEmitters[e]
-      const age = now - em.startTime
+      const age = nowSec - em.startTime
       if (age >= DEATH_EMIT_DURATION) {
         deathEmitters.splice(e, 1)
         continue

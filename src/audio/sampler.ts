@@ -1,11 +1,27 @@
 import {
-  SplendidGrandPiano,
+  Smplr,
   HttpStorage,
+  Scheduler,
+  pianoToSmplrJson,
   audioBufferToWav,
   type StopFn,
   type Storage,
   type StorageResponse,
 } from 'smplr'
+
+/**
+ * Sample location for smplr's `SplendidGrandPiano` preset (Yamaha CFX,
+ * 4 velocity layers + release noise). We construct the inner `Smplr`
+ * directly rather than using the `SplendidGrandPiano` wrapper because
+ * that wrapper drops the `scheduler` option when forwarding to the
+ * inner Smplr — and offline rendering REQUIRES a custom Scheduler
+ * (see `src/export/renderAudio.ts`). The base URL is replicated from
+ * smplr's source (`SplendidGrandPiano` constructor's `BASE_URL`
+ * default); kept here as a constant so both the realtime and offline
+ * pipelines load identical samples.
+ */
+const SPLENDID_GRAND_PIANO_BASE_URL =
+  'https://smpldsnds.github.io/sfzinstruments-splendid-grand-piano/samples'
 import * as Tone from 'tone'
 
 export type LoadProgress = { loaded: number; total: number }
@@ -17,9 +33,9 @@ export type LoadProgress = { loaded: number; total: number }
  * an audible click. A 1.5ms fade is short enough to preserve the piano hammer
  * attack character while masking the discontinuity.
  */
-class FadeInStorage implements Storage {
+export class FadeInStorage implements Storage {
   constructor(
-    private readonly context: AudioContext,
+    private readonly context: BaseAudioContext,
     private readonly fadeSeconds = 0.0015,
     private readonly base: Storage = HttpStorage,
   ) {}
@@ -65,7 +81,7 @@ function wrapBuffer(buf: ArrayBuffer, status: number): StorageResponse {
 }
 
 export type PianoInstrument = {
-  readonly context: AudioContext
+  readonly context: BaseAudioContext
   /**
    * Schedule a note. `atAudioTime` is in the AudioContext clock; default = now.
    * `stopId` should be unique per voice so the returned StopFn only stops THIS
@@ -135,8 +151,8 @@ export const EQ_BAND_FREQUENCIES = [80, 250, 800, 2500, 6000, 12000] as const
  *   walls less efficiently than LF) — distinct from a static post-convolver
  *   low-pass (Hi Cut), which dulls the whole tail uniformly.
  */
-function createImpulseResponse(
-  ctx: AudioContext,
+export function createImpulseResponse(
+  ctx: BaseAudioContext,
   sizeSec: number,
   decayTimeSec: number,
   shape: number,
@@ -168,10 +184,26 @@ function createImpulseResponse(
  * (so the timbre changes with velocity, not just the volume) plus release
  * noise samples.
  */
+export type CreatePianoOptions = {
+  /**
+   * Override smplr's note Scheduler. The default `Scheduler` polls a
+   * `setInterval` to dispatch queued events whose time exceeds the
+   * lookahead window (~100 ms by default) — dead in an
+   * `OfflineAudioContext`, where `currentTime` jumps from 0 to the
+   * buffer length over a single `startRendering()` call and the
+   * interval never gets to fire. Pass a Scheduler with a very large
+   * `lookaheadMs` (e.g. `Number.POSITIVE_INFINITY`) so EVERY scheduled
+   * event satisfies the synchronous-dispatch branch of `schedule()`.
+   * The realtime engine leaves this undefined and gets the default.
+   */
+  scheduler?: Scheduler
+}
+
 export async function createPiano(
+  context: BaseAudioContext = Tone.getContext().rawContext as AudioContext,
   onProgress?: (p: LoadProgress) => void,
+  options?: CreatePianoOptions,
 ): Promise<PianoInstrument> {
-  const context = Tone.getContext().rawContext as AudioContext
 
   // Signal chain:
   //   piano -> masterGain -> eq[0..5] -> split:
@@ -241,9 +273,31 @@ export async function createPiano(
   hiCut.connect(wetGain)
   wetGain.connect(context.destination)
 
-  const piano = new SplendidGrandPiano(context, {
+  // smplr's signature is typed against AudioContext, but it only calls
+  // BaseAudioContext APIs (AudioBufferSourceNode, GainNode). The cast lets
+  // us share createPiano between the realtime engine and the offline
+  // exporter without duplicating the effect-chain wiring.
+  // SplendidGrandPiano's typed config narrows away `scheduler` (it's only
+  // surfaced on the underlying SmplrOptions), but the runtime forwards
+  // any extra options to the inner Smplr instance — verified against
+  // smplr/dist/index.js. Cast to slip the override past the narrower
+  // typed surface. `as unknown as` keeps TS from reasoning about the
+  // intermediate shape.
+  // Same JSON config that `SplendidGrandPiano` would synthesise — we
+  // replicate it here so we can construct the inner Smplr ourselves and
+  // pass through `scheduler` (which the wrapper drops). The Smplr class
+  // is typed against `AudioContext`; the cast is safe because Smplr only
+  // calls BaseAudioContext APIs internally.
+  const json = pianoToSmplrJson({
+    baseUrl: SPLENDID_GRAND_PIANO_BASE_URL,
+    detune: 0,
+    decayTime: 0.5,
+  })
+  const piano = new Smplr(context as AudioContext, json, {
     destination: masterGain,
     storage: new FadeInStorage(context),
+    velocity: 100,
+    scheduler: options?.scheduler,
     onLoadProgress: (p) => onProgress?.({ loaded: p.loaded, total: p.total }),
   })
   await piano.load
@@ -253,6 +307,11 @@ export async function createPiano(
   // the sampler.
   let releaseTime = 0.3
   let detuneCents = 0
+  // Idempotency flag so dispose() is safe to call multiple times — Web
+  // Audio's `node.disconnect()` throws `InvalidAccessError` if the node
+  // already has no outgoing connections, which would surface here when a
+  // caller tears down on both the abort path and the success path.
+  let disposed = false
 
   return {
     context,
@@ -340,7 +399,37 @@ export async function createPiano(
       node.gain.setTargetAtTime(v, now, 0.02)
     },
     dispose() {
-      piano.disconnect()
+      if (disposed) return
+      disposed = true
+      // Sever the entire effect chain so any still-pending offline
+      // render pumps silence through (cheap) instead of continuing to
+      // process the convolver + EQs (expensive). Without this, a
+      // user-cancelled offline export keeps the OfflineAudioContext
+      // burning CPU for tens of seconds after Cancel — `startRendering()`
+      // has no abort API and the render only finishes when its full
+      // buffer length elapses. Each `disconnect()` is wrapped because
+      // the node may already have no outgoing edge in some teardown
+      // orderings, which would otherwise throw InvalidAccessError.
+      const safeDisconnect = (node: AudioNode) => {
+        try {
+          node.disconnect()
+        } catch {
+          /* already disconnected */
+        }
+      }
+      try {
+        piano.disconnect()
+      } catch {
+        /* ignore */
+      }
+      safeDisconnect(masterGain)
+      for (const eq of eqFilters) safeDisconnect(eq)
+      safeDisconnect(dryGain)
+      safeDisconnect(preDelay)
+      safeDisconnect(lowCut)
+      safeDisconnect(convolver)
+      safeDisconnect(hiCut)
+      safeDisconnect(wetGain)
     },
   }
 }

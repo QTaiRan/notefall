@@ -1,3 +1,5 @@
+import { now } from '../audio/clock'
+
 /**
  * Channel for "a note was deleted via right-click / eraser drag". Two
  * subscribers consume each event:
@@ -43,7 +45,7 @@ class NoteDeathFxManager {
   private listeners = new Set<DeathListener>()
 
   emit(d: DyingNote): void {
-    this.items.push({ ...d, startTime: performance.now() / 1000 })
+    this.items.push({ ...d, startTime: now() })
     for (const fn of this.listeners) fn(d)
   }
 

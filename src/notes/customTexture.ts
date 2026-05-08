@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import * as THREE from 'three'
 import { useStore } from '../store'
+import { now } from '../audio/clock'
 
 /**
  * Holds the user-provided image used by the 'custom' note-texture preset.
@@ -191,7 +192,7 @@ async function loadAnimatedFromBytes(
     ctx,
     currentIndex: 0,
     elapsedInFrame: 0,
-    lastTick: performance.now() / 1000,
+    lastTick: now(),
     rafId: 0,
   }
   scheduleTick(tex)
@@ -202,9 +203,9 @@ function scheduleTick(tex: THREE.Texture) {
   const tick = () => {
     const a = activeAnimation
     if (!a) return
-    const now = performance.now() / 1000
-    const dt = now - a.lastTick
-    a.lastTick = now
+    const nowSec = now()
+    const dt = nowSec - a.lastTick
+    a.lastTick = nowSec
     a.elapsedInFrame += dt
 
     // Advance through any frames whose duration has elapsed (handles browser

@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { KEYBOARD_LAYOUT, WHITE_KEY_LENGTH } from '../keyboard/layout'
+import { now } from '../audio/clock'
 
 const VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -244,8 +245,7 @@ export function HitLine() {
   // continuous morph so users don't perceive it as a glitch.
   const TIME_WRAP_SECONDS = 600
   useFrame(() => {
-    waveMaterial.uniforms.uTime.value =
-      (performance.now() / 1000) % TIME_WRAP_SECONDS
+    waveMaterial.uniforms.uTime.value = now() % TIME_WRAP_SECONDS
   })
 
   if (!settings.hitLineEnabled) return null

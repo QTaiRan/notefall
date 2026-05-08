@@ -10,6 +10,7 @@ Browser-based piano visualizer. Notes fall onto an 88-key keyboard while a MIDI 
 - `@tonejs/midi` for parse/serialize; `tone` only for AudioContext lifecycle
 - `react-aria-components` + Tailwind for UI; `zustand` for state
 - IndexedDB for recordings; Web MIDI API for hardware input
+- `mp4-muxer` + WebCodecs (`VideoEncoder` / `AudioEncoder`) for offline MP4 export
 
 ## Layout
 
@@ -19,12 +20,18 @@ src/
 ├ store.ts       zustand: settings, song, transport, editor, project file
 ├ midi/          parse / serialize / edit (resolveOverlaps lives here)
 ├ projects/      .nfz zip format + FSA wrapper + recent files
-├ audio/         engine, sampler, recorder, click metronome, MIDI input, preview
+├ audio/         engine, sampler, recorder, click metronome, MIDI input, preview,
+│                clock (pluggable time source — real wall-clock or virtual export clock)
 ├ keyboard/      88-key layout + Keyboard.tsx (3D cap geometry, glow, input)
 ├ notes/         FallingNotes (SDF shader), HitLine, HitParticles, LandingFlashes,
 │                noteDeathFx pub-sub, customTexture
-├ scene/         Canvas + EditTools (paused) / PlayToggleArea (playing)
-└ ui/            Layout, Toolbar, Inspector, Viewport, SeekBar, ConfirmModal
+├ scene/         Canvas + EditTools (paused) / PlayToggleArea (playing) +
+│                exportBridge (R3F state getter for the offline video pass)
+├ export/        renderAudio (OfflineAudioContext → AudioBuffer / WAV),
+│                renderVideo (frame-stepped R3F → AVC + AAC → mp4-muxer),
+│                exportAudio / exportVideo (download wrappers)
+└ ui/            Layout, Toolbar, Inspector, Viewport, SeekBar, ConfirmModal,
+                 ExportSettingsDialog, ExportProgressModal
 ```
 
 ## Coordinates
@@ -36,7 +43,7 @@ src/
 
 ## AudioEngine (`src/audio/engine.ts`)
 
-Singleton, decoupled from React. Self-clocked via `performance.now() / 1000`. `Layout.tsx` syncs settings → engine via `useEffect`s.
+Singleton, decoupled from React. Self-clocked via `now()` from `audio/clock.ts` (default = `performance.now() / 1000`; the offline video exporter swaps in a `VirtualClock`). `Layout.tsx` syncs settings → engine via `useEffect`s.
 
 - **Two tick drivers**: `useFrame` (visual sync, paused on hidden tab) + Web Worker `setInterval(25 ms)` (background-tab playback would otherwise stall and burst on return).
 - **Unique `stopId` per note** is mandatory. smplr defaults `stopId` to midi number, so back-to-back same-pitch notes share an id and stopping one cancels another mid-release. We pass `s${noteId}` for song, `live${liveId}` for touch, `prev-${n}` for previews.
@@ -47,10 +54,13 @@ Singleton, decoupled from React. Self-clocked via `performance.now() / 1000`. `L
 - **`addLiveListener` ≠ `addKeyListener`**: live channel only fires for user input (recorder uses it to capture only what the user played).
 - **`triggerPreview`**: plays a sampler note WITHOUT firing key listeners — editor previews don't trigger glow/particles.
 - **`pause()`** keeps visualizer state intact, only kills audio via `releaseAllSounding()`.
+- **Silent / export mode** — `beginExportPlayback()` resets the song cursor and flips `silent = true` so `tick()` walks the timeline emitting only listener events (no `piano.start()`, no pedal-held queue mutation, no end-of-song auto-stop). The video exporter brackets the render with `begin/endExportPlayback` and drives the virtual clock externally.
 
 ## Sampler (`src/audio/sampler.ts`)
 
-Wraps smplr's `SplendidGrandPiano` (~60 MB, 4 velocity layers). Signal: sampler → master gain → 6-band EQ → dry/wet split → ConvolverNode (synthetic IR) → destination.
+Loads the `SplendidGrandPiano` sample set (~60 MB, 4 velocity layers) directly via smplr's underlying `Smplr` class — NOT the `SplendidGrandPiano` wrapper, because that wrapper drops the `scheduler` option when forwarding to its inner `Smplr`. The offline audio render passes a custom `Scheduler` with `lookaheadMs: Infinity` so every `piano.start()` dispatches synchronously inside `OfflineAudioContext.startRendering()` (smplr's default `setInterval`-driven scheduler never fires during offline render and would silently drop everything past the first 100 ms).
+
+`createPiano(context, onProgress, options)` accepts any `BaseAudioContext` — the realtime engine passes Tone's `rawContext`, the offline exporter passes a fresh `OfflineAudioContext`. Same effect-chain wiring (master → 6-band EQ → split → dry / pre-delay → reverb → wet) is used in both paths so render parity is automatic.
 
 **FadeInStorage** is critical — smplr's `Voice` sets `envelope.gain.value = 1` instantly (no attack), so any sample whose first frame isn't zero clicks on attack. We intercept the storage layer, decode, apply 1.5 ms linear fade-in, re-encode WAV, hand back to smplr.
 
@@ -195,6 +205,56 @@ npm run typecheck
 ```
 
 `index.html` lives at project root (Vite convention).
+
+## Export (`src/export/`)
+
+Offline render of the loaded song to either a WAV (audio only), silent MP4 (video only), or A/V MP4. Triggered from File → Export… → settings dialog (`ExportSettingsDialog`); progress + cancel surfaced via `ExportProgressModal` with wall-clock-derived ETA.
+
+### `audio/clock.ts` — pluggable time source
+
+Module-level `Clock` with `setActiveClock` / `resetActiveClock` / `now()`. Default is the real wall clock (`performance.now() / 1000`). Engine + visual effects (HitParticles, LandingFlashes, HitLine, FallingNotes' `uTime`, customTexture animator) all read `now()` instead of `performance.now()` so the exporter can swap in a `VirtualClock` and step them at non-realtime intervals.
+
+Recorder + MIDI input intentionally still call `performance.now()` directly — they only run during live performance, never under a virtualised clock.
+
+### Audio render (`renderAudio.ts`)
+
+Builds a fresh `OfflineAudioContext` at the chosen sample rate, brings up `createPiano(ctx)` with the **infinite-lookahead Scheduler**, walks the song's notes + pedal events to schedule note-on / note-off on the AudioContext clock (with the same lookahead / stop-buffer / pedal-sustain semantics as the realtime tick), and `await ctx.startRendering()`. Returns an `AudioBuffer`.
+
+Pedal sustain becomes declarative offline: `buildPedalRanges(events)` collapses the song's pedal CC into `[downStart, downEnd]` ranges, then any note whose natural off-time falls inside a range is held until that range's end (mirrors the realtime engine's `pedalHeld` deferred-release behaviour).
+
+`AbortSignal` plumbing: `raceWithAbort` wraps both the sample fetch (`await piano.load`) and `ctx.startRendering()` so Cancel is responsive even mid-load. The underlying work continues in the background and gets GC'd along with the abandoned `OfflineAudioContext`.
+
+Default sample rate: 44.1 kHz (vs 48 kHz). Convolution reverb is the dominant cost; the audible difference for piano material is below human-hearing thresholds and the lower rate noticeably trims render time.
+
+### Video render (`renderVideo.ts`)
+
+Single function `renderSongVideo(song, settings, options)` produces a complete MP4 Blob with both video + audio tracks (or video only when `options.audio === null`).
+
+**Pipeline:**
+1. Snapshot R3F state (renderer size, pixel ratio, frameloop, camera aspect, `state.clock` flags) for the `finally`-block restoration.
+2. **Disarm `THREE.Clock`**: stop it + set `autoStart=false` + zero `elapsedTime`/`oldTime`. Without this, R3F's `getDelta()` (called unconditionally before the `frameloop="never"` override) accumulates wall-clock seconds into `elapsedTime`. The override's `delta = timestamp - elapsedTime` then drifts with units mismatched against our virtual timeline and **eventually goes negative** — sending Keyboard's exp-decay glow into NaN/Infinity (~1 minute into a render the keyboard saturates and clips to black). With autoStart off, getDelta returns 0 and the override owns the timeline.
+3. Install a `VirtualClock` and call `audioEngine.beginExportPlayback()`.
+4. Build a single `mp4-muxer` with both video + audio track configs.
+5. **Audio render runs in parallel** with the video pass — `renderSongAudio(...)` returns a Promise that's not awaited until step 7. The OfflineAudioContext processes off the main thread; the video frame loop runs on the main thread; total wall-clock = max(audio, video) instead of sum.
+6. Resize renderer's drawing buffer to export resolution, switch to `frameloop="never"`. Frame loop:
+   - `clock.setTime(t)` — virtual time in seconds
+   - `r3f.advance(t, true)` — fires all useFrames + renders. **Pass seconds, not milliseconds**: useFrame consumers (Keyboard's `1 - exp(-delta/decay)` glow) treat delta as seconds, and the `frameloop="never"` override sets `delta = timestamp - elapsedTime` directly.
+   - `new VideoFrame(canvas, { timestamp })` → `videoEncoder.encode(...)`
+   - **Yield to event loop every frame** via `MessageChannel.postMessage` (`yieldToEventLoop()`). Without this, the synchronous loop monopolises the main thread and Cancel-button clicks never fire. `setTimeout(0)` would compound the spec's nested-timeout 4 ms clamp into many seconds across an 18 000-frame render; MessageChannel has no clamp.
+7. Await audio buffer → AudioEncoder → AAC chunks (1024 samples per chunk in `f32-planar` layout) → muxer.
+8. Flush both encoders, `muxer.finalize()`, return Blob.
+
+**Codec selection:** `pickAvcCodecString(w, h, fps)` picks an H.264 high-profile level by macroblocks-per-second budget (4.0 for 1080p30, 4.1 for 1080p60, 5.0 for 4K30, 5.1 for 4K60) so `VideoEncoder.configure()` doesn't reject mismatched levels.
+
+**Progress** is a single weighted-sum bar: `audioWeight × audioFraction + videoWeight × videoFraction`. Audio weight collapses to 0 when no audio track is wanted, so the bar becomes pure video progress. The audio fraction is itself a weighted sum of three sub-phases (loading 35% / offline render 55% / AAC encode 10%) so it's monotonic.
+
+**Browser support:** WebCodecs (`VideoEncoder` + `AudioEncoder` + `VideoFrame` + `AudioData`) is the binding constraint. Available on Chrome / Edge / Safari 16.4+; Firefox is still rolling out (early 2026). `isVideoExportSupported()` gates the dialog's video options.
+
+### Settings dialog + progress modal (`ui/Export*.tsx`)
+
+`ExportSettingsDialog` — single configuration form with format radio (Video+audio / Video only / Audio only), resolution / fps / quality (when video), and an estimated-size readout. Defaults persist across the session via `Toolbar`'s `exportDefaults` state. Dismissable; no in-flight work to lose.
+
+`ExportProgressModal` — shared by all three export paths. Shows title, phase label, progress bar, percentage, and ETA (`elapsed × (1/progress - 1)`, suppressed below 5% progress so the readout doesn't snap from a wildly wrong huge number). Non-dismissable; Cancel button aborts the controller.
 
 ## License
 

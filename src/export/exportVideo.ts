@@ -1,0 +1,145 @@
+import type { ParsedSong } from '../midi/types'
+import type { Settings } from '../store'
+import {
+  VideoRenderAborted,
+  isVideoExportSupported,
+  renderSongVideo,
+  type AudioTrackConfig,
+  type VideoRenderOptions,
+  type VideoRenderProgress,
+} from './renderVideo'
+
+// ──────────────────────────────────────────────────────────────────────
+// Composable export settings — the export-settings dialog picks a value
+// from each axis (resolution, fps, quality) and the bitrate ladder
+// looks up the right number. Splitting "preset" into independent axes
+// instead of a flat `1080p · 60fps · High` list keeps the UI readable
+// when we add more dimensions (e.g. shorter aspect ratios for vertical
+// video) and lets each axis evolve independently.
+// ──────────────────────────────────────────────────────────────────────
+
+export type VideoResolutionId = '720p' | '1080p' | '4k'
+export type VideoFps = 30 | 60
+export type VideoQualityId = 'standard' | 'high'
+
+export const VIDEO_RESOLUTIONS: Record<
+  VideoResolutionId,
+  { width: number; height: number; label: string }
+> = {
+  '720p': { width: 1280, height: 720, label: '720p' },
+  '1080p': { width: 1920, height: 1080, label: '1080p' },
+  '4k': { width: 3840, height: 2160, label: '4K' },
+}
+
+export const VIDEO_QUALITIES: Record<
+  VideoQualityId,
+  { label: string; bitrateMul: number }
+> = {
+  // Numbers chosen so "High" is visibly cleaner than "Standard" without
+  // doubling file size — bitrate scales ~1.5×, perceived quality scales
+  // less than that for typical piano-viz content.
+  standard: { label: 'Standard', bitrateMul: 1.0 },
+  high: { label: 'High', bitrateMul: 1.5 },
+}
+
+/**
+ * Base video bitrate (kbps) per resolution × fps combo. "Standard"
+ * quality maps directly to these numbers; "High" applies the
+ * `bitrateMul` from `VIDEO_QUALITIES`. Tuned for piano-visualization
+ * content (dark backgrounds, sharp edges, occasional bright bloom);
+ * a videographer-aimed app might pick higher numbers but these
+ * produce clean files in the 30–200 MB range for typical song lengths.
+ */
+const BASE_VIDEO_BITRATES_KBPS: Record<`${VideoResolutionId}_${VideoFps}`, number> = {
+  '720p_30': 4_000,
+  '720p_60': 6_000,
+  '1080p_30': 8_000,
+  '1080p_60': 12_000,
+  '4k_30': 25_000,
+  '4k_60': 40_000,
+}
+
+export function computeVideoBitrateKbps(
+  resolution: VideoResolutionId,
+  fps: VideoFps,
+  quality: VideoQualityId,
+): number {
+  const base = BASE_VIDEO_BITRATES_KBPS[`${resolution}_${fps}`]
+  return Math.round(base * VIDEO_QUALITIES[quality].bitrateMul)
+}
+
+/**
+ * Default AAC-LC audio config — keep aligned with `exportAudio.ts`'s
+ * 44.1 kHz so the WAV path and the MP4 audio path produce equivalent
+ * quality. 192 kbps is transparent for piano material.
+ */
+export const DEFAULT_AUDIO_CONFIG: AudioTrackConfig = {
+  sampleRate: 44_100,
+  bitrateKbps: 192,
+}
+
+export type VideoExportResult =
+  | { kind: 'ok' }
+  | { kind: 'cancelled' }
+  | { kind: 'unsupported' }
+  | { kind: 'error'; message: string }
+
+export type Mp4ExportOptions = {
+  width: number
+  height: number
+  fps: number
+  videoBitrateKbps: number
+  /** `null` to produce a silent MP4 (no audio track). */
+  audio: AudioTrackConfig
+  fileName?: string
+  signal?: AbortSignal
+  onProgress?: (p: VideoRenderProgress) => void
+}
+
+export async function exportSongToMp4(
+  song: ParsedSong,
+  settings: Settings,
+  options: Mp4ExportOptions,
+): Promise<VideoExportResult> {
+  if (!isVideoExportSupported()) return { kind: 'unsupported' }
+
+  const renderOptions: VideoRenderOptions = {
+    width: options.width,
+    height: options.height,
+    fps: options.fps,
+    videoBitrateKbps: options.videoBitrateKbps,
+    audio: options.audio,
+    signal: options.signal,
+    onProgress: options.onProgress,
+  }
+
+  try {
+    const blob = await renderSongVideo(song, settings, renderOptions)
+    if (options.signal?.aborted) return { kind: 'cancelled' }
+    const fileName = options.fileName ?? defaultMp4FileName(song.name)
+    triggerDownload(blob, fileName)
+    return { kind: 'ok' }
+  } catch (e) {
+    if (e instanceof VideoRenderAborted) return { kind: 'cancelled' }
+    const message = e instanceof Error ? e.message : String(e)
+    return { kind: 'error', message }
+  }
+}
+
+function defaultMp4FileName(songName: string): string {
+  const base = songName.trim().replace(/\.(mid|midi)$/i, '')
+  const cleaned = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim()
+  const fallback = `notefall-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`
+  return `${cleaned || fallback}.mp4`
+}
+
+function triggerDownload(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}

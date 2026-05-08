@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { recorder } from '../audio/recorder'
+import { registerR3FStateGetter } from './exportBridge'
 import { Keyboard } from '../keyboard/Keyboard'
 import { FallingNotes } from '../notes/FallingNotes'
 import { LandingFlashes } from '../notes/LandingFlashes'
@@ -61,6 +62,7 @@ function SceneContents() {
       <ambientLight intensity={0.35} />
       <directionalLight position={[2, 6, 4]} intensity={0.8} />
       <CameraSync pos={s.cameraPos} lookAt={s.cameraLookAt} fov={s.cameraFov} />
+      <R3FStateBridge />
       {editMode ? <EditTools /> : <PlayToggleArea />}
       <Keyboard />
       {s.notesEnabled && <FallingNotes />}
@@ -198,6 +200,19 @@ function PlayToggleArea() {
       )}
     </>
   )
+}
+
+/**
+ * Registers the R3F state with the export bridge for the lifetime of
+ * the Canvas. The video exporter (src/export/renderVideo.ts) reads
+ * gl/scene/camera/advance/set imperatively through the bridge, so this
+ * has to live INSIDE the Canvas — `useThree` only resolves under a
+ * Canvas's R3F context.
+ */
+function R3FStateBridge() {
+  const get = useThree((s) => s.get)
+  useEffect(() => registerR3FStateGetter(get), [get])
+  return null
 }
 
 function CameraSync({

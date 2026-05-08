@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
+import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH } from '../keyboard/layout'
 
 const VERTEX_SHADER = /* glsl */ `
@@ -126,7 +127,7 @@ export function LandingFlashes() {
         if (sustainLevels[idx] < sustain) sustainLevels[idx] = sustain
         // Instant on — no rise time. Also extend the minimum-visible window.
         intensities[idx] = sustainLevels[idx]
-        heldUntil[idx] = performance.now() / 1000 + MIN_HOLD_SECONDS
+        heldUntil[idx] = now() + MIN_HOLD_SECONDS
         intensityAttr.needsUpdate = true
       } else {
         heldCount[idx] = Math.max(0, heldCount[idx] - 1)
@@ -162,13 +163,13 @@ export function LandingFlashes() {
   }, [intensityAttr, dummy, settings.flashSize, settings.flashWidth])
 
   useFrame(() => {
-    const now = performance.now() / 1000
+    const nowSec = now()
     let dirty = false
     for (let i = 0; i < KEY_COUNT; i++) {
       if (intensities[i] === 0) continue
       // Snap off only when the key has been released AND the minimum hold
       // window has elapsed. Otherwise hold the current intensity steady.
-      if (heldCount[i] === 0 && now >= heldUntil[i]) {
+      if (heldCount[i] === 0 && nowSec >= heldUntil[i]) {
         intensities[i] = 0
         sustainLevels[i] = 0
         dirty = true

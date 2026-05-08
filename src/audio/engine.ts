@@ -1,6 +1,7 @@
 import * as Tone from 'tone'
 import type { ParsedSong } from '../midi/types'
 import { createPiano, type PianoInstrument, type LoadProgress } from './sampler'
+import { now } from './clock'
 
 type ActiveNote = {
   id: number
@@ -44,7 +45,7 @@ export type LiveNote = {
   id: number
   midi: number
   velocity: number
-  startTime: number // performance.now() / 1000 at trigger
+  startTime: number // clock.now() at trigger
   endTime: number | null // null while still held
 }
 
@@ -57,7 +58,7 @@ export type KeyEventListener = (
 /**
  * Subscriber for "live" input events — fires only for user-initiated input
  * (PC keyboard, on-screen keyboard, physical MIDI device), NOT for song
- * playback. `time` is `performance.now() / 1000` at the moment the event
+ * playback. `time` is `clock.now()` at the moment the event
  * was generated. The recorder uses this to capture only what the user
  * actually played.
  */
@@ -77,7 +78,7 @@ export class AudioEngine {
   private song: ParsedSong | null = null
 
   private playing = false
-  private startedAt = 0 // performance.now() / 1000 at last play
+  private startedAt = 0 // clock.now() at last play
   private offsetAtStart = 0 // song time at startedAt
 
   private rate = 1
@@ -129,6 +130,20 @@ export class AudioEngine {
   private listeners = new Set<KeyEventListener>()
   private liveListeners = new Set<LiveInputListener>()
 
+  // Silent / export-only playback. When true, `tick()` emits keyboard
+  // listener events (so the visual layer paints the same scene it
+  // would during live playback at this song time) but never touches
+  // the sampler, AudioContext, or pedal-held audio queue. The video
+  // exporter sets this between `beginExportPlayback` and
+  // `endExportPlayback`. End-of-song auto-stop is also skipped — the
+  // export driver decides when the timeline ends.
+  private silent = false
+  // Saved values needed to restore the engine after an export pass.
+  // Populated by beginExportPlayback, drained by endExportPlayback.
+  private savedExportState: {
+    rate: number
+  } | null = null
+
   // user-triggered notes (touch/click on the keyboard)
   private liveNotes: LiveNote[] = []
   private liveIdCounter = 0
@@ -150,7 +165,7 @@ export class AudioEngine {
     if (this.initPromise) return this.initPromise
     this.initPromise = (async () => {
       try {
-        this.piano = await createPiano(onProgress)
+        this.piano = await createPiano(undefined, onProgress)
         this.piano.setVolume(this.volume)
         this.piano.setReverbSize(this.reverbSize)
         this.piano.setReverbDecayTime(this.reverbDecayTime)
@@ -278,7 +293,7 @@ export class AudioEngine {
   setRate(rate: number): void {
     const t = this.currentSongTime()
     this.rate = Math.max(0.25, Math.min(4, rate))
-    this.startedAt = performance.now() / 1000
+    this.startedAt = now()
     this.offsetAtStart = t
   }
 
@@ -297,7 +312,7 @@ export class AudioEngine {
     if (this.livePedalDown === down) return
     this.livePedalDown = down
     if (!down) this.flushPedalHeld('live')
-    this.emitLive({ type: 'pedal', down, time: performance.now() / 1000 })
+    this.emitLive({ type: 'pedal', down, time: now() })
   }
 
   setLoop(loop: boolean): void {
@@ -311,7 +326,7 @@ export class AudioEngine {
     this.pedalIdx = 0
     this.pedalDown = false
     this.offsetAtStart = 0
-    this.startedAt = performance.now() / 1000
+    this.startedAt = now()
     this.playing = false
   }
 
@@ -365,7 +380,7 @@ export class AudioEngine {
     this.pedalIdx = 0
     this.pedalDown = false
     this.offsetAtStart = 0
-    this.startedAt = performance.now() / 1000
+    this.startedAt = now()
     this.playing = false
   }
 
@@ -374,7 +389,7 @@ export class AudioEngine {
     if (Tone.getContext().state !== 'running') {
       await Tone.start()
     }
-    this.startedAt = performance.now() / 1000
+    this.startedAt = now()
     this.playing = true
     this.startBackgroundTicker()
   }
@@ -447,7 +462,7 @@ export class AudioEngine {
     this.pedalHeld = []
 
     // Live (user-played) notes: always cleared on seek.
-    const liveNow = performance.now() / 1000
+    const liveNow = now()
     for (const n of this.liveNotes) {
       if (n.endTime === null) {
         n.endTime = liveNow
@@ -476,7 +491,7 @@ export class AudioEngine {
     }
 
     this.offsetAtStart = clamped
-    this.startedAt = performance.now() / 1000
+    this.startedAt = now()
     this.recomputeIndices(clamped)
     this.playing = wasPlaying
   }
@@ -487,7 +502,7 @@ export class AudioEngine {
 
   currentSongTime(): number {
     if (!this.playing) return this.offsetAtStart
-    const wall = performance.now() / 1000
+    const wall = now()
     return this.offsetAtStart + (wall - this.startedAt) * this.rate
   }
 
@@ -504,7 +519,7 @@ export class AudioEngine {
     const id = this.liveIdCounter++
     const shaped = this.shapeVelocity(velocity)
     const stopFn = this.piano.start(midi, shaped, undefined, `live${id}`)
-    const startTime = performance.now() / 1000
+    const startTime = now()
     const note: LiveNote = { id, midi, velocity: shaped, startTime, endTime: null }
     this.liveNotes.push(note)
     this.liveStops.set(id, stopFn)
@@ -515,7 +530,7 @@ export class AudioEngine {
       id,
       release: () => {
         if (note.endTime !== null) return
-        note.endTime = performance.now() / 1000
+        note.endTime = now()
         const stopTime = (this.piano?.context.currentTime ?? 0) + STOP_BUFFER
         // Live notes are sustained by either pedal source. Tag with whichever
         // is currently down — live takes precedence when both are pressed,
@@ -566,9 +581,9 @@ export class AudioEngine {
   }
 
   private cleanupLiveNotes(): void {
-    const now = performance.now() / 1000
+    const nowSec = now()
     // retain held notes always; drop released notes after 10s (well past any reasonable fall window)
-    this.liveNotes = this.liveNotes.filter((n) => n.endTime === null || now - n.endTime < 10)
+    this.liveNotes = this.liveNotes.filter((n) => n.endTime === null || nowSec - n.endTime < 10)
   }
 
   addKeyListener(fn: KeyEventListener): () => void {
@@ -641,10 +656,10 @@ export class AudioEngine {
     }
     this.pedalHeld = []
     // also mark live notes as released (audio already stopped via stopAll)
-    const now = performance.now() / 1000
+    const nowSec = now()
     for (const n of this.liveNotes) {
       if (n.endTime === null) {
-        n.endTime = now
+        n.endTime = nowSec
         this.emit({ type: 'off', midi: n.midi, songTime: t })
       }
     }
@@ -674,11 +689,21 @@ export class AudioEngine {
   /** Called every frame from the visual loop, plus from the background-tab worker. */
   tick(): void {
     this.cleanupLiveNotes()
-    if (!this.piano || !this.song || !this.playing) return
-    // Some browsers suspend the AudioContext on background tabs even with
-    // sources active; nudge it back to running so scheduled notes still fire.
-    if (this.piano.context.state === 'suspended') {
-      this.piano.context.resume().catch(() => {})
+    if (!this.song || !this.playing) return
+    // In silent mode (export pass) we operate without a sampler — the
+    // tick still walks the song to fire listener events for the
+    // visual layer, but no audio is scheduled.
+    if (!this.silent && !this.piano) return
+    if (!this.silent && this.piano) {
+      // Some browsers suspend the AudioContext on background tabs even with
+      // sources active; nudge it back to running so scheduled notes still fire.
+      // The realtime engine always runs against an AudioContext (Tone's
+      // rawContext). Cast for the resume() call which is not on
+      // BaseAudioContext.
+      const realCtx = this.piano.context as AudioContext
+      if (realCtx.state === 'suspended') {
+        realCtx.resume().catch(() => {})
+      }
     }
     const songTime = this.currentSongTime()
 
@@ -698,7 +723,8 @@ export class AudioEngine {
     // so the sample starts on a clean buffer boundary instead of mid-quantum
     // — this is what causes the audible "click" at note start.
     const LOOKAHEAD = 0.015
-    const audioBase = this.piano.context.currentTime + LOOKAHEAD
+    const audioBase =
+      !this.silent && this.piano ? this.piano.context.currentTime + LOOKAHEAD : 0
     while (this.noteIdx < this.song.notes.length && this.song.notes[this.noteIdx].time <= songTime) {
       const n = this.song.notes[this.noteIdx]
       this.noteIdx++
@@ -713,16 +739,20 @@ export class AudioEngine {
       // Unique stopId per note prevents cross-talk when the same pitch repeats
       // close enough that voices overlap in smplr's voice manager.
       const shaped = this.shapeVelocity(n.velocity)
-      const stopFn = this.piano.start(playedMidi, shaped, audioBase + offset, `s${n.id}`)
+      const stopFn =
+        this.silent || !this.piano
+          ? noopStop
+          : this.piano.start(playedMidi, shaped, audioBase + offset, `s${n.id}`)
       this.active.set(n.id, { id: n.id, midi: playedMidi, endTime: n.time + n.duration, stop: stopFn })
       this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime })
     }
 
     // process note offs (any active note whose end has passed)
-    const stopTime = this.piano.context.currentTime + STOP_BUFFER
+    const stopTime =
+      !this.silent && this.piano ? this.piano.context.currentTime + STOP_BUFFER : 0
     for (const a of this.active.values()) {
       if (a.endTime <= songTime) {
-        if (this.pedalEnabled && this.pedalDown) {
+        if (!this.silent && this.pedalEnabled && this.pedalDown) {
           this.pedalHeld.push({ midi: a.midi, stop: a.stop, source: 'song' })
         } else {
           a.stop(stopTime)
@@ -733,16 +763,80 @@ export class AudioEngine {
     }
 
     // end of song. Loop snaps back at the exact end; non-loop adds a tail
-    // window so the in-flight visuals + reverb finish naturally.
-    const endThreshold = this.song.duration + (this.loop ? 0 : SONG_TAIL_SECONDS)
-    if (songTime >= endThreshold && this.active.size === 0 && this.pedalHeld.length === 0) {
-      if (this.loop) {
-        this.seek(0)
-      } else {
-        this.stop()
+    // window so the in-flight visuals + reverb finish naturally. Silent
+    // (export) mode skips this — the exporter is the authority on when
+    // the timeline ends, and an auto-stop here would terminate a render
+    // mid-frame.
+    if (!this.silent) {
+      const endThreshold = this.song.duration + (this.loop ? 0 : SONG_TAIL_SECONDS)
+      if (songTime >= endThreshold && this.active.size === 0 && this.pedalHeld.length === 0) {
+        if (this.loop) {
+          this.seek(0)
+        } else {
+          this.stop()
+        }
       }
     }
   }
+
+  /**
+   * Set up the engine for a one-pass offline render. Walks the song
+   * from t=0 in lockstep with the externally-driven `VirtualClock`
+   * (see `audio/clock.ts`): each `tick()` after this point reads
+   * `currentSongTime()` = `clock.now()` and fires the listener
+   * events the visual layer needs to paint the same scene it would
+   * during live playback. No audio is scheduled — `silent` blocks
+   * every `piano.start()` and pedal-held queue mutation.
+   *
+   * The caller is expected to: (a) install a `VirtualClock` via
+   * `setActiveClock`, (b) call `engine.loadSong(song)` so the
+   * timeline is in place, (c) call `beginExportPlayback`, (d) drive
+   * the virtual clock + R3F frame stepping, (e) call
+   * `endExportPlayback` to restore the engine to a clean stopped
+   * state.
+   *
+   * Pre-existing playback is torn down (releaseAll + stop the
+   * background ticker) so leftover sounding notes don't bleed into
+   * the rendered visualization.
+   */
+  beginExportPlayback(): void {
+    if (this.savedExportState) return
+    this.savedExportState = { rate: this.rate }
+    this.releaseAll()
+    this.stopBackgroundTicker()
+    this.silent = true
+    this.playing = true
+    this.rate = 1
+    this.startedAt = 0
+    this.offsetAtStart = 0
+    this.noteIdx = 0
+    this.pedalIdx = 0
+    this.pedalDown = false
+  }
+
+  /**
+   * Tear down the export pass. Leaves the engine in a clean stopped
+   * state with the song still loaded — equivalent to the user having
+   * pressed Stop. The user can press Play to resume from the
+   * beginning. The previously-saved playback rate is restored so the
+   * user's UI slider continues to mean what it said.
+   */
+  endExportPlayback(): void {
+    if (!this.savedExportState) return
+    const saved = this.savedExportState
+    this.savedExportState = null
+    this.releaseAll()
+    this.silent = false
+    this.playing = false
+    this.rate = saved.rate
+    this.startedAt = now()
+    this.offsetAtStart = 0
+    this.noteIdx = 0
+    this.pedalIdx = 0
+    this.pedalDown = false
+  }
 }
+
+const noopStop: (time?: number) => void = () => {}
 
 export const audioEngine = new AudioEngine()
