@@ -86,7 +86,7 @@ const RANGE_SELECT_CURSOR = 'cell'
 // a real margin to avoid accidental nudges on a select-click.
 const DRAG_THRESHOLD_PX = 4
 
-const NOTE_Z = 0.05
+const NOTE_Z = 0.1
 const PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), -NOTE_Z)
 
 export function EditTools() {

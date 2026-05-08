@@ -543,11 +543,12 @@ export function FallingNotes() {
     const fall = settings.fallDurationSec
     const widthScale = settings.noteWidthScale
     const minLength = Math.max(0.01, settings.noteMinLength)
-    // Sit at the same z plane as the keys (slightly in front so they layer
-    // cleanly). Hit-line clipping happens per-pixel in the fragment shader,
-    // so the note's bottom can extend below hitY in geometry without showing
-    // visually — and there's no perspective parallax between note and key.
-    const noteZ = 0.05
+    // Sit in front of the 3D black keys (top face at z=BLACK_KEY_THICKNESS
+    // = 0.09) so notes don't appear stuck inside them at the moment they
+    // cross the hit line. Hit-line clipping happens per-pixel in the
+    // fragment shader, so geometry below hitY is invisible. Parallax vs.
+    // the keys at this z offset (camera at z=12) is sub-pixel.
+    const noteZ = 0.1
     material.uniforms.uHitY.value = hitY
     // Wall clock — used by texture presets (e.g. liquid flow). Pause-friendly
     // (keeps animating) since the texture should breathe even when stopped.
@@ -735,11 +736,11 @@ export function FallingNotes() {
     alphaAttr.needsUpdate = true
   })
 
-  // Project a screen-space pointer to the falling-note z plane (z = 0.05).
+  // Project a screen-space pointer to the falling-note z plane (z = 0.1).
   // Used during drag tracking via window-level pointermove (which is in
   // client coords, not three event coords). Returns null if the canvas has
   // disappeared mid-drag (e.g. the user navigated away).
-  const noteZ = 0.05
+  const noteZ = 0.1
   const screenToWorld = (clientX: number, clientY: number): THREE.Vector3 | null => {
     const canvas = gl.domElement
     if (!canvas) return null

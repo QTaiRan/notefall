@@ -8,12 +8,21 @@ import {
   WHITE_KEY_WIDTH,
 } from "./layout";
 
-// Wood chassis below the white cap, visible through the 4% inter-key gap.
+// Wood chassis below the white cap, sharing the cap's 4% inter-key
+// inset so the visible gap between keys runs continuously top-to-bottom
+// (and adjacent bodies' rounded front corners don't collide at the
+// boundary). Wood is still visible at oblique viewing angles.
 export const WHITE_BODY_HEIGHT = 0.22;
-export const WOOD_COLOR = "#362A1B";
-export const WOOD_TOP_GAP = 0.001;
-export const WHITE_CAP_THICKNESS = 0.01;
+export const WOOD_COLOR = "#a87d38";
+export const WOOD_TOP_GAP = 0;
+export const WHITE_CAP_THICKNESS = 0.015;
 const WHITE_CAP_CORNER_RADIUS = 0.025;
+// Rim bevel applied uniformly to the cap perimeter — softens the
+// front-top edge, the side edges of the front face, and the cap top's
+// corner profile. ExtrudeGeometry extrudes (depth − 2·bevel) and adds
+// bevel volumes on top + bottom; we offset the post-translate so the
+// final top face still lands at mesh-local z = 0.
+const WHITE_CAP_BEVEL = 0.005;
 
 // Black-key slope angle from horizontal — real piano black keys have a
 // flat (non-curved) ~50° front-facing bevel.
@@ -674,8 +683,10 @@ function createRoundedWhiteGeometry(
     shape.lineTo(+nRX, nY);
     shape.lineTo(+nRX, +halfL);
   } else {
-    shape.lineTo(+halfW, +halfL - r);
-    shape.quadraticCurveTo(+halfW, +halfL, +halfW - r, +halfL);
+    // Back-right corner intentionally sharp — the back of the keyboard
+    // sits behind the black-key row and the user reads its outline as
+    // crisp; only the front face needs softening.
+    shape.lineTo(+halfW, +halfL);
   }
   if (leftBlack) {
     // Mirror of the right notch, traversed in CCW direction.
@@ -683,20 +694,80 @@ function createRoundedWhiteGeometry(
     shape.lineTo(nLX, nY);
     shape.lineTo(-halfW, nY);
   } else {
-    shape.lineTo(-halfW + r, +halfL);
-    shape.quadraticCurveTo(-halfW, +halfL, -halfW, +halfL - r);
+    // Back-left corner intentionally sharp — see comment above.
+    shape.lineTo(-halfW, +halfL);
   }
   shape.lineTo(-halfW, -halfL + r);
   shape.quadraticCurveTo(-halfW, -halfL, -halfW + r, -halfL);
 
+  // Inward bevel — rounds the cap's outer edges by REMOVING material
+  // (a chamfer), so the cap stays within the original shape outline and
+  // doesn't grow into adjacent keys. With ExtrudeGeometry's bevel
+  // formula `bs = bevelSize·cos(t·π/2) + bevelOffset` (t in 0→1):
+  //   t=0 (side wall) → bs = bevelSize + bevelOffset = 0 → matches outline
+  //   t=1 (top face)  → bs = bevelOffset = −BEVEL  → top face inset
+  // Net result: side wall stays at the original outline, top + bottom
+  // faces shrink by BEVEL, with a smooth quarter-circle in between.
   const geom = new THREE.ExtrudeGeometry(shape, {
-    depth: WHITE_CAP_THICKNESS,
-    bevelEnabled: false,
+    depth: WHITE_CAP_THICKNESS - 2 * WHITE_CAP_BEVEL,
+    bevelEnabled: true,
+    bevelThickness: WHITE_CAP_BEVEL,
+    bevelSize: WHITE_CAP_BEVEL,
+    bevelOffset: -WHITE_CAP_BEVEL,
+    bevelSegments: 3,
     curveSegments: 6,
   });
   // Shift so the +Z (visible top) face lands at z=0 in mesh-local.
-  geom.translate(0, 0, -WHITE_CAP_THICKNESS);
+  geom.translate(0, 0, -WHITE_CAP_THICKNESS + WHITE_CAP_BEVEL);
+  // The cap's front side wall + top/bottom bevel curves naturally face
+  // toward -Y (and tangents toward ±Z) — the only directional light is
+  // at +Y +Z, so those surfaces render almost ambient-only and read as a
+  // dark band between the bright top face and the body's white front.
+  // Override front-section vertex normals to +Z so the front section
+  // catches the same diffuse contribution as the top face.
+  flattenCapFrontNormals(geom, -WHITE_KEY_LENGTH / 2, halfW);
   return geom;
+}
+
+// Cap normal hacks. Two effects:
+//   • Front section (front side wall + top/bottom bevels + rounded
+//     front-left/right corners) → normal +Z so the surface lights up
+//     like the top face; otherwise the natural -Y outward normal misses
+//     the only directional light and reads as a thin dark band.
+//   • Left / right side walls → normal -Z so they get ambient-only
+//     light, intentionally darker than the top so the cap reads as a
+//     three-dimensional volume instead of a flat wash of white.
+// The body width inset (cap and body share 4% inset) means the cap's
+// side wall vertices sit on x = ±halfW where halfW is `cap-half-width`;
+// detecting by |x| ≥ halfW − ε is robust regardless of bevel.
+function flattenCapFrontNormals(
+  geom: THREE.BufferGeometry,
+  frontY: number,
+  halfW: number,
+): void {
+  const positions = (geom.getAttribute("position") as THREE.BufferAttribute)
+    .array as Float32Array;
+  const normalAttr = geom.getAttribute("normal") as THREE.BufferAttribute;
+  const normals = normalAttr.array as Float32Array;
+  const vertexCount = positions.length / 3;
+  const yBound = frontY + WHITE_CAP_CORNER_RADIUS + 1e-5;
+  const sideXBound = halfW - 1e-5;
+  for (let v = 0; v < vertexCount; v++) {
+    const x = positions[v * 3];
+    const y = positions[v * 3 + 1];
+    if (y >= frontY - 1e-5 && y < yBound) {
+      // Front section → +Z (bright like top face).
+      normals[v * 3 + 0] = 0;
+      normals[v * 3 + 1] = 0;
+      normals[v * 3 + 2] = 1;
+    } else if (Math.abs(x) > sideXBound) {
+      // Side wall → -Z (ambient-only, darker than top).
+      normals[v * 3 + 0] = 0;
+      normals[v * 3 + 1] = 0;
+      normals[v * 3 + 2] = -1;
+    }
+  }
+  normalAttr.needsUpdate = true;
 }
 
 // Cache by neighbor configuration — only 4 unique cap shapes across all
@@ -725,15 +796,28 @@ function buildWhiteBodyShape(
   leftBlack: boolean,
   rightBlack: boolean,
 ): THREE.Shape {
-  const halfW = WHITE_KEY_WIDTH / 2;
+  // Body is inset slightly from the full key width — without an inset
+  // adjacent bodies' rounded front corners meet at the boundary point,
+  // producing a sharp V-notch at every inter-key seam at the front of
+  // the keyboard. The cap's 4% inset already creates the visible
+  // inter-key gap from the top, so matching it here keeps the gap
+  // continuous all the way down the front face.
+  const halfW = (WHITE_KEY_WIDTH * 0.96) / 2;
   const halfL = WHITE_KEY_LENGTH / 2;
+  // Body front recessed so the cap (which still extends to -halfL)
+  // overhangs by WHITE_BODY_FRONT_OVERHANG.
+  const frontY = -halfL + WHITE_BODY_FRONT_OVERHANG;
+  const fr = WHITE_BODY_FRONT_CORNER_R;
   const nRX = NOTCH_INSET_FROM_BOUNDARY;
   const nLX = -NOTCH_INSET_FROM_BOUNDARY;
   const nY = NOTCH_FRONT_Y;
 
   const shape = new THREE.Shape();
-  shape.moveTo(-halfW, -halfL);
-  shape.lineTo(+halfW, -halfL);
+  // Start partway in from the front-left corner; quadraticCurveTo at the
+  // end of the loop closes the shape with a rounded corner back to here.
+  shape.moveTo(-halfW + fr, frontY);
+  shape.lineTo(+halfW - fr, frontY);
+  shape.quadraticCurveTo(+halfW, frontY, +halfW, frontY + fr);
   if (rightBlack) {
     shape.lineTo(+halfW, nY);
     shape.lineTo(+nRX, nY);
@@ -748,8 +832,114 @@ function buildWhiteBodyShape(
   } else {
     shape.lineTo(-halfW, +halfL);
   }
-  shape.lineTo(-halfW, -halfL);
+  shape.lineTo(-halfW, frontY + fr);
+  shape.quadraticCurveTo(-halfW, frontY, -halfW + fr, frontY);
   return shape;
+}
+
+// Real-piano detail: the cap protrudes slightly forward of the wood body,
+// and the resulting recessed front-vertical face is painted/coated white
+// instead of showing wood grain. We achieve both by recessing the body's
+// front edge by this much (in y, mesh-local). The cap is unchanged so it
+// sticks out by exactly this amount at the front.
+export const WHITE_BODY_FRONT_OVERHANG = 0.025;
+// Radius applied to the body's front-left and front-right corners. The
+// front face transitions into the wood side faces along a quarter-circle
+// arc instead of a hard 90° edge, so the white-coated front reads as
+// "wraps around" rather than abruptly stopping.
+const WHITE_BODY_FRONT_CORNER_R = 0.015;
+
+// Reassign side-wall triangles whose 3 vertices all sit on the body's
+// front edge to material index 2 (white front). ExtrudeGeometry walks
+// the contour in REVERSE order (`while (--i >= 0)`), so the front edge
+// segment isn't at the start of the side group — it's near the end.
+// We classify every side triangle by its vertex y, then split the side
+// range into runs (alternating wood / front).
+function tagWhiteBodyFrontFace(
+  geom: THREE.BufferGeometry,
+  frontY: number,
+): void {
+  const positions = (geom.getAttribute("position") as THREE.BufferAttribute)
+    .array as Float32Array;
+  const sideGroup = geom.groups.find((g) => g.materialIndex === 1);
+  if (!sideGroup) return;
+  const sideStart = sideGroup.start;
+  const sideCount = sideGroup.count;
+  const triCount = sideCount / 3;
+  // Front face = the rectangular front strip plus the rounded
+  // front-left/right corners. Test each triangle's vertex y against
+  // [frontY, frontY + corner-radius]: triangles on the straight strip
+  // all have y == frontY; triangles on the quarter-circle corners have
+  // y in (frontY, frontY + WHITE_BODY_FRONT_CORNER_R).
+  const yBound = frontY + WHITE_BODY_FRONT_CORNER_R + 1e-5;
+  const isFront = new Uint8Array(triCount);
+  for (let t = 0; t < triCount; t++) {
+    const v0 = sideStart + 3 * t;
+    let allFront: 0 | 1 = 1;
+    for (let k = 0; k < 3; k++) {
+      const y = positions[(v0 + k) * 3 + 1];
+      if (y > yBound || y < frontY - 1e-5) {
+        allFront = 0;
+        break;
+      }
+    }
+    isFront[t] = allFront;
+  }
+  geom.clearGroups();
+  geom.addGroup(0, sideStart, 0); // caps
+  // Emit alternating wood (1) / white-front (2) runs over the side range.
+  let runStart = 0;
+  let runFlag: number = isFront[0];
+  const flushRun = (end: number, flag: number) => {
+    const vStart = sideStart + 3 * runStart;
+    const vCount = (end - runStart) * 3;
+    if (vCount > 0) geom.addGroup(vStart, vCount, flag ? 2 : 1);
+  };
+  for (let t = 1; t < triCount; t++) {
+    if (isFront[t] !== runFlag) {
+      flushRun(t, runFlag);
+      runStart = t;
+      runFlag = isFront[t];
+    }
+  }
+  flushRun(triCount, runFlag);
+
+  // Two normal hacks on the body side wall:
+  //   • Front-face triangles → +Z so the white-coated front face lights
+  //     up like the cap top (otherwise -Y outward normal misses the
+  //     directional light at +Y +Z).
+  //   • Left / right side wall vertices (|x| ≈ halfW) → -Z so the wood
+  //     sides drop to ambient only at idle. The cap's flash shader then
+  //     adds light contribution on top when a key is pressed.
+  const normalAttr = geom.getAttribute("normal") as THREE.BufferAttribute;
+  const normals = normalAttr.array as Float32Array;
+  for (let t = 0; t < triCount; t++) {
+    if (!isFront[t]) continue;
+    const v0 = sideStart + 3 * t;
+    for (let k = 0; k < 3; k++) {
+      const v = v0 + k;
+      normals[v * 3 + 0] = 0;
+      normals[v * 3 + 1] = 0;
+      normals[v * 3 + 2] = 1;
+    }
+  }
+  // Side wall darkening — applies to ALL vertices in the geometry whose
+  // |x| sits on the outline boundary, including bottom/back side wall
+  // vertices outside the side group. Iterating all vertices is fine
+  // because non-side vertices either have |x| < bound (top/bottom faces
+  // with bevel inset, or interior of the shape) or are on the front/back
+  // face where x is also typically inside.
+  const halfW = WHITE_KEY_WIDTH * 0.96 / 2; // matches buildWhiteBodyShape
+  const sideXBound = halfW - 1e-5;
+  const vertexCount = positions.length / 3;
+  for (let v = 0; v < vertexCount; v++) {
+    if (Math.abs(positions[v * 3]) > sideXBound) {
+      normals[v * 3 + 0] = 0;
+      normals[v * 3 + 1] = 0;
+      normals[v * 3 + 2] = -1;
+    }
+  }
+  normalAttr.needsUpdate = true;
 }
 
 const WHITE_BODY_GEOM_CACHE = new Map<string, THREE.BufferGeometry>();
@@ -762,18 +952,21 @@ export function whiteBodyGeometryFor(midi: number): THREE.BufferGeometry {
     g = new THREE.ExtrudeGeometry(shape, {
       depth: WHITE_BODY_HEIGHT,
       bevelEnabled: false,
-      curveSegments: 1,
+      curveSegments: 8,
     });
     // Top face at mesh-local z=0, bottom at z=-WHITE_BODY_HEIGHT.
     g.translate(0, 0, -WHITE_BODY_HEIGHT);
+    const frontY = -WHITE_KEY_LENGTH / 2 + WHITE_BODY_FRONT_OVERHANG;
+    tagWhiteBodyFrontFace(g, frontY);
     WHITE_BODY_GEOM_CACHE.set(key, g);
   }
   return g;
 }
 
-// ExtrudeGeometry assigns material index 0 to the front+back caps and
-// index 1 to the side walls. Top cap is what's visible through the cap's
-// 4% inter-key gap; sides are the chassis sides.
+// ExtrudeGeometry assigns material index 0 to the front+back caps. We
+// post-process the side group: front-face quads → index 2 (white-coated
+// front), all other side quads → index 1 (wood). Top cap is what's
+// visible through the cap's 4% inter-key gap.
 const WHITE_BODY_TOP_COLOR = "#0a0a0a";
 // Exported so Keyboard.tsx can drive `color` from `settings.woodColor`
 // per frame without needing per-key materials.
@@ -787,7 +980,18 @@ const WHITE_BODY_TOP_MATERIAL = new THREE.MeshStandardMaterial({
   roughness: 0.7,
   metalness: 0,
 });
+// White-coated front face — same MeshStandardMaterial profile as the
+// cap. We override the front-face vertex normals to (0,0,1) so the
+// front receives the same N·L diffuse contribution from the directional
+// light as the cap top, instead of being lit by ambient only (the
+// directional light at +Y +Z doesn't reach a -Y-facing surface).
+export const WHITE_BODY_FRONT_MATERIAL = new THREE.MeshStandardMaterial({
+  color: "#f5f5f5",
+  roughness: 0.55,
+  metalness: 0.05,
+});
 export const WHITE_BODY_MATERIALS: THREE.Material[] = [
   WHITE_BODY_TOP_MATERIAL, // group 0: caps (top + bottom; top visible)
-  WHITE_BODY_WOOD_MATERIAL, // group 1: side walls (outer + inner notch)
+  WHITE_BODY_WOOD_MATERIAL, // group 1: side walls (left/right/back + inner notch)
+  WHITE_BODY_FRONT_MATERIAL, // group 2: white-coated front-vertical face
 ];

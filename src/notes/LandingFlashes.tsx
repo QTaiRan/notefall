@@ -149,7 +149,7 @@ export function LandingFlashes() {
       const baseScale = k.width * BASE_PLANE_SCALE * settings.flashSize
       const planeWidth = baseScale * settings.flashWidth
       const planeHeight = baseScale
-      dummy.position.set(k.x, WHITE_KEY_LENGTH, 0.06)
+      dummy.position.set(k.x, WHITE_KEY_LENGTH, 0.105)
       dummy.scale.set(planeWidth, planeHeight, 1)
       dummy.updateMatrix()
       mesh.setMatrixAt(i, dummy.matrix)

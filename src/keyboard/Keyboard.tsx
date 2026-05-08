@@ -15,6 +15,7 @@ import {
 } from "./layout";
 import {
   BLACK_KEY_GEOMETRY,
+  WHITE_BODY_FRONT_MATERIAL,
   WHITE_BODY_MATERIALS,
   WHITE_BODY_WOOD_MATERIAL,
   WHITE_CAP_THICKNESS,
@@ -430,6 +431,13 @@ export function Keyboard() {
     WHITE_BODY_WOOD_MATERIAL.color
       .set(settings.woodColor)
       .multiplyScalar(brightness);
+    // White-coated front face follows whiteKeyColor. Front-face normals
+    // are forced to +Z (see tagWhiteBodyFrontFace) so the surface gets
+    // the same N·L diffuse contribution as the cap top. We dim by 0.85
+    // so the front still reads slightly darker than the top.
+    WHITE_BODY_FRONT_MATERIAL.color
+      .set(settings.whiteKeyColor)
+      .multiplyScalar(brightness * 0.85);
 
     const lightXYs = sharedLightUniforms.uLightXYs.value;
     const lightIntensities = sharedLightUniforms.uLightIntensities.value;

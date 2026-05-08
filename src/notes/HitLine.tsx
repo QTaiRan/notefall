@@ -253,10 +253,11 @@ export function HitLine() {
   const hitY = settings.keyboardY + WHITE_KEY_LENGTH
   const planeWidth = KEYBOARD_LAYOUT.totalWidth + PLANE_WIDTH_PAD
 
-  // z = 0.061 / 0.062: in front of falling notes (0.05) and landing flashes
-  // (0.06) so the laser visibly sits over them. Both layers use additive
-  // blending so render order has no visual effect, but separating their z
-  // avoids depth-sort flicker if it's ever enabled.
+  // z = 0.14 / 0.141: in front of the 3D black keys (top z ≈ 0.09),
+  // falling notes (0.1) and landing flashes (0.105) so the laser
+  // visibly sits over them. Layers use additive blending so render
+  // order has no visual effect, but separating their z avoids
+  // depth-sort flicker if it's ever enabled.
   return (
     <>
       {/* Sit in front of the now-3D black keys (top face at

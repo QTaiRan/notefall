@@ -320,7 +320,7 @@ export const defaultSettings: Settings = {
   backgroundColor: '#05060a',
   whiteKeyColor: '#f5f5f5',
   blackKeyColor: '#161616',
-  woodColor: '#362A1B',
+  woodColor: '#a87d38',
   keyboardBrightness: 0.5,
   keyGlowEnabled: true,
   keyGlowFollowNote: true,
