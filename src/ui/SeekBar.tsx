@@ -151,7 +151,7 @@ function PopSliderButton({
         onHoverEnd={scheduleClose}
         className={
           buttonClass ??
-          "flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500"
+          "flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
         }
       >
         {iconLabel}
@@ -276,7 +276,7 @@ export function SeekBar({
             isDisabled={!song}
             onPress={onRewind}
             aria-label="Rewind to start"
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
           >
             <RewindToStartIcon className="h-5 w-5" />
           </Button>
@@ -284,7 +284,7 @@ export function SeekBar({
             isDisabled={!song}
             onPress={onSkipBack}
             aria-label="Rewind 10 seconds"
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
           >
             <Replay10Icon className="h-5 w-5" />
           </Button>
@@ -292,7 +292,7 @@ export function SeekBar({
             isDisabled={!song || loadStatus.state === "loading"}
             onPress={transport === "playing" ? pauseSong : playSong}
             aria-label={transport === "playing" ? "Pause" : "Play"}
-            className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-500 text-neutral-950 outline-none hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800 disabled:text-neutral-600"
+            className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-500/90 text-neutral-950 outline-none backdrop-blur-sm hover:bg-sky-400/95 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800/70 disabled:text-neutral-600"
           >
             {transport === "playing" ? (
               <PauseIcon className="h-6 w-6" />
@@ -304,7 +304,7 @@ export function SeekBar({
             isDisabled={!song}
             onPress={onSkipForward}
             aria-label="Forward 10 seconds"
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
           >
             <Forward10Icon className="h-5 w-5" />
           </Button>
@@ -314,8 +314,8 @@ export function SeekBar({
             aria-label={loop ? "Disable loop" : "Enable loop"}
             className={
               loop
-                ? "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/15 text-sky-300 outline-none hover:bg-sky-500/25 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-transparent disabled:text-neutral-600"
-                : "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:text-neutral-600"
+                ? "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/20 text-sky-300 outline-none backdrop-blur-sm hover:bg-sky-500/30 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
+                : "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
             }
           >
             <LoopIcon className="h-5 w-5" />
@@ -365,12 +365,12 @@ export function SeekBar({
             step={0.05}
             onChange={(v) => updateSettings({ playbackRate: v })}
             format={fmtSpeed}
-            buttonClass="flex h-11 min-w-[52px] items-center justify-center rounded-full border border-neutral-700 px-2 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500"
+            buttonClass="flex h-11 min-w-[52px] items-center justify-center rounded-full border border-neutral-700 bg-black/20 px-2 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
           />
           <Button
             onPress={onToggleFullscreen}
             aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:border-sky-500"
+            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
           >
             {isFullscreen ? (
               <FullscreenExitIcon className="h-5 w-5" />
