@@ -287,6 +287,9 @@ export function Keyboard() {
 
   const onPointerDown = useCallback(
     async (e: ThreeEvent<PointerEvent>, midi: number) => {
+      // Middle button is reserved for camera orbit/pan
+      // (see scene/CameraControls.tsx) — don't trigger the key.
+      if (e.nativeEvent.button === 1) return;
       e.stopPropagation();
       const id = e.pointerId;
 

@@ -1102,6 +1102,10 @@ export function FallingNotes() {
 
     const native = e.nativeEvent
 
+    // Middle button is reserved for camera orbit/pan
+    // (see scene/CameraControls.tsx) — let it pass through.
+    if (native.button === 1) return
+
     // Right-click → delete just this single note, even when it's part
     // of a multi-selection. Bulk deletion of the whole selection is
     // intentionally reserved for the Delete / Backspace key, so a stray

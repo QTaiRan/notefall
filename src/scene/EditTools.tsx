@@ -430,6 +430,10 @@ export function EditTools() {
       return
     }
 
+    // Middle button is reserved for camera orbit/pan
+    // (see scene/CameraControls.tsx) — don't spawn a note.
+    if (native.button === 1) return
+
     const additive = native.ctrlKey || native.metaKey
     const startWorld = e.point.clone()
     const startClient = { x: native.clientX, y: native.clientY }

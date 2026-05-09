@@ -14,6 +14,7 @@ import { WHITE_KEY_LENGTH } from '../keyboard/layout'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong, togglePlayback } from '../audio/playback'
 import { EditTools } from './EditTools'
+import { CameraControls } from './CameraControls'
 
 export function Scene() {
   const s = useStore((st) => st.settings)
@@ -62,6 +63,7 @@ function SceneContents() {
       <ambientLight intensity={0.35} />
       <directionalLight position={[2, 6, 4]} intensity={0.8} />
       <CameraSync pos={s.cameraPos} lookAt={s.cameraLookAt} fov={s.cameraFov} />
+      <CameraControls />
       <R3FStateBridge />
       {editMode ? <EditTools /> : <PlayToggleArea />}
       <Keyboard />

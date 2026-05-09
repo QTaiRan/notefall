@@ -2,6 +2,7 @@ import { useStore, defaultSettings } from '../store'
 import { ColorRow, SectionTitle, SelectRow, SliderRow, SwitchRow, VerticalSliderBands } from './controls'
 import { Button, FileTrigger, OverlayArrow, Tooltip, TooltipTrigger } from 'react-aria-components'
 import { useCustomTexture } from '../notes/customTexture'
+import { CAMERA_LIMITS } from '../scene/cameraLimits'
 
 const EQ_LABELS = ['80', '250', '800', '2.5k', '6k', '12k']
 
@@ -41,12 +42,150 @@ export function Inspector() {
         </TooltipTrigger>
       </div>
       <div className="scroll-thin flex-1 overflow-y-auto px-3 pb-6">
-        <SectionTitle>Camera</SectionTitle>
-        <SliderRow label="FOV" value={s.cameraFov} min={20} max={80} step={1} onChange={(v) => update({ cameraFov: v })} defaultValue={def.cameraFov} />
-        <SliderRow label="Position X" value={s.cameraPos[0]} min={-10} max={10} step={0.1} onChange={(v) => update({ cameraPos: [v, s.cameraPos[1], s.cameraPos[2]] })} defaultValue={def.cameraPos[0]} />
-        <SliderRow label="Position Y" value={s.cameraPos[1]} min={-2} max={10} step={0.1} onChange={(v) => update({ cameraPos: [s.cameraPos[0], v, s.cameraPos[2]] })} defaultValue={def.cameraPos[1]} />
-        <SliderRow label="Position Z" value={s.cameraPos[2]} min={1} max={20} step={0.1} onChange={(v) => update({ cameraPos: [s.cameraPos[0], s.cameraPos[1], v] })} defaultValue={def.cameraPos[2]} />
-        <SliderRow label="LookAt Y" value={s.cameraLookAt[1]} min={-3} max={3} step={0.1} onChange={(v) => update({ cameraLookAt: [s.cameraLookAt[0], v, s.cameraLookAt[2]] })} defaultValue={def.cameraLookAt[1]} />
+        <SectionTitle
+          action={
+            <Button
+              onPress={() =>
+                update({
+                  cameraFov: def.cameraFov,
+                  cameraPos: def.cameraPos,
+                  cameraLookAt: def.cameraLookAt,
+                })
+              }
+              className="rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+            >
+              Reset View
+            </Button>
+          }
+        >
+          Camera
+        </SectionTitle>
+        {(() => {
+          // Re-express the cartesian camera state as the seven knobs the
+          // user actually thinks in terms of — orbit triple (Distance /
+          // Yaw / Tilt) for camera orientation around the pivot, pivot
+          // triple (X / Y / Z) for translating the whole rig, and FOV
+          // for the lens. Mirrors what the mouse gestures already do
+          // (orbit / pan / zoom), so sliders and gestures stay in sync.
+          const dx = s.cameraPos[0] - s.cameraLookAt[0]
+          const dy = s.cameraPos[1] - s.cameraLookAt[1]
+          const dz = s.cameraPos[2] - s.cameraLookAt[2]
+          const distance = Math.hypot(dx, dy, dz) || 1e-6
+          // phi = angle from +Y axis (0 = top-down, π/2 = horizontal).
+          const phi = Math.acos(Math.max(-1, Math.min(1, dy / distance)))
+          // theta = azimuth in the XZ plane (0 = looking along +Z).
+          const theta = Math.atan2(dx, dz)
+          // Tilt = degrees the camera looks DOWN from horizontal:
+          // 0° = level, +90° = straight down on the keyboard.
+          const tiltDeg = 90 - (phi * 180) / Math.PI
+          // Yaw = degrees the camera is rotated horizontally around the
+          // pivot. 0° = front-on view, positive = camera moves to the
+          // right (looking left), matching the mouse-orbit direction.
+          const yawDeg = (theta * 180) / Math.PI
+          const writeOrbit = (
+            nextDistance: number,
+            nextTiltDeg: number,
+            nextYawDeg: number,
+          ) => {
+            // Pull the tilt slightly off the poles. At exactly ±90° phi
+            // collapses to 0 / π, the camera lands directly above/below
+            // the pivot, and the next pos→spherical roundtrip can't
+            // recover yaw (atan2(0,0) = 0) — the Horizontal slider would
+            // jump to 0 the moment Vertical hits the pole.
+            const TILT_EPS = 0.01 // degrees
+            const clampedTilt = Math.max(
+              -90 + TILT_EPS,
+              Math.min(90 - TILT_EPS, nextTiltDeg),
+            )
+            const nextPhi = ((90 - clampedTilt) * Math.PI) / 180
+            const nextTheta = (nextYawDeg * Math.PI) / 180
+            const sinPhi = Math.sin(nextPhi)
+            const nx = nextDistance * sinPhi * Math.sin(nextTheta)
+            const ny = nextDistance * Math.cos(nextPhi)
+            const nz = nextDistance * sinPhi * Math.cos(nextTheta)
+            update({
+              cameraPos: [
+                s.cameraLookAt[0] + nx,
+                s.cameraLookAt[1] + ny,
+                s.cameraLookAt[2] + nz,
+              ],
+            })
+          }
+          // Translate both pos and lookAt by the same delta on one axis
+          // so the framing stays rigid — same model the mouse pan uses.
+          const writePivot = (axis: 0 | 1 | 2, value: number) => {
+            const delta = value - s.cameraLookAt[axis]
+            const nextLookAt: [number, number, number] = [...s.cameraLookAt]
+            const nextPos: [number, number, number] = [...s.cameraPos]
+            nextLookAt[axis] = value
+            nextPos[axis] += delta
+            update({ cameraLookAt: nextLookAt, cameraPos: nextPos })
+          }
+          return (
+            <>
+              <SliderRow
+                label="Distance"
+                value={distance}
+                min={CAMERA_LIMITS.distance.min}
+                max={CAMERA_LIMITS.distance.max}
+                step={0.1}
+                onChange={(v) => writeOrbit(v, tiltDeg, yawDeg)}
+                defaultValue={def.cameraPos[2]}
+              />
+              <SliderRow
+                label="Horizontal"
+                value={yawDeg}
+                min={CAMERA_LIMITS.horizontalDeg.min}
+                max={CAMERA_LIMITS.horizontalDeg.max}
+                step={1}
+                onChange={(v) => writeOrbit(distance, tiltDeg, v)}
+                format={(v) => `${Math.round(v)}°`}
+                defaultValue={0}
+              />
+              <SliderRow
+                label="Vertical"
+                value={tiltDeg}
+                min={CAMERA_LIMITS.verticalDeg.min}
+                max={CAMERA_LIMITS.verticalDeg.max}
+                step={1}
+                onChange={(v) => writeOrbit(distance, v, yawDeg)}
+                format={(v) => `${Math.round(v)}°`}
+                defaultValue={0}
+              />
+              <SliderRow
+                label="Pivot X"
+                value={s.cameraLookAt[0]}
+                min={CAMERA_LIMITS.pivotX.min}
+                max={CAMERA_LIMITS.pivotX.max}
+                step={0.05}
+                onChange={(v) => writePivot(0, v)}
+                defaultValue={def.cameraLookAt[0]}
+              />
+              <SliderRow
+                label="Pivot Y"
+                value={s.cameraLookAt[1]}
+                min={CAMERA_LIMITS.pivotY.min}
+                max={CAMERA_LIMITS.pivotY.max}
+                step={0.05}
+                onChange={(v) => writePivot(1, v)}
+                defaultValue={def.cameraLookAt[1]}
+              />
+              <SliderRow
+                label="Pivot Z"
+                value={s.cameraLookAt[2]}
+                min={CAMERA_LIMITS.pivotZ.min}
+                max={CAMERA_LIMITS.pivotZ.max}
+                step={0.05}
+                onChange={(v) => writePivot(2, v)}
+                defaultValue={def.cameraLookAt[2]}
+              />
+            </>
+          )
+        })()}
+        <p className="px-2 pt-1 pb-2 text-[10px] leading-snug text-neutral-500">
+          Drag with the middle mouse button to orbit, Shift+middle to pan,
+          and Ctrl/Cmd+scroll to zoom.
+        </p>
 
         <SectionTitle>Layout</SectionTitle>
         <SliderRow label="Keyboard Y" value={s.keyboardY} min={-3} max={2} step={0.05} onChange={(v) => update({ keyboardY: v })} defaultValue={def.keyboardY} />

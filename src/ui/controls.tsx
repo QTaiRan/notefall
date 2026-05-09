@@ -280,10 +280,18 @@ export function SelectRow<T extends string>({ label, value, options, onChange, d
   )
 }
 
-export function SectionTitle({ children }: { children: React.ReactNode }) {
+export function SectionTitle({
+  children,
+  action,
+}: {
+  children: React.ReactNode
+  /** Optional right-aligned slot — typically a section-scoped reset button. */
+  action?: React.ReactNode
+}) {
   return (
-    <div className="mt-3 mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-      {children}
+    <div className="mt-3 mb-1 flex items-center justify-between px-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+      <span>{children}</span>
+      {action}
     </div>
   )
 }

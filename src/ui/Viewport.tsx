@@ -573,6 +573,9 @@ export function Viewport() {
     const el = innerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // Ctrl/Cmd + wheel is reserved for the camera dolly
+      // (see scene/CameraControls.tsx) — let it through unhandled.
+      if (e.ctrlKey || e.metaKey) return;
       const s = useStore.getState();
       if (!s.song) return;
       if (s.transport === "playing") return;

@@ -828,7 +828,7 @@ function buildWhiteBodyShape(
 // instead of showing wood grain. We achieve both by recessing the body's
 // front edge by this much (in y, mesh-local). The cap is unchanged so it
 // sticks out by exactly this amount at the front.
-export const WHITE_BODY_FRONT_OVERHANG = 0.025;
+export const WHITE_BODY_FRONT_OVERHANG = 0.015;
 // Radius applied to the body's front-left and front-right corners. The
 // front face transitions into the wood side faces along a quarter-circle
 // arc instead of a hard 90° edge, so the white-coated front reads as
