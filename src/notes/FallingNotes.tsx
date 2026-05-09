@@ -1,7 +1,8 @@
 import { useMemo, useRef, useEffect } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { useStore } from '../store'
+import { useStore, defaultSettings } from '../store'
+import { computeLiveVisibleTop } from '../scene/visibleTop'
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
@@ -16,6 +17,55 @@ const MAX_INSTANCES = 4096
 // and the note spawn line — keeps notes off-screen when they're created so
 // they can slide in from above instead of popping into view mid-screen.
 const SPAWN_BUFFER = 1.0
+
+
+// Fall trajectory length, frozen against the *default* camera framing so
+// the rendered height of a note for a given duration stays constant when
+// the user orbits / zooms / pans. Without this, the per-frame layout
+// would re-derive FALL_DISTANCE from the live camera and notes would
+// stretch / shrink as the camera moved.
+const FALL_REFERENCE_DISTANCE =
+  Math.max(
+    0.5,
+    defaultSettings.cameraLookAt[1] +
+      Math.abs(defaultSettings.cameraPos[2]) *
+        Math.tan((defaultSettings.cameraFov * Math.PI) / 360) -
+      noteHitYWorld(defaultSettings.keyboardY),
+  ) + SPAWN_BUFFER
+
+// Shared in/out object for `computeRisingRect`. Reused across notes so
+// the per-frame layout pass doesn't allocate thousands of objects.
+const _risingRect: { topY: number; bottomY: number } = { topY: 0, bottomY: 0 }
+
+/**
+ * Geometry of a rising trail (head leads upward, tail follows). Used
+ * identically by recorded-MIDI 'up' notes and live MIDI input notes —
+ * the two paths feed in different time origins (`t - n.time` vs
+ * `liveNow - startTime`) and different durations (`n.duration` vs
+ * `endTime - startTime`), but everything downstream (visualLength,
+ * head/tail Y, cull math) must stay byte-for-byte identical, so the
+ * geometry lives in one place.
+ *
+ * Returns null when the head hasn't crossed the hit line yet
+ * (`headT < 0`). Otherwise mutates and returns the shared object.
+ */
+function computeRisingRect(
+  headT: number,
+  duration: number,
+  hitY: number,
+  fall: number,
+  fallDistance: number,
+  minLength: number,
+): { topY: number; bottomY: number } | null {
+  if (headT < 0) return null
+  const tailT = headT - duration
+  const headY = hitY + (headT / fall) * fallDistance
+  const tailY = hitY + (tailT / fall) * fallDistance
+  const visualLength = Math.max(minLength, headY - tailY)
+  _risingRect.topY = headY
+  _risingRect.bottomY = headY - visualLength
+  return _risingRect
+}
 
 const VERTEX_SHADER = /* glsl */ `
   attribute vec2 instanceSize;
@@ -555,14 +605,35 @@ export function FallingNotes() {
     // (keeps animating) since the texture should breathe even when stopped.
     material.uniforms.uTime.value = now()
 
-    // Compute how far above the keyboard a note spawns so that the spawn line
-    // sits comfortably outside the visible frustum. Approximate the visible
-    // top from camera distance + FOV; assumes the camera looks roughly toward
-    // the keyboard plane (true for our setup).
-    const camDistance = Math.abs(settings.cameraPos[2])
-    const halfVisHeight = camDistance * Math.tan((settings.cameraFov * Math.PI) / 360)
-    const visibleTop = settings.cameraLookAt[1] + halfVisHeight
-    const FALL_DISTANCE = Math.max(0.5, visibleTop - hitY) + SPAWN_BUFFER
+    // FALL_DISTANCE is locked to the *default* camera framing
+    // (FALL_REFERENCE_DISTANCE) — re-deriving it from the live camera
+    // would resize every note's visual length the moment the user
+    // orbits / zooms, breaking the user's spatial timing reference.
+    const FALL_DISTANCE = FALL_REFERENCE_DISTANCE
+    // Visible-range bound for spawn / cull — derived from the live
+    // camera so song notes (down spawn), 'up' history trails, and live
+    // notes all rise / appear up to the user's actual viewport. Capped
+    // (see scene/visibleTop.ts) so steep look-up angles don't blow it
+    // up unboundedly. Floored to the reference trajectory cap so
+    // zoom-in / look-down can't shrink it and cull notes mid-travel.
+    const liveVisibleTop = computeLiveVisibleTop(
+      settings.cameraPos,
+      settings.cameraLookAt,
+      settings.cameraFov,
+      noteZ,
+      hitY,
+    )
+    const visibleTop = Math.max(liveVisibleTop, hitY + FALL_DISTANCE)
+    // Spawn cutoff (in seconds-into-future) for 'down' notes. Default
+    // is `fall`, but when the visible top sits above hitY+FALL_DISTANCE
+    // we need to spawn earlier so notes appear right at the top edge
+    // of the user's view rather than popping in mid-frame. The +1 wu
+    // buffer mirrors SPAWN_BUFFER so the note slides in instead of
+    // appearing exactly on the visible edge.
+    const downSpawnCutoff = Math.max(
+      fall,
+      ((visibleTop - hitY + SPAWN_BUFFER) * fall) / FALL_DISTANCE,
+    )
 
     // Pitch shift in semitones — keeps the falling-note position aligned
     // with the audio engine's transposed playback so the user sees the
@@ -588,7 +659,7 @@ export function FallingNotes() {
         // so geometry below the hit line is invisible.
         const headT = n.time - t
         const tailT = headT + n.duration
-        if (headT > fall) break // sorted by time → no later notes are visible yet
+        if (headT > downSpawnCutoff) break // sorted by time → no later notes are visible yet
         const headY = hitY + (headT / fall) * FALL_DISTANCE
         const tailY = hitY + (tailT / fall) * FALL_DISTANCE
         const visualLength = Math.max(minLength, tailY - headY)
@@ -598,19 +669,13 @@ export function FallingNotes() {
         if (topY <= hitY) continue
       } else {
         // Past notes rise from the keyboard upward (history trail).
-        const headT = t - n.time
-        const tailT = headT - n.duration
-        if (headT < 0) break // not yet emerged
-        const headY = hitY + (headT / fall) * FALL_DISTANCE
-        const tailY = hitY + (tailT / fall) * FALL_DISTANCE
-        // For 'up', head is the upper edge (rising away from keyboard).
-        topY = headY
-        const visualLength = Math.max(minLength, headY - tailY)
-        bottomY = topY - visualLength
-        // Skip once the visual rect has fully risen above the visible top.
-        if (bottomY >= visibleTop) continue
-        // Skip while head hasn't crossed the hit line yet (entirely hidden).
-        if (topY <= hitY) continue
+        // Same geometry as the live-note path below — see computeRisingRect.
+        const rect = computeRisingRect(t - n.time, n.duration, hitY, fall, FALL_DISTANCE, minLength)
+        if (rect === null) break // not yet emerged (sorted → no later notes either)
+        if (rect.bottomY >= visibleTop) continue
+        if (rect.topY <= hitY) continue
+        topY = rect.topY
+        bottomY = rect.bottomY
       }
 
       const length = topY - bottomY
@@ -646,25 +711,24 @@ export function FallingNotes() {
       if (count >= MAX_INSTANCES) break
     }
 
-    // Live notes (touch/click) — always render in 'up' (rising trail) mode,
-    // independent of the song direction setting.
+    // Live notes (touch/click) — always render as rising trails, sharing
+    // the exact same `computeRisingRect` geometry as the song 'up' branch
+    // above. The only thing that differs is the timeline source: songs
+    // use `t = currentSongTime()`, live uses `liveNow = now()`, with the
+    // live note's `endTime` (or `liveNow` while held) playing the role of
+    // `n.duration`.
     const liveNotes = audioEngine.getLiveNotes()
     if (liveNotes.length > 0) {
       const liveNow = now()
       for (let i = 0; i < liveNotes.length; i++) {
         const ln = liveNotes[i]
-        const headT = liveNow - ln.startTime
         const noteDuration = (ln.endTime ?? liveNow) - ln.startTime
-        const tailT = headT - noteDuration
-        if (headT < 0) continue
-
-        const headY = hitY + (headT / fall) * FALL_DISTANCE
-        const tailY = hitY + (tailT / fall) * FALL_DISTANCE
-        const topY = headY
-        const visualLength = Math.max(minLength, headY - tailY)
-        const bottomY = topY - visualLength
-        if (bottomY >= visibleTop) continue
-        if (topY <= hitY) continue
+        const rect = computeRisingRect(liveNow - ln.startTime, noteDuration, hitY, fall, FALL_DISTANCE, minLength)
+        if (rect === null) continue
+        if (rect.bottomY >= visibleTop) continue
+        if (rect.topY <= hitY) continue
+        const topY = rect.topY
+        const bottomY = rect.bottomY
 
         const length = topY - bottomY
         const centerY = (topY + bottomY) / 2

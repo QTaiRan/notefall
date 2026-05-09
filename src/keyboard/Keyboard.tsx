@@ -44,7 +44,8 @@ import {
   type WhiteKeyUniforms,
 } from "./whiteKeyShader";
 import { usePcKeyboardInput } from "./pcInput";
-import { useStore } from "../store";
+import { useStore, defaultSettings } from "../store";
+import { computeLiveVisibleTop } from "../scene/visibleTop";
 import { audioEngine } from "../audio/engine";
 
 // Press animation: each key's group sits at the rear edge; press dips
@@ -518,14 +519,28 @@ export function Keyboard() {
     return xs;
   }, []);
 
-  // Divider length: keyboard back edge → top of visible camera frustum.
-  const camDistance = Math.abs(settings.cameraPos[2]);
-  const halfVisHeight =
-    camDistance * Math.tan((settings.cameraFov * Math.PI) / 360);
-  const visibleTopWorld = settings.cameraLookAt[1] + halfVisHeight;
+  // Divider length: keyboard back edge → top of the live camera view
+  // at the divider's depth. Uses the same `computeLiveVisibleTop`
+  // helper as the falling notes so both extend together when the user
+  // zooms out / looks up — and both fall back to the same hard cap
+  // beyond the horizon. The reference trajectory length serves as a
+  // floor so zoom-in / look-down can't shorten the line below the
+  // designed default.
+  const dividerHitY = settings.keyboardY + WHITE_KEY_LENGTH;
+  const referenceTopWorld =
+    defaultSettings.cameraLookAt[1] +
+    Math.abs(defaultSettings.cameraPos[2]) *
+      Math.tan((defaultSettings.cameraFov * Math.PI) / 360);
+  const dividerLiveTop = computeLiveVisibleTop(
+    settings.cameraPos,
+    settings.cameraLookAt,
+    settings.cameraFov,
+    0.02,
+    dividerHitY,
+  );
   const dividerLength = Math.max(
     0,
-    visibleTopWorld - (settings.keyboardY + WHITE_KEY_LENGTH),
+    Math.max(dividerLiveTop, referenceTopWorld) - dividerHitY,
   );
 
   return (
