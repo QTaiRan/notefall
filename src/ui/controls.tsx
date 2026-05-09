@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Slider,
   SliderOutput,
@@ -23,11 +23,260 @@ import {
   Dialog,
 } from 'react-aria-components'
 import type { Key } from 'react-aria-components'
+import { useStore } from '../store'
+
+/**
+ * Wrap an atomic settings mutation in a begin/end pair so it produces
+ * exactly one undo entry. Use for switches, selects, single-shot button
+ * presses; for continuous gestures (slider drag, color popover session)
+ * call begin/end directly around the gesture span instead.
+ */
+const commitAtomic = (apply: () => void): void => {
+  const s = useStore.getState()
+  s.beginSettingsEdit()
+  apply()
+  s.endSettingsEdit()
+}
+
+const isMacPlatform = () =>
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '')
+
+/**
+ * Floating context menu rendered at viewport coordinates. Used by slider
+ * tracks to expose the reset gesture as a discoverable right-click action,
+ * with the keyboard shortcut shown alongside.
+ */
+function SliderContextMenu({
+  x,
+  y,
+  value,
+  min,
+  max,
+  step,
+  defaultValue,
+  defaultLabel,
+  onChange,
+  onClose,
+}: {
+  x: number
+  y: number
+  value: number
+  min: number
+  max: number
+  step: number
+  defaultValue: number | undefined
+  defaultLabel: string | undefined
+  onChange: (v: number) => void
+  onClose: () => void
+}) {
+  // Two-step UX: the menu first shows action items; clicking "Enter
+  // Value…" swaps the body for the numeric input. Keeps the resting menu
+  // visually clean while still surfacing the input affordance.
+  const [mode, setMode] = useState<'menu' | 'input'>('menu')
+  // Input is editable raw numeric text. Initial value uses a precision that
+  // matches the slider's step — integer steps show no fractional digits,
+  // sub-unit steps round to enough digits to represent the step.
+  const decimals =
+    step >= 1 ? 0 : step >= 0.01 ? 2 : step >= 0.001 ? 3 : 4
+  const [text, setText] = useState(() =>
+    Number.isFinite(value) ? value.toFixed(decimals) : '',
+  )
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (mode === 'input') {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [mode])
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t?.closest('[data-slider-context-menu]')) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    // Defer attaching mousedown by a tick — the right-click that opened
+    // the menu would otherwise immediately hit this handler and close it.
+    const t = window.setTimeout(() => window.addEventListener('mousedown', onDown), 0)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  const commit = () => {
+    const parsed = parseFloat(text)
+    if (Number.isFinite(parsed)) {
+      const clamped = Math.max(min, Math.min(max, parsed))
+      onChange(clamped)
+    }
+    onClose()
+  }
+
+  const valueText = Number.isFinite(value) ? value.toFixed(decimals) : ''
+  const handleCopy = () => {
+    void navigator.clipboard?.writeText(valueText)
+    onClose()
+  }
+  const handlePaste = async () => {
+    try {
+      const t = await navigator.clipboard?.readText()
+      const parsed = parseFloat(t ?? '')
+      if (Number.isFinite(parsed)) {
+        onChange(Math.max(min, Math.min(max, parsed)))
+      }
+    } catch {
+      // Permission denied / unsupported — silently ignore. The user will
+      // see the menu close and the value unchanged, no toast needed.
+    }
+    onClose()
+  }
+
+  const shortcut = isMacPlatform() ? '⌘ Click' : 'Ctrl Click'
+  const W = 224
+  // Rough vertical estimate per mode for edge-clamping. Menu mode has
+  // input + copy/paste + min/max + (optional reset) + 2 separators.
+  const H =
+    mode === 'input'
+      ? 110
+      : 36 + 36 + 36 + (defaultValue !== undefined ? 36 : 0) + 18
+  const PAD = 8
+  const left = Math.max(PAD, Math.min(x, window.innerWidth - W - PAD))
+  const top = Math.max(PAD, Math.min(y, window.innerHeight - H - PAD))
+
+  const itemClass =
+    'flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 text-left text-xs text-neutral-200 outline-none hover:bg-neutral-800 focus-visible:bg-neutral-800'
+  const hintClass = 'text-[10px] tabular-nums text-neutral-500'
+  const Separator = () => <div className="my-1 h-px bg-neutral-800" />
+
+  return (
+    <div
+      data-slider-context-menu
+      className="fixed z-[100] w-[14rem] rounded-md bg-neutral-900 p-1 shadow-lg ring-1 ring-white/10"
+      style={{ left, top }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {mode === 'menu' ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setMode('input')}
+            className={itemClass}
+          >
+            <span>Enter Value…</span>
+            <span className={hintClass}>{valueText}</span>
+          </button>
+          <Separator />
+          <button type="button" onClick={handleCopy} className={itemClass}>
+            <span>Copy</span>
+            <span className={hintClass}>{valueText}</span>
+          </button>
+          <button type="button" onClick={handlePaste} className={itemClass}>
+            <span>Paste</span>
+          </button>
+          <Separator />
+          <button
+            type="button"
+            onClick={() => {
+              onChange(min)
+              onClose()
+            }}
+            className={itemClass}
+          >
+            <span>Set to Min</span>
+            <span className={hintClass}>{min}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onChange(max)
+              onClose()
+            }}
+            className={itemClass}
+          >
+            <span>Set to Max</span>
+            <span className={hintClass}>{max}</span>
+          </button>
+          {defaultValue !== undefined && (
+            <>
+              <Separator />
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(defaultValue)
+                  onClose()
+                }}
+                className={itemClass}
+              >
+                <span>
+                  Reset to default
+                  {defaultLabel !== undefined && (
+                    <span className="ml-1 text-[10px] tabular-nums text-neutral-500">
+                      ({defaultLabel})
+                    </span>
+                  )}
+                </span>
+                <span className="text-[10px] tracking-wider text-neutral-500">
+                  {shortcut}
+                </span>
+              </button>
+            </>
+          )}
+        </>
+      ) : (
+        <div className="px-2 pt-1.5 pb-1">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-neutral-500">
+            <span>Value</span>
+            <span className="tabular-nums normal-case tracking-normal">
+              {min}…{max}
+            </span>
+          </div>
+          <input
+            ref={inputRef}
+            type="text"
+            inputMode="decimal"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commit()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                setMode('menu')
+              }
+            }}
+            className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs tabular-nums text-neutral-100 outline-none focus:border-sky-500"
+          />
+          <div className="mt-1 flex items-center justify-between text-[9px] text-neutral-600">
+            <span>Enter to apply</span>
+            <button
+              type="button"
+              onClick={() => setMode('menu')}
+              className="rounded px-1 py-0.5 text-neutral-500 outline-none hover:bg-neutral-800 hover:text-neutral-300"
+            >
+              ← Back
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /**
  * Returns a ref to attach to a SliderTrack — when the user Cmd/Ctrl+clicks
  * inside it, the slider snaps to `defaultValue` instead of jumping to the
- * click position.
+ * click position. Right-clicks open a small context menu offering the same
+ * reset, with the keyboard shortcut shown.
  *
  * Implementation: registers a NATIVE pointerdown listener in the capture
  * phase + stopImmediatePropagation, so react-aria's own pointerdown
@@ -35,8 +284,25 @@ import type { Key } from 'react-aria-components'
  * onPointerDownCapture isn't strong enough here — react-aria attaches its
  * handlers via direct DOM listeners that React can't pre-empt.
  */
-function useResetOnModifierClick<T>(defaultValue: T | undefined, onChange: (v: T) => void) {
+function useSliderTrackGestures({
+  value,
+  min,
+  max,
+  step,
+  defaultValue,
+  onChange,
+  format,
+}: {
+  value: number
+  min: number
+  max: number
+  step: number
+  defaultValue: number | undefined
+  onChange: (v: number) => void
+  format?: (v: number) => string
+}): { ref: React.RefObject<HTMLDivElement>; menuNode: ReactNode } {
   const ref = useRef<HTMLDivElement>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   // Keep latest values in a ref so the listener (registered once) sees fresh
   // closures without re-attaching on every render.
   const latest = useRef({ defaultValue, onChange })
@@ -45,21 +311,29 @@ function useResetOnModifierClick<T>(defaultValue: T | undefined, onChange: (v: T
     const el = ref.current
     if (!el) return
     const downHandler = (e: PointerEvent) => {
+      // Right-click: swallow the pointerdown so react-aria's slider doesn't
+      // jump to the click position — the contextmenu handler below will
+      // open our menu instead.
+      if (e.button === 2) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        return
+      }
+      if (e.button !== 0) return
       const { defaultValue, onChange } = latest.current
       if (defaultValue === undefined) return
       if (!(e.metaKey || e.ctrlKey)) return
       e.preventDefault()
       e.stopImmediatePropagation()
-      onChange(defaultValue)
+      commitAtomic(() => onChange(defaultValue))
     }
-    // On macOS, Ctrl+click is interpreted as a secondary click and fires a
-    // contextmenu event. Suppress it specifically when the ctrl modifier
-    // was held (which is exactly our reset gesture); plain right-clicks
-    // without ctrl still get their context menu.
     const ctxHandler = (e: MouseEvent) => {
-      if (latest.current.defaultValue !== undefined && e.ctrlKey) {
-        e.preventDefault()
-      }
+      e.preventDefault()
+      // On macOS, Ctrl+click fires contextmenu but is already handled as
+      // the reset gesture via pointerdown when a default exists. Don't
+      // open the menu in that case.
+      if (e.ctrlKey && latest.current.defaultValue !== undefined) return
+      setMenu({ x: e.clientX, y: e.clientY })
     }
     el.addEventListener('pointerdown', downHandler, true)
     el.addEventListener('contextmenu', ctxHandler)
@@ -68,7 +342,29 @@ function useResetOnModifierClick<T>(defaultValue: T | undefined, onChange: (v: T
       el.removeEventListener('contextmenu', ctxHandler)
     }
   }, [])
-  return ref
+
+  const menuNode = menu ? (
+    <SliderContextMenu
+      x={menu.x}
+      y={menu.y}
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      defaultValue={defaultValue}
+      defaultLabel={
+        defaultValue !== undefined
+          ? format
+            ? format(defaultValue)
+            : defaultValue.toFixed(step < 1 ? 2 : 0)
+          : undefined
+      }
+      onChange={(v) => commitAtomic(() => latest.current.onChange(v))}
+      onClose={() => setMenu(null)}
+    />
+  ) : null
+
+  return { ref, menuNode }
 }
 
 type SliderRowProps = {
@@ -84,14 +380,40 @@ type SliderRowProps = {
 }
 
 export function SliderRow({ label, value, min, max, step = 0.01, onChange, format, defaultValue }: SliderRowProps) {
-  const trackRef = useResetOnModifierClick(defaultValue, onChange)
+  const { ref: trackRef, menuNode } = useSliderTrackGestures({
+    value,
+    min,
+    max,
+    step,
+    defaultValue,
+    onChange,
+    format,
+  })
+  // Bracket the gesture (drag OR keyboard nudge) so the whole interaction
+  // produces one undo entry. begin is idempotent — first onChange opens
+  // the gesture; onChangeEnd closes it. react-aria fires onChangeEnd for
+  // both pointer release AND keyboard arrows, so each press of an arrow
+  // key also commits as its own entry.
+  const gestureOpen = useRef(false)
   return (
     <Slider
       value={value}
       minValue={min}
       maxValue={max}
       step={step}
-      onChange={(v) => onChange(typeof v === 'number' ? v : v[0])}
+      onChange={(v) => {
+        if (!gestureOpen.current) {
+          gestureOpen.current = true
+          useStore.getState().beginSettingsEdit()
+        }
+        onChange(typeof v === 'number' ? v : v[0])
+      }}
+      onChangeEnd={() => {
+        if (gestureOpen.current) {
+          gestureOpen.current = false
+          useStore.getState().endSettingsEdit()
+        }
+      }}
       className="flex flex-col gap-1 py-1"
     >
       <div className="flex items-center justify-between text-xs select-none">
@@ -129,6 +451,7 @@ export function SliderRow({ label, value, min, max, step = 0.01, onChange, forma
           )
         }}
       </SliderTrack>
+      {menuNode}
     </Slider>
   )
 }
@@ -145,7 +468,7 @@ export function SwitchRow({ label, value, onChange, defaultValue }: SwitchRowPro
   return (
     <Switch
       isSelected={value}
-      onChange={onChange}
+      onChange={(v) => commitAtomic(() => onChange(v))}
       className="group relative flex items-center justify-between gap-2 py-1.5 text-xs cursor-pointer"
     >
       <span
@@ -158,7 +481,7 @@ export function SwitchRow({ label, value, onChange, defaultValue }: SwitchRowPro
             ? (e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                onChange(defaultValue)
+                commitAtomic(() => onChange(defaultValue))
               }
             : undefined
         }
@@ -182,7 +505,10 @@ type ColorRowProps = {
 }
 
 export function ColorRow({ label, value, onChange, defaultValue }: ColorRowProps) {
-  const reset = defaultValue !== undefined ? () => onChange(defaultValue) : undefined
+  const reset =
+    defaultValue !== undefined
+      ? () => commitAtomic(() => onChange(defaultValue))
+      : undefined
   return (
     <div className="flex items-center justify-between py-1 text-xs">
       <span
@@ -196,7 +522,17 @@ export function ColorRow({ label, value, onChange, defaultValue }: ColorRowProps
         value={value}
         onChange={(color) => onChange(color.toString('hex'))}
       >
-        <DialogTrigger>
+        <DialogTrigger
+          onOpenChange={(open) => {
+            // A whole color-picker session (popover open → close) is one
+            // undo entry, regardless of how many drags / hex-field edits
+            // happened inside. Drags inside the popover fire onChange
+            // ~60×/s, so per-change history would saturate the stack.
+            const s = useStore.getState()
+            if (open) s.beginSettingsEdit()
+            else s.endSettingsEdit()
+          }}
+        >
           <Button
             aria-label={`Edit ${label} color`}
             className="flex items-center gap-2 rounded border border-neutral-700 bg-neutral-900 px-1.5 py-1 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
@@ -244,7 +580,10 @@ type SelectRowProps<T extends string> = {
 }
 
 export function SelectRow<T extends string>({ label, value, options, onChange, defaultValue }: SelectRowProps<T>) {
-  const reset = defaultValue !== undefined ? () => onChange(defaultValue) : undefined
+  const reset =
+    defaultValue !== undefined
+      ? () => commitAtomic(() => onChange(defaultValue))
+      : undefined
   return (
     <div className="flex items-center justify-between py-1 text-xs">
       <span
@@ -256,7 +595,9 @@ export function SelectRow<T extends string>({ label, value, options, onChange, d
       </span>
       <Select
         selectedKey={value}
-        onSelectionChange={(k: Key | null) => k && onChange(String(k) as T)}
+        onSelectionChange={(k: Key | null) =>
+          k && commitAtomic(() => onChange(String(k) as T))
+        }
       >
         <Button className="flex items-center gap-2 rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-200 outline-none focus-visible:border-sky-500">
           <SelectValue />
@@ -365,8 +706,17 @@ type BandProps = {
  * per element, which doesn't compose with the .map() in the parent).
  */
 function Band({ label, value, min, max, step, trackHeight, defaultValue, onChange }: BandProps) {
-  const trackRef = useResetOnModifierClick(defaultValue, onChange)
   const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1))
+  const { ref: trackRef, menuNode } = useSliderTrackGestures({
+    value,
+    min,
+    max,
+    step,
+    defaultValue,
+    onChange,
+    format: fmt,
+  })
+  const gestureOpen = useRef(false)
   return (
     <div className="flex flex-1 flex-col items-center gap-1">
       <span className="text-[9px] tabular-nums text-neutral-400 select-none">
@@ -378,7 +728,19 @@ function Band({ label, value, min, max, step, trackHeight, defaultValue, onChang
         minValue={min}
         maxValue={max}
         step={step}
-        onChange={(v) => onChange(typeof v === 'number' ? v : v[0])}
+        onChange={(v) => {
+          if (!gestureOpen.current) {
+            gestureOpen.current = true
+            useStore.getState().beginSettingsEdit()
+          }
+          onChange(typeof v === 'number' ? v : v[0])
+        }}
+        onChangeEnd={() => {
+          if (gestureOpen.current) {
+            gestureOpen.current = false
+            useStore.getState().endSettingsEdit()
+          }
+        }}
       >
         <SliderTrack
           ref={trackRef}
@@ -420,6 +782,7 @@ function Band({ label, value, min, max, step, trackHeight, defaultValue, onChang
         </SliderTrack>
       </Slider>
       <span className="text-[9px] text-neutral-500">{label}</span>
+      {menuNode}
     </div>
   )
 }

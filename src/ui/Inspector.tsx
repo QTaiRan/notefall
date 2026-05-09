@@ -12,8 +12,21 @@ const def = defaultSettings
 
 export function Inspector() {
   const s = useStore((st) => st.settings)
-  const update = useStore((st) => st.updateSettings)
+  const updateRaw = useStore((st) => st.updateSettings)
+  const beginEdit = useStore((st) => st.beginSettingsEdit)
+  const endEdit = useStore((st) => st.endSettingsEdit)
   const reset = useStore((st) => st.resetSettings)
+  // Default `update` for any callsite that isn't behind a control wrapper
+  // (controls handle history themselves). Wraps the patch in a begin/end
+  // pair so direct atomic edits — Theme apply, Reset View, etc. — produce
+  // exactly one undo entry. For the *inside* of a slider gesture (the
+  // wrapper already opened a begin), this is a no-op-on-begin so it
+  // doesn't double-snapshot.
+  const update = (patch: Partial<typeof s>) => {
+    beginEdit()
+    updateRaw(patch)
+    endEdit()
+  }
   const customFileName = useCustomTexture((st) => st.fileName)
   const setCustomFile = useCustomTexture((st) => st.setFromFile)
 

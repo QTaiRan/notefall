@@ -349,6 +349,95 @@ export const defaultSettings: Settings = {
   transpose: 0,
 }
 
+/**
+ * One entry on the undo / redo stack. Discriminated by which domain owns
+ * the change so undo/redo can dispatch to the right restore path. Both
+ * kinds keep the *pre-edit* snapshot — `undoEdit` swaps it in and pushes
+ * the *current* state onto the redo stack.
+ */
+/**
+ * Serialisable view of `useCustomTexture` for undo snapshots. The GPU
+ * texture itself isn't stored — it can be re-derived from bytes + mime
+ * via `setFromBytes`, so only the source triple needs to round-trip
+ * through history.
+ */
+export type CustomTextureSnapshot = {
+  bytes: ArrayBuffer | null
+  mime: string | null
+  fileName: string | null
+}
+
+export type EditEntry =
+  | { kind: 'song'; before: ParsedSong }
+  | { kind: 'settings'; before: Settings }
+  | { kind: 'projectName'; before: string }
+  | { kind: 'customTexture'; before: CustomTextureSnapshot }
+
+// Bridge between the main store and the standalone `useCustomTexture`
+// store. Keeping a registration slot here (rather than importing the
+// custom-texture module from store.ts) avoids a cyclic import: customTexture
+// already depends on the main store for markDirty. customTexture registers
+// itself at module load time; until it does, customTexture-kind entries
+// can't be created (and won't appear in history).
+let customTextureGetter: (() => CustomTextureSnapshot) | null = null
+let customTextureRestorer: ((snap: CustomTextureSnapshot) => void) | null = null
+export const registerCustomTextureBridge = (
+  getter: () => CustomTextureSnapshot,
+  restorer: (snap: CustomTextureSnapshot) => void,
+): void => {
+  customTextureGetter = getter
+  customTextureRestorer = restorer
+}
+
+// Module-level baseline + depth counter for in-flight settings gestures.
+// `beginSettingsEdit` captures the baseline on the FIRST call (depth
+// 0 → 1) and bumps the depth; further calls just bump. `endSettingsEdit`
+// only commits when the depth drops back to 0. This refcounting makes
+// the begin/end pair freely nestable, so a slider's outer gesture
+// wrapper can call begin and the user's per-onChange `update()` can
+// begin/end internally without prematurely committing the slider's
+// drag to history. Each control still produces one undo entry per
+// gesture: drag = one, toggle = one, color popover session = one.
+let pendingSettingsBaseline: Settings | null = null
+let pendingSettingsDepth = 0
+
+const beginSettingsEdit = (): void => {
+  if (pendingSettingsDepth === 0) {
+    pendingSettingsBaseline = useStore.getState().settings
+  }
+  pendingSettingsDepth++
+}
+
+const endSettingsEdit = (): void => {
+  if (pendingSettingsDepth === 0) return
+  pendingSettingsDepth--
+  if (pendingSettingsDepth > 0) return
+  // Outermost end: commit the baseline.
+  const baseline = pendingSettingsBaseline
+  pendingSettingsBaseline = null
+  if (baseline === null) return
+  useStore.setState((state) => {
+    // Defensive no-op: a gesture that ended without changing anything
+    // (e.g. opening a color popover and closing it) shouldn't add a
+    // phantom undo entry.
+    if (state.settings === baseline) return state
+    const history = state.editHistory.concat({ kind: 'settings', before: baseline })
+    if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+    return { editHistory: history, editFuture: [] }
+  })
+}
+
+/**
+ * Discard any pending baseline without committing — used when the entire
+ * settings context is being replaced (loadProject / newProject / setSong),
+ * since the undo entry would refer to settings that no longer relate to
+ * the current session.
+ */
+const dropSettingsBaseline = (): void => {
+  pendingSettingsBaseline = null
+  pendingSettingsDepth = 0
+}
+
 export type TransportState = 'stopped' | 'playing' | 'paused'
 
 export type LoadStatus =
@@ -401,13 +490,13 @@ type AppState = {
   // Convenience for clicking on empty space.
   clearSelection: () => void
 
-  // Snapshot stack for undo. Each element is the full song *before* the
-  // edit that produced the current state — undo restores it. Capped at
+  // Snapshot stack for undo. Each entry captures the *before* state of one
+  // domain (song notes or inspector settings); undo restores it. Capped at
   // HISTORY_LIMIT entries to keep memory bounded for long sessions.
-  editHistory: ParsedSong[]
+  editHistory: EditEntry[]
   // Forward stack for redo. Cleared whenever a fresh edit is applied
   // (standard branching-history semantics).
-  editFuture: ParsedSong[]
+  editFuture: EditEntry[]
   /**
    * Apply an edit to the current song. Pushes the previous state onto
    * `editHistory`, sets the new song, clears `editFuture`, and notifies the
@@ -461,6 +550,25 @@ type AppState = {
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
+  /**
+   * Mark the start of a user gesture that mutates settings. Idempotent
+   * within a gesture — only the first call records the baseline; nested
+   * calls are no-ops. Pair every begin with an end (or use the gesture
+   * helpers in controls.tsx that already do).
+   */
+  beginSettingsEdit: () => void
+  /**
+   * Commit the captured baseline to the undo stack as a single entry.
+   * If the live settings are unchanged from the baseline, no entry is
+   * added (so a no-op gesture doesn't pollute history).
+   */
+  endSettingsEdit: () => void
+  /**
+   * Append a custom-texture snapshot to the undo stack. Called by
+   * `useCustomTexture.setFromFile` after a successful image swap so the
+   * change becomes Cmd+Z'able like any other settings edit.
+   */
+  pushCustomTextureSnapshot: (before: CustomTextureSnapshot) => void
 
   // === Project file persistence ============================================
   // The .nfz file currently associated with this session, or null when
@@ -508,8 +616,14 @@ export const useStore = create<AppState>((set) => ({
   // Loading a new song wipes the editor state — the undo stack referenced
   // notes from the previous file and the highlighted selection no longer
   // points at anything visible. Editor restarts fresh on every load.
-  setSong: (song) =>
-    set({ song, editHistory: [], editFuture: [], selection: new Set(), dirty: true }),
+  setSong: (song) => {
+    // A fresh song means the previous file's note-undo entries point at
+    // ids that no longer exist; settings entries would survive in
+    // principle but we wipe them too to keep the "this session" model
+    // intuitive. Drop any pending settings baseline for the same reason.
+    dropSettingsBaseline()
+    set({ song, editHistory: [], editFuture: [], selection: new Set(), dirty: true })
+  },
 
   transport: 'stopped',
   setTransport: (transport) => set({ transport }),
@@ -579,7 +693,7 @@ export const useStore = create<AppState>((set) => ({
       if (!state.song) return state
       const computed = typeof next === 'function' ? next(state.song) : next
       if (computed === state.song) return state
-      const history = state.editHistory.concat(state.song)
+      const history = state.editHistory.concat({ kind: 'song', before: state.song })
       if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
       audioEngine.updateSong(computed)
       // Re-snapshot lastNoteParams so post-edit values (resize, velocity
@@ -612,50 +726,169 @@ export const useStore = create<AppState>((set) => ({
     }),
   pushUndoSnapshot: (snapshot) =>
     set((state) => {
-      const history = state.editHistory.concat(snapshot)
+      const history = state.editHistory.concat({ kind: 'song', before: snapshot })
       if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
       return { editHistory: history, editFuture: [] }
     }),
-  undoEdit: () =>
+  undoEdit: () => {
+    // Defensively close any settings gesture that didn't make it to its
+    // own end call (e.g. a slider whose pointercancel didn't fire). Most
+    // gestures already commit themselves; this is the safety net.
+    endSettingsEdit()
+    // Custom-texture restore is async (TextureLoader / ImageDecoder), so
+    // it's dispatched OUTSIDE set(): we capture the current snapshot
+    // synchronously, swap stacks synchronously, then kick off the
+    // bridge restore which lands on the customTexture store when its
+    // own promise resolves.
+    {
+      const peek = useStore.getState().editHistory
+      if (peek.length > 0) {
+        const top = peek[peek.length - 1]
+        if (top.kind === 'customTexture') {
+          const snapshotNow = customTextureGetter?.() ?? {
+            bytes: null,
+            mime: null,
+            fileName: null,
+          }
+          set((state) => ({
+            editHistory: state.editHistory.slice(0, -1),
+            editFuture: state.editFuture.concat({
+              kind: 'customTexture',
+              before: snapshotNow,
+            }),
+            dirty: true,
+          }))
+          customTextureRestorer?.(top.before)
+          return
+        }
+      }
+    }
     set((state) => {
-      if (!state.song || state.editHistory.length === 0) return state
-      const prev = state.editHistory[state.editHistory.length - 1]
+      if (state.editHistory.length === 0) return state
+      const entry = state.editHistory[state.editHistory.length - 1]
       const history = state.editHistory.slice(0, -1)
-      const future = state.editFuture.concat(state.song)
-      audioEngine.updateSong(prev)
-      // The selection may reference notes that no longer exist in the
-      // restored snapshot; intersect to drop the strays so highlight stays
-      // truthful.
-      const validIds = new Set(prev.notes.map((n) => n.id))
-      const trimmed = new Set<number>()
-      for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
-      return {
-        song: prev,
-        editHistory: history,
-        editFuture: future,
-        selection: trimmed,
-        dirty: true,
+      if (entry.kind === 'song') {
+        if (!state.song) return state
+        const future = state.editFuture.concat({ kind: 'song', before: state.song })
+        audioEngine.updateSong(entry.before)
+        // The selection may reference notes that no longer exist in the
+        // restored snapshot; intersect to drop the strays so highlight stays
+        // truthful.
+        const validIds = new Set(entry.before.notes.map((n) => n.id))
+        const trimmed = new Set<number>()
+        for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
+        return {
+          song: entry.before,
+          editHistory: history,
+          editFuture: future,
+          selection: trimmed,
+          dirty: true,
+        }
       }
-    }),
-  redoEdit: () =>
+      if (entry.kind === 'projectName') {
+        const future = state.editFuture.concat({
+          kind: 'projectName',
+          before: state.projectName,
+        })
+        // Match setProjectName's no-dirty semantics — restoring an old
+        // name shouldn't flip dirty if the rename never did.
+        return {
+          projectName: entry.before,
+          editHistory: history,
+          editFuture: future,
+        }
+      }
+      if (entry.kind === 'settings') {
+        const future = state.editFuture.concat({ kind: 'settings', before: state.settings })
+        return {
+          settings: entry.before,
+          editHistory: history,
+          editFuture: future,
+          dirty: true,
+        }
+      }
+      // 'customTexture' is handled by the early-return block above; this
+      // path is unreachable but kept exhaustive for the discriminated
+      // union so future kinds force a compile error here.
+      return state
+    })
+  },
+  redoEdit: () => {
+    endSettingsEdit()
+    {
+      const peek = useStore.getState().editFuture
+      if (peek.length > 0) {
+        const top = peek[peek.length - 1]
+        if (top.kind === 'customTexture') {
+          const snapshotNow = customTextureGetter?.() ?? {
+            bytes: null,
+            mime: null,
+            fileName: null,
+          }
+          set((state) => {
+            const history = state.editHistory.concat({
+              kind: 'customTexture',
+              before: snapshotNow,
+            })
+            if (history.length > HISTORY_LIMIT)
+              history.splice(0, history.length - HISTORY_LIMIT)
+            return {
+              editHistory: history,
+              editFuture: state.editFuture.slice(0, -1),
+              dirty: true,
+            }
+          })
+          customTextureRestorer?.(top.before)
+          return
+        }
+      }
+    }
     set((state) => {
-      if (!state.song || state.editFuture.length === 0) return state
-      const next = state.editFuture[state.editFuture.length - 1]
+      if (state.editFuture.length === 0) return state
+      const entry = state.editFuture[state.editFuture.length - 1]
       const future = state.editFuture.slice(0, -1)
-      const history = state.editHistory.concat(state.song)
-      if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
-      audioEngine.updateSong(next)
-      const validIds = new Set(next.notes.map((n) => n.id))
-      const trimmed = new Set<number>()
-      for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
-      return {
-        song: next,
-        editHistory: history,
-        editFuture: future,
-        selection: trimmed,
-        dirty: true,
+      if (entry.kind === 'song') {
+        if (!state.song) return state
+        const history = state.editHistory.concat({ kind: 'song', before: state.song })
+        if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+        audioEngine.updateSong(entry.before)
+        const validIds = new Set(entry.before.notes.map((n) => n.id))
+        const trimmed = new Set<number>()
+        for (const id of state.selection) if (validIds.has(id)) trimmed.add(id)
+        return {
+          song: entry.before,
+          editHistory: history,
+          editFuture: future,
+          selection: trimmed,
+          dirty: true,
+        }
       }
-    }),
+      if (entry.kind === 'projectName') {
+        const history = state.editHistory.concat({
+          kind: 'projectName',
+          before: state.projectName,
+        })
+        if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+        return {
+          projectName: entry.before,
+          editHistory: history,
+          editFuture: future,
+        }
+      }
+      if (entry.kind === 'settings') {
+        const history = state.editHistory.concat({ kind: 'settings', before: state.settings })
+        if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+        return {
+          settings: entry.before,
+          editHistory: history,
+          editFuture: future,
+          dirty: true,
+        }
+      }
+      // 'customTexture' handled in the early-return block above.
+      return state
+    })
+  },
   canUndo: (): boolean => useStore.getState().editHistory.length > 0,
   canRedo: (): boolean => useStore.getState().editFuture.length > 0,
 
@@ -672,13 +905,18 @@ export const useStore = create<AppState>((set) => ({
   setLastNoteParams: (lastNoteParams) => set({ lastNoteParams }),
 
   settings: defaultSettings,
+  // Pure apply — history is bracketed by the caller via begin/endSettingsEdit
+  // (Inspector controls do this transparently). Direct callers that want
+  // an undoable atomic change should wrap themselves in begin → update →
+  // end, or use the helpers in controls.tsx.
   updateSettings: (patch) =>
     set((state) => ({ settings: { ...state.settings, ...patch }, dirty: true })),
   // Preserve transport-bar controlled settings (volume, playback speed) so
   // the user's listening setup isn't lost when they reset the visual /
   // audio Inspector. The Reset button lives in the Inspector and is
   // expected to only affect what the Inspector shows.
-  resetSettings: () =>
+  resetSettings: () => {
+    beginSettingsEdit()
     set((state) => ({
       settings: {
         ...defaultSettings,
@@ -686,7 +924,17 @@ export const useStore = create<AppState>((set) => ({
         playbackRate: state.settings.playbackRate,
       },
       dirty: true,
-    })),
+    }))
+    endSettingsEdit()
+  },
+  beginSettingsEdit: () => beginSettingsEdit(),
+  endSettingsEdit: () => endSettingsEdit(),
+  pushCustomTextureSnapshot: (before) =>
+    set((state) => {
+      const history = state.editHistory.concat({ kind: 'customTexture', before })
+      if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+      return { editHistory: history, editFuture: [] }
+    }),
 
   currentFile: null,
   setCurrentFile: (currentFile) => set({ currentFile }),
@@ -701,10 +949,22 @@ export const useStore = create<AppState>((set) => ({
   // a rename shouldn't trigger the "Discard unsaved changes?" gate when
   // they open a different file. The next Save still picks up the new
   // name; users who rename and close without saving lose only the
-  // rename, not real edits.
-  setProjectName: (name) => set({ projectName: name }),
+  // rename, not real edits. Renames DO push to history so Cmd+Z reverts
+  // them like any other edit; the history entry is independent of the
+  // dirty flag.
+  setProjectName: (name) =>
+    set((state) => {
+      if (name === state.projectName) return state
+      const history = state.editHistory.concat({
+        kind: 'projectName',
+        before: state.projectName,
+      })
+      if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
+      return { projectName: name, editHistory: history, editFuture: [] }
+    }),
 
-  loadProject: (nextSettings, nextSong, ref, projectName) =>
+  loadProject: (nextSettings, nextSong, ref, projectName) => {
+    dropSettingsBaseline()
     set({
       settings: nextSettings,
       song: nextSong,
@@ -716,9 +976,11 @@ export const useStore = create<AppState>((set) => ({
       selection: new Set(),
       contextMenu: null,
       rangeSelectRect: null,
-    }),
+    })
+  },
 
-  newProject: () =>
+  newProject: () => {
+    dropSettingsBaseline()
     set({
       settings: defaultSettings,
       song: null,
@@ -730,5 +992,6 @@ export const useStore = create<AppState>((set) => ({
       selection: new Set(),
       contextMenu: null,
       rangeSelectRect: null,
-    }),
+    })
+  },
 }))

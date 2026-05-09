@@ -61,15 +61,25 @@ const TIME_NUDGE_SEC = 0.05
 
 export function useGlobalShortcuts(): void {
   useEffect(() => {
+    // Only TEXT-entry surfaces should swallow global shortcuts. react-aria
+    // wraps Switch / Checkbox / Slider / etc. around hidden `<input>`s
+    // (type=checkbox / radio / range), so a plain INPUT check would mean
+    // toggling a switch traps focus on its hidden checkbox and the next
+    // Cmd+Z silently gets consumed instead of triggering undo. Filter
+    // INPUT by type so only text-entering ones block.
+    const TEXT_INPUT_TYPES = new Set([
+      'text', 'search', 'email', 'url', 'tel', 'password', 'number',
+      'date', 'datetime-local', 'month', 'time', 'week',
+    ])
     const isEditable = (el: EventTarget | null): boolean => {
       if (!(el instanceof HTMLElement)) return false
       const tag = el.tagName
-      return (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        el.isContentEditable
-      )
+      if (tag === 'TEXTAREA' || el.isContentEditable) return true
+      if (tag === 'INPUT') {
+        const type = (el as HTMLInputElement).type.toLowerCase()
+        return TEXT_INPUT_TYPES.has(type)
+      }
+      return false
     }
 
     const inEditMode = (): boolean => {
@@ -163,6 +173,24 @@ export function useGlobalShortcuts(): void {
         }
       }
 
+      // Undo / redo run regardless of edit mode — the history mixes song
+      // edits with inspector-settings edits, and the latter happen during
+      // playback / before any song is loaded too. Cmd on Mac, Ctrl
+      // elsewhere; handle both so muscle memory works on either platform.
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && e.code === 'KeyZ') {
+        e.preventDefault()
+        const s = useStore.getState()
+        if (e.shiftKey) s.redoEdit()
+        else s.undoEdit()
+        return
+      }
+      if (mod && e.code === 'KeyY' && !e.shiftKey) {
+        e.preventDefault()
+        useStore.getState().redoEdit()
+        return
+      }
+
       // --- edit-mode shortcuts ---
       if (!inEditMode()) return
       const state = useStore.getState()
@@ -177,21 +205,6 @@ export function useGlobalShortcuts(): void {
           e.preventDefault()
           state.clearSelection()
         }
-        return
-      }
-
-      // Undo / redo. Cmd on Mac, Ctrl elsewhere — handle both so the
-      // user's muscle memory works regardless of platform.
-      const mod = e.metaKey || e.ctrlKey
-      if (mod && e.code === 'KeyZ') {
-        e.preventDefault()
-        if (e.shiftKey) state.redoEdit()
-        else state.undoEdit()
-        return
-      }
-      if (mod && e.code === 'KeyY' && !e.shiftKey) {
-        e.preventDefault()
-        state.redoEdit()
         return
       }
 

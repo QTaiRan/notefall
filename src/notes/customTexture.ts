@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import * as THREE from 'three'
-import { useStore } from '../store'
+import { useStore, registerCustomTextureBridge } from '../store'
+import type { CustomTextureSnapshot } from '../store'
 import { now } from '../audio/clock'
 
 /**
@@ -105,20 +106,36 @@ export const useCustomTexture = create<CustomTextureStore>((set, get) => {
     }
   }
 
+  const snapshotCurrent = (): CustomTextureSnapshot => {
+    const s = get()
+    return { bytes: s.fileBytes, mime: s.fileMime, fileName: s.fileName }
+  }
+
   return {
     texture: null,
     fileName: null,
     fileBytes: null,
     fileMime: null,
     setFromFile: async (file) => {
+      // Capture pre-edit snapshot so the change can be undone. We push
+      // AFTER successful apply (and only if it actually changed) so a
+      // failed load doesn't leave a phantom history entry.
+      const before = snapshotCurrent()
       if (!file) {
         clear()
-        useStore.getState().markDirty()
-        return
+      } else {
+        const bytes = await file.arrayBuffer()
+        const mime = file.type || guessMimeFromName(file.name) || 'application/octet-stream'
+        await loadFromBytes(bytes, mime, file.name)
       }
-      const bytes = await file.arrayBuffer()
-      const mime = file.type || guessMimeFromName(file.name) || 'application/octet-stream'
-      await loadFromBytes(bytes, mime, file.name)
+      const after = snapshotCurrent()
+      if (
+        before.bytes !== after.bytes ||
+        before.mime !== after.mime ||
+        before.fileName !== after.fileName
+      ) {
+        useStore.getState().pushCustomTextureSnapshot(before)
+      }
       useStore.getState().markDirty()
     },
     setFromBytes: async (bytes, mime, fileName) => {
@@ -129,6 +146,26 @@ export const useCustomTexture = create<CustomTextureStore>((set, get) => {
     },
   }
 })
+
+// Wire up the undo bridge in the main store. The restorer reads bytes /
+// mime / fileName off the snapshot and routes through the same loading
+// path the project-load flow uses (so it doesn't mark dirty and doesn't
+// re-push to history; the calling undoEdit / redoEdit handles dirty +
+// stack maintenance).
+registerCustomTextureBridge(
+  () => {
+    const s = useCustomTexture.getState()
+    return { bytes: s.fileBytes, mime: s.fileMime, fileName: s.fileName }
+  },
+  (snap) => {
+    const store = useCustomTexture.getState()
+    if (snap.bytes && snap.mime && snap.fileName) {
+      void store.setFromBytes(snap.bytes, snap.mime, snap.fileName)
+    } else {
+      store.clearFromLoad()
+    }
+  },
+)
 
 async function loadAnimatedFromBytes(
   bytes: ArrayBuffer,
