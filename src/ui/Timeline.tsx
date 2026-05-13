@@ -56,14 +56,23 @@ const MINIMAP_HEIGHT = 10
 // window. The full-song progress slider lives in the transport
 // overlay (SeekBar.tsx) and is no longer part of this row stack.
 const RULER_HEIGHT = 18
-const LANE_HEIGHT_MIDI = 56
-const LANE_HEIGHT_AUDIO = 48
-// Compact lane below MIDI that visualises and edits the speed
-// automation curve. Tall enough for the curve to be readable but
-// short enough not to crowd the other lanes.
-const LANE_HEIGHT_SPEED = 32
+// All lanes start the same height. Per-lane ratios (stored in
+// settings) skew this for the user — divider handles between adjacent
+// lane headers drag the ratio without changing the running total.
+const LANE_HEIGHT_BASE = 48
+// Minimum per-lane height after divider redistribution. Sized so the
+// header's title row and its mute / kebab button row stay vertically
+// separated (title ~14px + buttons ~16px + py-1.5×2 padding + a small
+// breathing gap) — below this they'd visually overlap.
+const LANE_MIN_HEIGHT = 44
 // Vertical gap between rows.
 const ROW_GAP = 4
+// Left-column track-header width. The headers carry the lane label
+// (MIDI / Speed / Audio) plus mute + kebab controls — primary lane
+// controls live here, mirroring DAW track layout. Lane clips and the
+// ruler / minimap sit to the right of this column so headers line up
+// vertically with their lane.
+const HEADER_WIDTH = 112
 
 /**
  * Pre-computed peaks → canvas. Repaints whenever peaks, dimensions,
@@ -550,137 +559,167 @@ function LaneContextMenu({
   )
 }
 
+
 /**
- * Small mute affordance pinned to the lane's left edge. Hidden by
- * default (lanes self-identify visually); fades in on hover or stays
- * visible while muted so the user can tell at a glance which track
- * is silent. Click toggles mute; right-click opens the full menu.
+ * Left-column track header. Each lane has a matching header card
+ * showing the track name, a mute toggle (where mute makes sense),
+ * and a kebab that opens the lane's context menu (volume / reset /
+ * remove). Speed-automation passes `target={null}` so it renders as
+ * a label-only header (no mute / no menu).
  */
-/**
- * Speaker icon + horizontal volume meter pinned to the lane's top-
- * left. The speaker is always visible (mute toggle on click); on
- * hover the meter expands to the right, letting the user drag the
- * volume without opening the context menu. Right-click still opens
- * the full menu (the same one the kebab affordance opens) so power
- * options like Reset / Remove aren't lost.
- */
-function LaneVolumeAffordance({
+function LaneHeader({
+  title,
+  height,
   muted,
-  volume,
+  enabled,
   onToggleMute,
-  onVolumeChange,
-  onContextMenu,
   onOpenMenu,
 }: {
-  muted: boolean
-  volume: number
-  onToggleMute: () => void
-  onVolumeChange: (v: number) => void
-  onContextMenu: (e: React.MouseEvent) => void
-  onOpenMenu: (e: React.MouseEvent) => void
+  title: string
+  height: number
+  muted?: boolean
+  enabled?: boolean
+  onToggleMute?: () => void
+  onOpenMenu?: (e: React.MouseEvent) => void
 }) {
-  const [hovered, setHovered] = useState(false)
-  const METER_WIDTH = 80
+  const dimmed = muted || enabled === false
   return (
-    <div className="absolute left-1.5 top-1.5 z-10 flex items-center">
-      {/* Hover-scoped sub-row: only the speaker + meter participate
-          in the hover-expand gesture. The kebab sits OUTSIDE this
-          wrapper so hovering it doesn't open the meter. */}
-      <div
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
-        className="flex items-center"
-      >
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleMute()
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onContextMenu={onContextMenu}
-          aria-label={muted ? 'Unmute' : 'Mute'}
-          title={muted ? 'Unmute' : 'Mute'}
-          className="flex h-5 w-5 items-center justify-center rounded bg-neutral-900/85 text-neutral-200 ring-1 ring-white/10 hover:bg-neutral-700"
+    <div
+      style={{ height }}
+      className="relative flex flex-col justify-between rounded bg-neutral-900/60 px-2 py-1.5 ring-1 ring-white/5"
+    >
+      <div className="flex items-center overflow-hidden">
+        <span
+          className={`truncate text-[11px] font-medium ${dimmed ? 'text-neutral-500' : 'text-neutral-200'}`}
+          title={title}
         >
-          {muted ? (
-            <VolumeMuteIcon className="h-3 w-3" />
-          ) : volume <= 0.4 ? (
-            <VolumeLowIcon className="h-3 w-3" />
-          ) : (
-            <VolumeHighIcon className="h-3 w-3" />
-          )}
-        </button>
-        {/* Slide-out meter. width + opacity transition; the Slider
-            stays mounted so drags initiated on the track keep
-            running even if the cursor briefly crosses the
-            collapsing bound. */}
-        <div
-          className="ml-1 overflow-hidden rounded bg-neutral-900/85 ring-1 ring-white/10 transition-[width,opacity] duration-150"
-          style={{
-            width: hovered ? METER_WIDTH : 0,
-            opacity: hovered ? 1 : 0,
-          }}
-        >
-          <div
-            className="flex h-5 items-center px-2"
-            style={{ width: METER_WIDTH }}
-          >
-            <Slider
-              className="w-full"
-              value={volume}
-              minValue={0}
-              maxValue={1.5}
-              step={0.01}
-              onChange={(v) =>
-                onVolumeChange(typeof v === 'number' ? v : v[0])
-              }
-              aria-label="Volume"
-            >
-              <SliderTrack
-                className="relative flex h-3 w-full cursor-pointer items-center"
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                {({ state }) => (
-                  <>
-                    <div className="relative h-1 w-full overflow-hidden rounded-full bg-neutral-700">
-                      <div
-                        className={
-                          muted
-                            ? 'h-full bg-neutral-500/60'
-                            : 'h-full bg-sky-500/80'
-                        }
-                        style={{
-                          width: `${state.getThumbPercent(0) * 100}%`,
-                        }}
-                      />
-                    </div>
-                    <SliderThumb className="sr-only" />
-                  </>
-                )}
-              </SliderTrack>
-            </Slider>
-          </div>
-        </div>
+          {title}
+        </span>
       </div>
-      {/* Kebab — context menu opener. Outside the hover-scoped row
-          so its hover doesn't expand the meter. Sits inside the
-          outer flex so it shifts right alongside the meter when the
-          user is mid-volume-edit, never being covered by the
-          expanding pill. */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenMenu(e)
-        }}
-        onPointerDown={(e) => e.stopPropagation()}
-        aria-label="Lane options"
-        title="Lane options"
-        className="ml-1 flex h-5 w-5 items-center justify-center rounded bg-neutral-900/85 text-neutral-300 ring-1 ring-white/10 hover:bg-neutral-700 hover:text-neutral-100"
-      >
-        <EllipsisVerticalIcon className="h-3 w-3" />
-      </button>
+      {(onToggleMute || onOpenMenu) && (
+        <div className="flex items-center justify-between">
+          {onToggleMute ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleMute()
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              aria-label={muted ? 'Unmute' : 'Mute'}
+              title={muted ? 'Unmute' : 'Mute'}
+              className={`flex h-4 w-4 items-center justify-center rounded ring-1 ring-white/10 hover:bg-neutral-700 ${muted ? 'bg-neutral-800 text-neutral-500' : 'bg-neutral-800 text-neutral-200'}`}
+            >
+              {muted ? (
+                <VolumeMuteIcon className="h-2.5 w-2.5" />
+              ) : (
+                <VolumeHighIcon className="h-2.5 w-2.5" />
+              )}
+            </button>
+          ) : (
+            <span />
+          )}
+          {onOpenMenu && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenMenu(e)
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onContextMenu={onOpenMenu}
+              aria-label="Lane options"
+              title="Lane options"
+              className="flex h-4 w-4 items-center justify-center rounded text-neutral-400 hover:bg-neutral-700 hover:text-neutral-100"
+            >
+              <EllipsisVerticalIcon className="h-2.5 w-2.5" />
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Drag handle between two adjacent lane headers. Dragging vertically
+ * shifts pixel height between the upper and lower lane while keeping
+ * their sum constant — so the editor's overall height stays pinned
+ * to the user's resize handle and only the *split* changes. Drag up
+ * → upper lane shrinks, lower lane grows; drag down → vice versa.
+ * The element occupies the same vertical space as the ROW_GAP it
+ * replaces, so swapping a plain gap for a divider doesn't shift any
+ * other row.
+ */
+type LaneRatioKey =
+  | 'timelineMidiLaneRatio'
+  | 'timelineSpeedLaneRatio'
+  | 'timelineAudioLaneRatio'
+
+function LaneDivider({
+  upperKey,
+  lowerKey,
+}: {
+  upperKey: LaneRatioKey
+  lowerKey: LaneRatioKey
+}) {
+  const laneScale = useStore((s) => s.settings.timelineLaneScale)
+  const upperRatio = useStore((s) => s.settings[upperKey])
+  const lowerRatio = useStore((s) => s.settings[lowerKey])
+  const updateSettings = useStore((s) => s.updateSettings)
+  const beginEdit = useStore((s) => s.beginSettingsEdit)
+  const endEdit = useStore((s) => s.endSettingsEdit)
+  const laneUnit = LANE_HEIGHT_BASE * laneScale
+  const dragRef = useRef<{ y: number; upH: number; loH: number } | null>(null)
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    beginEdit()
+    dragRef.current = {
+      y: e.clientY,
+      upH: upperRatio * laneUnit,
+      loH: lowerRatio * laneUnit,
+    }
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    const dy = e.clientY - d.y
+    const total = d.upH + d.loH
+    const minH = Math.min(LANE_MIN_HEIGHT, total / 2)
+    let upH = d.upH + dy
+    upH = Math.max(minH, Math.min(total - minH, upH))
+    const loH = total - upH
+    updateSettings({
+      [upperKey]: upH / laneUnit,
+      [lowerKey]: loH / laneUnit,
+    } as Partial<import('../store').Settings>)
+  }
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    dragRef.current = null
+    try {
+      ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    } catch {
+      // Capture may already be released (e.g. element unmounting); ignore.
+    }
+    endEdit()
+  }
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      title="Drag to resize lanes"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      style={{ height: ROW_GAP, touchAction: 'none' }}
+      className="group relative cursor-ns-resize"
+    >
+      <div className="pointer-events-none absolute inset-x-1 top-1/2 h-px -translate-y-1/2 bg-white/0 transition-colors group-hover:bg-white/40 group-active:bg-white/70" />
     </div>
   )
 }
@@ -1337,12 +1376,18 @@ export function Timeline() {
   // map is memoised against the breakpoint array reference so a
   // zustand-stable points list doesn't reshape the map every render.
   const laneScale = useStore((s) => s.settings.timelineLaneScale)
-  // Scaled lane heights — clip rows grow proportionally when the
-  // user drags the editor's resize handle. Ruler / minimap / gap
-  // stay fixed so the chrome doesn't bloat alongside the content.
-  const midiLaneH = LANE_HEIGHT_MIDI * laneScale
-  const audioLaneH = LANE_HEIGHT_AUDIO * laneScale
-  const speedLaneH = LANE_HEIGHT_SPEED * laneScale
+  const midiLaneRatio = useStore((s) => s.settings.timelineMidiLaneRatio)
+  const speedLaneRatio = useStore((s) => s.settings.timelineSpeedLaneRatio)
+  const audioLaneRatio = useStore((s) => s.settings.timelineAudioLaneRatio)
+  // Per-lane height = base × overall scale × per-lane ratio. The
+  // ratios start equal so all lanes share one height; the divider
+  // drag (see `LaneDivider` below) shifts ratio between two adjacent
+  // lanes while preserving their sum, so total editor height stays
+  // pinned to the user's resize handle.
+  const laneUnit = LANE_HEIGHT_BASE * laneScale
+  const midiLaneH = laneUnit * midiLaneRatio
+  const audioLaneH = laneUnit * audioLaneRatio
+  const speedLaneH = laneUnit * speedLaneRatio
   const speedPoints = useStore((s) => s.settings.midiSpeedAutomation)
   const speedYRangeLog2 = useStore(
     (s) => s.settings.midiSpeedAutomationYRangeLog2,
@@ -1949,11 +1994,81 @@ export function Timeline() {
   }
 
   return (
-    <div className="relative w-full select-none">
-      {/* Timeline area — three stacked rows, single playhead overlay.
-          The legacy left-rail headers are gone; lane controls live in
-          a right-click context menu and lanes self-identify via their
-          waveform / piano-roll content. */}
+    <div className="relative flex w-full select-none" style={{ gap: ROW_GAP }}>
+      {/* Left track-header column — track names + mute controls per
+          lane, FL-Studio-style. Heights mirror the right-column row
+          stack 1:1 so each header aligns with its lane. Inter-header
+          gaps are LaneDivider elements (same height as the right
+          column's ROW_GAP) so total column heights match while the
+          dividers also serve as drag handles to redistribute lane
+          height. Ruler and minimap rows are plain spacers. */}
+      <div
+        className="flex shrink-0 flex-col"
+        style={{ width: HEADER_WIDTH }}
+      >
+        <div style={{ height: RULER_HEIGHT }} />
+        <div style={{ height: ROW_GAP }} />
+        <LaneHeader
+          title="MIDI"
+          height={midiLaneH}
+          muted={midiMuted}
+          enabled={midiEnabled}
+          onToggleMute={song ? onToggleMidiMute : undefined}
+          onOpenMenu={song ? (e) => openMenuAt('midi', e) : undefined}
+        />
+        {showSpeedLane ? (
+          <>
+            <LaneDivider
+              upperKey="timelineMidiLaneRatio"
+              lowerKey="timelineSpeedLaneRatio"
+            />
+            <LaneHeader
+              title="Speed"
+              height={speedLaneH}
+            />
+            {showAudioLane && (
+              <>
+                <LaneDivider
+                  upperKey="timelineSpeedLaneRatio"
+                  lowerKey="timelineAudioLaneRatio"
+                />
+                <LaneHeader
+                  title={audioFileName ?? 'Audio'}
+                  height={audioLaneH}
+                  muted={audioMuted}
+                  onToggleMute={peaks ? onToggleAudioMute : undefined}
+                  onOpenMenu={
+                    peaks ? (e) => openMenuAt('audio', e) : undefined
+                  }
+                />
+              </>
+            )}
+          </>
+        ) : (
+          showAudioLane && (
+            <>
+              <LaneDivider
+                upperKey="timelineMidiLaneRatio"
+                lowerKey="timelineAudioLaneRatio"
+              />
+              <LaneHeader
+                title={audioFileName ?? 'Audio'}
+                height={audioLaneH}
+                muted={audioMuted}
+                onToggleMute={peaks ? onToggleAudioMute : undefined}
+                onOpenMenu={
+                  peaks ? (e) => openMenuAt('audio', e) : undefined
+                }
+              />
+            </>
+          )
+        )}
+        <div style={{ height: ROW_GAP }} />
+        <div style={{ height: MINIMAP_HEIGHT }} />
+      </div>
+      {/* Timeline area — stacked lane rows + single playhead overlay.
+          Widths measured off this wrapper (not the outer flex row) so
+          areaWidth excludes the header column. */}
       <div className="relative min-w-0 flex-1" ref={wrapRef}>
         <div
           className="flex flex-col"
@@ -2071,16 +2186,6 @@ export function Timeline() {
                 />
               </div>
             )}
-            {song && (
-              <LaneVolumeAffordance
-                muted={midiMuted}
-                volume={midiVolume}
-                onToggleMute={onToggleMidiMute}
-                onVolumeChange={(v) => updateSettings({ midiVolume: v })}
-                onContextMenu={(e) => openMenuAt('midi', e)}
-                onOpenMenu={(e) => openMenuAt('midi', e)}
-              />
-            )}
           </div>
 
           {/* Speed automation lane — only meaningful with a MIDI
@@ -2180,18 +2285,6 @@ export function Timeline() {
                 <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-rose-300">
                   {audioError}
                 </div>
-              )}
-              {peaks && (
-                <LaneVolumeAffordance
-                  muted={audioMuted}
-                  volume={audioVolume}
-                  onToggleMute={onToggleAudioMute}
-                  onVolumeChange={(v) =>
-                    updateSettings({ userAudioVolume: v })
-                  }
-                  onContextMenu={(e) => openMenuAt('audio', e)}
-                  onOpenMenu={(e) => openMenuAt('audio', e)}
-                />
               )}
             </div>
           )}

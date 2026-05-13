@@ -312,6 +312,14 @@ export type Settings = {
   // ruler / minimap fixed. Driven by the resize handle at the top
   // of the editor section.
   timelineLaneScale: number
+  // Per-lane height weights. Each lane's pixel height is
+  // `LANE_HEIGHT_BASE × timelineLaneScale × laneRatio`. Dragging the
+  // divider between two adjacent lanes shifts ratio between them
+  // while keeping their sum constant (so total editor height is
+  // preserved). Default 1.0 each → all lanes are the same height.
+  timelineMidiLaneRatio: number
+  timelineSpeedLaneRatio: number
+  timelineAudioLaneRatio: number
   // When true and the user has zoomed in, the timeline auto-pans so
   // the playhead stays centred during playback. Auto-disables when
   // the user manually pans / zooms (minimap drag, edge resize, wheel
@@ -442,6 +450,9 @@ export const defaultSettings: Settings = {
   midiSpeedAutomationYCenterLog2: 0,
   timelineEditorOpen: true,
   timelineLaneScale: 1,
+  timelineMidiLaneRatio: 1,
+  timelineSpeedLaneRatio: 1,
+  timelineAudioLaneRatio: 1,
   followPlayhead: true,
 }
 
