@@ -18,22 +18,38 @@ import { HttpStorage, type Storage, type StorageResponse } from 'smplr'
  * (e.g. third-party iframe, very old browser).
  */
 
-// v2: superseded v1 to drop any 404s poisoned during pre-sample
-// development. Bump again when the sample set changes server-side.
-const CACHE_NAME = 'notefall-samples-v2'
-const LEGACY_CACHE_NAMES = ['notefall-samples-v1'] as const
+// v3: previous (v2) builds passed a synthetic Response to cache.put,
+// which in some browsers landed without a usable body — cache.match
+// then returned undefined and every page reload re-fetched. Bump on
+// any code change to invalidate previous-build entries.
+const CACHE_NAME = 'notefall-samples-v3'
+const LEGACY_CACHE_NAMES = [
+  'notefall-samples-v1',
+  'notefall-samples-v2',
+] as const
 
 /** Whether Cache Storage is usable in this environment. */
 export function isSampleCacheAvailable(): boolean {
   return typeof globalThis.caches !== 'undefined'
 }
 
+// One-time per-session diagnostic so the user can verify cache
+// behaviour from the DevTools console. Logs the first hit + first
+// miss only, to avoid 480 lines of spam.
+let loggedHit = false
+let loggedMiss = false
+
 /**
  * Storage wrapper that caches successful (200) responses only.
  * 404 / 5xx / network failures fall through to the underlying
- * HttpStorage on every call so a deferred file deployment becomes
- * playable as soon as it shows up, instead of being stuck behind a
- * cached failure forever.
+ * fetch on every call so a deferred file deployment becomes
+ * playable as soon as it shows up, instead of being stuck behind
+ * a cached failure forever.
+ *
+ * Uses `Request` + `Response.clone()` (same pattern as smplr's
+ * built-in CacheStorage) — passing a synthesised `new Response(ab)`
+ * to `cache.put` worked in Chrome but failed silently in some
+ * other browsers, leaving the cache permanently empty.
  */
 class StatusFilteredCacheStorage implements Storage {
   constructor(private readonly cacheName: string) {}
@@ -42,30 +58,40 @@ class StatusFilteredCacheStorage implements Storage {
     const cache = isSampleCacheAvailable()
       ? await caches.open(this.cacheName).catch(() => null)
       : null
+    const request = new Request(url, { method: 'GET' })
+
     if (cache) {
-      const hit = await cache.match(url).catch(() => undefined)
+      const hit = await cache.match(request).catch(() => undefined)
       if (hit && hit.status === 200) {
+        if (!loggedHit) {
+          loggedHit = true
+          // eslint-disable-next-line no-console
+          console.info(
+            '[sampleCache] cache HIT (' + this.cacheName + ') — subsequent samples served from Cache Storage',
+          )
+        }
         return hit
       }
     }
-    const fresh = await HttpStorage.fetch(url)
+
+    if (!loggedMiss && cache) {
+      loggedMiss = true
+      // eslint-disable-next-line no-console
+      console.info(
+        '[sampleCache] cache MISS (' + this.cacheName + ') — fetching from network and persisting',
+      )
+    }
+
+    const fresh = await fetch(request)
     if (cache && fresh.status === 200) {
       try {
-        // smplr's StorageResponse exposes only `arrayBuffer()` —
-        // synthesise a Response we can `cache.put` cleanly. We
-        // copy the bytes once; the second copy goes back to smplr.
-        const ab = await fresh.arrayBuffer()
-        await cache.put(url, new Response(ab.slice(0), { status: 200 }))
-        return {
-          status: 200,
-          arrayBuffer: async () => ab.slice(0),
-          json: () => Promise.reject(new Error('not json')),
-          text: () => Promise.reject(new Error('not text')),
-        }
-      } catch {
-        // Quota / opaque-response / private-mode failures fall
-        // through — sample still plays, just no persistence this
-        // session.
+        // clone() gives us an independent Response stream to hand
+        // to cache.put; the original `fresh` still has an intact
+        // body that smplr will read via `arrayBuffer()`.
+        await cache.put(request, fresh.clone())
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[sampleCache] cache.put failed for', url, err)
       }
     }
     return fresh

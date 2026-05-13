@@ -205,7 +205,6 @@ export async function renderSongAudio(
         },
         {
           scheduler: new Scheduler(ctx, { lookaheadMs: Number.POSITIVE_INFINITY }),
-          model: settings.pianoModel,
         },
       ),
       signal,

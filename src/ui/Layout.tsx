@@ -36,16 +36,6 @@ export function Layout() {
   useEffect(() => {
     audioEngine.setVolume(settings.volume)
   }, [settings.volume])
-  // Piano model toggle. Only marks the engine's *target* model here —
-  // the actual sampler swap (Salamander = ~500 MB first DL) is fired
-  // from the Inspector switch's onChange handler so the
-  // user-gesture context is preserved through Tone.start(). When the
-  // engine hasn't been initialised yet, nothing happens — the next
-  // play / preview / keypress kicks the load via `ensureSamplerLoaded`
-  // naturally.
-  useEffect(() => {
-    audioEngine.setPianoModel(settings.pianoModel)
-  }, [settings.pianoModel])
   useEffect(() => {
     audioEngine.setMidiVolume(settings.midiVolume)
   }, [settings.midiVolume])

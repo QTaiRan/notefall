@@ -13,11 +13,13 @@ import type { SmplrGroup, SmplrJson, SmplrRegion } from 'smplr'
  * built-in pitch-shifting of the nearest sample.
  *
  * Sample-side prep (NOT done in this file):
- *   - Run the one-shot Docker pipeline that fetches the pre-encoded
- *     OGG release from archive.org, flattens the `#` → `s` rename,
- *     and drops the 480 files into `public/samples/salamander-v3-close/`.
- *     See `scripts/prepare-salamander.mjs` (legacy WAV path) and the
- *     project README / setup notes for the Docker invocation.
+ *   - `scripts/fetch-salamander.sh` — Docker pipeline that fetches
+ *     the pre-encoded OGG release from archive.org, renames `#`→`s`,
+ *     and drops the 480 files into a working directory.
+ *   - `scripts/upload-r2.sh` — Docker rclone upload to the R2
+ *     bucket bound to `samples.notefall.app`. Production fetches
+ *     come from there; Cache Storage (see `sampleCache.ts`) makes
+ *     the one-time ~77 MB download invisible on subsequent loads.
  *
  * Velocity layers are evenly split across 1..127 for now — the SFZ
  * file's `amp_velcurve_N` curve isn't replicated here, so soft layers
@@ -126,10 +128,3 @@ export function buildSalamanderDescriptor(baseUrl: string): SmplrJson {
     groups,
   }
 }
-
-/**
- * Total number of sample files the descriptor will fetch — used by
- * the UI to size the initial-download estimate (`fileCount × ~1 MB`).
- */
-export const SALAMANDER_SAMPLE_COUNT =
-  SAMPLED_KEYS.length * VELOCITY_LAYERS
