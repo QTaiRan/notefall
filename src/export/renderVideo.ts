@@ -69,7 +69,13 @@ export type VideoRenderOptions = {
    * pass doesn't see the audio buffer directly. Ignored when
    * `audio === null` (no audio track wanted).
    */
-  userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null
+  userAudio?: {
+    buffer: AudioBuffer
+    offsetSec: number
+    volume: number
+    trimStartSec: number
+    trimEndSec: number | null
+  } | null
   signal?: AbortSignal
   onProgress?: (p: VideoRenderProgress) => void
 }
@@ -325,14 +331,17 @@ export async function renderSongVideo(
     // additional frames so the final visual still matches the audio
     // tail (otherwise the video would freeze on its last MIDI frame
     // while the audio kept playing).
-    const audioEnd = userAudio
-      ? userAudio.offsetSec + userAudio.buffer.duration
+    const audioTrimEnd = userAudio
+      ? Math.min(userAudio.buffer.duration, userAudio.trimEndSec ?? userAudio.buffer.duration)
       : 0
+    const audioEnd = userAudio ? userAudio.offsetSec + audioTrimEnd : 0
+    const midiTrimEnd = settings.midiTrimEndSec ?? song.duration
     // Mirror renderAudio: MIDI is shifted by `settings.midiOffsetSec`
     // on the export timeline so the rendered video extends past the
-    // delayed song end.
+    // delayed song end. Trim ends shrink the rendered window so we
+    // don't burn frames on a silent tail.
     const totalDuration =
-      Math.max(song.duration + settings.midiOffsetSec, audioEnd) + TAIL_SECONDS
+      Math.max(midiTrimEnd + settings.midiOffsetSec, audioEnd) + TAIL_SECONDS
     const totalFrames = Math.max(1, Math.ceil(totalDuration * fps))
     const usPerFrame = Math.round(1_000_000 / fps)
     const keyframeInterval = Math.max(1, Math.round(KEYFRAME_INTERVAL_SECONDS * fps))

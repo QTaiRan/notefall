@@ -181,6 +181,15 @@ export class AudioEngine {
   private midiOffsetSec = 0
   private userAudioGain: GainNode | null = null
   private userAudioSource: AudioBufferSourceNode | null = null
+  // Non-destructive trim — `[start, end]` window into the underlying
+  // MIDI / audio. `end = null` means "use natural end". Trim is in the
+  // respective source's own time coordinate: MIDI-time for the MIDI
+  // trim, buffer-time (seconds into the decoded AudioBuffer) for the
+  // audio trim.
+  private midiTrimStart = 0
+  private midiTrimEnd: number | null = null
+  private userAudioTrimStart = 0
+  private userAudioTrimEnd: number | null = null
 
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
     if (this.piano) return
@@ -404,6 +413,51 @@ export class AudioEngine {
     if (this.song) this.recomputeIndices(this.currentSongTime())
   }
 
+  /**
+   * Set the MIDI trim window. `start` / `end` are in MIDI-time
+   * (matching `n.time`); `end = null` defers to `song.duration`.
+   * Notes at `n.time < start` or `n.time >= end` are silenced (and
+   * hidden by the visual layer). Notes that span `end` have their
+   * note-off clamped to `end` so we don't get hanging sustain.
+   * Re-walks the scheduling cursor so a change made mid-play is
+   * picked up by the next tick.
+   */
+  setMidiTrim(start: number, end: number | null): void {
+    if (this.midiTrimStart === start && this.midiTrimEnd === end) return
+    this.midiTrimStart = start
+    this.midiTrimEnd = end
+    if (this.song) this.recomputeIndices(this.currentSongTime())
+    // Active notes may now span the new trim end — clamp their
+    // endTime so the next tick releases them on time. We don't emit
+    // 'off' immediately; the tick's existing endTime≤songTime path
+    // will, mirroring the normal note-off lifecycle.
+    const effEnd = this.effectiveMidiTrimEnd()
+    for (const a of this.active.values()) {
+      if (a.endTime > effEnd) a.endTime = effEnd
+    }
+  }
+
+  /**
+   * Set the user-audio trim window. `start` / `end` are in
+   * buffer-time (seconds into the decoded AudioBuffer); `end = null`
+   * defers to `buffer.duration`. Restarts the source so the new
+   * window takes effect immediately.
+   */
+  setUserAudioTrim(start: number, end: number | null): void {
+    if (this.userAudioTrimStart === start && this.userAudioTrimEnd === end) return
+    this.userAudioTrimStart = start
+    this.userAudioTrimEnd = end
+    if (this.playing) this.restartUserAudioFromCurrent()
+  }
+
+  private effectiveMidiTrimEnd(): number {
+    return this.midiTrimEnd ?? (this.song?.duration ?? Number.POSITIVE_INFINITY)
+  }
+
+  private effectiveUserAudioTrimEnd(): number {
+    return this.userAudioTrimEnd ?? (this.userAudioBuffer?.duration ?? 0)
+  }
+
   setUserAudioVolume(linear: number): void {
     this.userAudioVolume = Math.max(0, linear)
     // Stacks with masterVolume — `applyVolumes` does the multiply and
@@ -419,7 +473,7 @@ export class AudioEngine {
    */
   userAudioEndSec(): number {
     if (!this.userAudioBuffer) return 0
-    return this.userAudioOffsetSec + this.userAudioBuffer.duration
+    return this.userAudioOffsetSec + this.effectiveUserAudioTrimEnd()
   }
 
   private ensureUserAudioGain(): GainNode | null {
@@ -462,8 +516,14 @@ export class AudioEngine {
     const ctx = gain.context as AudioContext
     const songTime = this.currentSongTime()
     const relPos = songTime - this.userAudioOffsetSec
-    const duration = this.userAudioBuffer.duration
-    if (relPos >= duration) return
+    // Trim defines the audible window into the buffer. Outside the
+    // window the source produces silence — by passing `duration` to
+    // `source.start` we let the audio graph stop the source for us
+    // when the trim end is reached.
+    const trimStart = Math.max(0, this.userAudioTrimStart)
+    const trimEnd = Math.min(this.userAudioBuffer.duration, this.effectiveUserAudioTrimEnd())
+    if (trimEnd <= trimStart) return
+    if (relPos >= trimEnd) return
 
     const src = ctx.createBufferSource()
     src.buffer = this.userAudioBuffer
@@ -473,13 +533,17 @@ export class AudioEngine {
     // export at 1× or use a future rubberband-style stretcher.
     src.playbackRate.value = this.rate
     src.connect(gain)
-    if (relPos < 0) {
-      // Audio hasn't begun yet. Delay start by |relPos|, scaled by
-      // rate so a 1.5× tempo proportionally shortens the wait.
-      const delay = -relPos / this.rate
-      src.start(ctx.currentTime + delay, 0)
+    if (relPos < trimStart) {
+      // Trimmed-in head hasn't reached its in-point yet. Delay start
+      // by the remaining gap (scaled by rate so a 1.5× tempo
+      // proportionally shortens the wait) and play the whole trim
+      // window from its in-point.
+      const delay = (trimStart - relPos) / this.rate
+      src.start(ctx.currentTime + delay, trimStart, trimEnd - trimStart)
     } else {
-      src.start(ctx.currentTime, relPos)
+      // Inside the trim window. Buffer offset = current playhead
+      // position; remaining duration = trimEnd - relPos.
+      src.start(ctx.currentTime, relPos, trimEnd - relPos)
     }
     this.userAudioSource = src
   }
@@ -636,10 +700,19 @@ export class AudioEngine {
     // re-attacking those same notes on every drag-tick during a live
     // seek-bar drag (no audible attack-spam).
     const newActiveIds = new Set<number>()
+    const seekTrimStart = this.midiTrimStart
+    const seekTrimEnd = this.effectiveMidiTrimEnd()
     if (this.song) {
       for (const n of this.song.notes) {
         if (n.time > midiClamped) break
-        if (n.time + n.duration > midiClamped) newActiveIds.add(n.id)
+        if (n.time < seekTrimStart) continue
+        if (n.time >= seekTrimEnd) continue
+        // Use the trim-clamped end so a note whose natural release
+        // sits past trimEnd doesn't get re-triggered for the silent
+        // tail. Touching boundaries (`>` not `>=`) keeps spanning
+        // notes sounding consistently with the normal tick path.
+        const effEnd = Math.min(n.time + n.duration, seekTrimEnd)
+        if (effEnd > midiClamped) newActiveIds.add(n.id)
       }
     }
 
@@ -688,7 +761,8 @@ export class AudioEngine {
         if (playedMidi < 0 || playedMidi > 127) continue
         const shaped = this.shapeVelocity(n.velocity)
         const stopFn = this.piano.start(playedMidi, shaped, audioBase, `s${n.id}`)
-        this.active.set(n.id, { id: n.id, midi: playedMidi, endTime: n.time + n.duration, stop: stopFn })
+        const endTime = Math.min(n.time + n.duration, seekTrimEnd)
+        this.active.set(n.id, { id: n.id, midi: playedMidi, endTime, stop: stopFn })
         this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime: clamped })
       }
     }
@@ -959,9 +1033,19 @@ export class AudioEngine {
     const LOOKAHEAD = 0.015
     const audioBase =
       !this.silent && this.piano ? this.piano.context.currentTime + LOOKAHEAD : 0
+    const trimStart = this.midiTrimStart
+    const trimEnd = this.effectiveMidiTrimEnd()
     while (this.noteIdx < this.song.notes.length && this.song.notes[this.noteIdx].time <= midiSongTime) {
       const n = this.song.notes[this.noteIdx]
       this.noteIdx++
+      // Trim filter — notes outside the configured window are silently
+      // skipped. Head-trim (`n.time < trimStart`) just drops the note;
+      // tail-trim (`n.time >= trimEnd`) does too, but the natural
+      // end-of-song detection below still uses the trimmed end so we
+      // don't hold playback open waiting for notes that will never
+      // fire.
+      if (n.time < trimStart) continue
+      if (n.time >= trimEnd) continue
       // Apply transpose to the played pitch. Out-of-range notes after
       // shifting are silently dropped (no audio + no glow); the falling
       // note for them is also clipped on the visualization side.
@@ -977,7 +1061,11 @@ export class AudioEngine {
         this.silent || !this.piano
           ? noopStop
           : this.piano.start(playedMidi, shaped, audioBase + offset, `s${n.id}`)
-      this.active.set(n.id, { id: n.id, midi: playedMidi, endTime: n.time + n.duration, stop: stopFn })
+      // Clamp note-off to the trim end so a note that originally
+      // extended past the tail trim gets cut at the trim boundary
+      // instead of sustaining indefinitely.
+      const endTime = Math.min(n.time + n.duration, trimEnd)
+      this.active.set(n.id, { id: n.id, midi: playedMidi, endTime, stop: stopFn })
       this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime })
     }
 
@@ -1013,7 +1101,7 @@ export class AudioEngine {
       // in timeline-time is `songDuration + midiOffsetSec`. Audio end
       // is already in timeline-time (`userAudioOffsetSec + dur`).
       const effectiveEnd = Math.max(
-        this.song.duration + this.midiOffsetSec,
+        this.effectiveMidiTrimEnd() + this.midiOffsetSec,
         audioEnd,
       )
       const endThreshold = effectiveEnd + (this.loop ? 0 : SONG_TAIL_SECONDS)

@@ -122,19 +122,31 @@ export async function renderSongAudio(
   sampleRate: number,
   onProgress?: (p: AudioRenderProgress) => void,
   signal?: AbortSignal,
-  userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null,
+  userAudio?: {
+    buffer: AudioBuffer
+    offsetSec: number
+    volume: number
+    trimStartSec: number
+    trimEndSec: number | null
+  } | null,
 ): Promise<AudioBuffer> {
   if (signal?.aborted) throw new AudioRenderAborted()
   // Effective end is the later of the MIDI end and (when present) the
   // user-provided accompaniment's tail, so the render captures the
   // whole sync window even when the audio extends past the song. The
   // MIDI is shifted by `midiOffsetSec` so its end on the export
-  // timeline is `song.duration + midiOffsetSec`.
+  // timeline is `song.duration + midiOffsetSec`. Trim ends collapse
+  // the timeline to the trimmed window so we don't render silent
+  // padding.
   const midiOffset = settings.midiOffsetSec
-  const audioEnd = userAudio
-    ? userAudio.offsetSec + userAudio.buffer.duration
+  const midiTrimStart = settings.midiTrimStartSec
+  const midiTrimEnd = settings.midiTrimEndSec ?? song.duration
+  const audioTrimStart = userAudio ? Math.max(0, userAudio.trimStartSec) : 0
+  const audioTrimEnd = userAudio
+    ? Math.min(userAudio.buffer.duration, userAudio.trimEndSec ?? userAudio.buffer.duration)
     : 0
-  const songEnd = Math.max(song.duration + midiOffset, audioEnd)
+  const audioEnd = userAudio ? userAudio.offsetSec + audioTrimEnd : 0
+  const songEnd = Math.max(midiTrimEnd + midiOffset, audioEnd)
   const totalDuration = songEnd + TAIL_SECONDS
   const length = Math.max(1, Math.ceil(totalDuration * sampleRate))
 
@@ -218,7 +230,7 @@ export async function renderSongAudio(
   // sampler's. Negative offsets aren't supported in the MVP, so the
   // start time is always ≥ 0; if the offset overshoots the rendered
   // window the source simply never fires.
-  if (userAudio && userAudio.offsetSec < totalDuration) {
+  if (userAudio && userAudio.offsetSec < totalDuration && audioTrimEnd > audioTrimStart) {
     const src = ctx.createBufferSource()
     src.buffer = userAudio.buffer
     const gain = ctx.createGain()
@@ -226,10 +238,18 @@ export async function renderSongAudio(
     gain.gain.value = settings.volume * userAudio.volume
     src.connect(gain)
     gain.connect(ctx.destination)
-    src.start(Math.max(0, userAudio.offsetSec))
+    // Schedule with `(when, offset, duration)` so the trim window is
+    // honoured by the audio graph itself rather than us needing to
+    // pre-slice the buffer.
+    const startTime = Math.max(0, userAudio.offsetSec + audioTrimStart)
+    src.start(startTime, audioTrimStart, audioTrimEnd - audioTrimStart)
   }
 
   for (const n of song.notes) {
+    // Trim filter — match the engine's tick semantics so a rendered
+    // export sounds the same as live playback under the same trim.
+    if (n.time < midiTrimStart) continue
+    if (n.time >= midiTrimEnd) continue
     const playedMidi = n.midi + settings.transpose
     if (playedMidi < 0 || playedMidi > 127) continue
 
@@ -242,9 +262,11 @@ export async function renderSongAudio(
     // n.time is MIDI-time; shift to timeline-time by the configured
     // MIDI offset so the export matches the live render.
     const onTime = n.time + midiOffset + LOOKAHEAD
-    const naturalOff = n.time + n.duration
+    // Clamp the natural note-off to the trim end so notes that
+    // originally extend past the trim point cut at the boundary.
+    const naturalOff = Math.min(n.time + n.duration, midiTrimEnd)
     const range = findRangeContaining(pedalRanges, naturalOff)
-    const actualOff = (range ? range.end : naturalOff) + midiOffset
+    const actualOff = Math.min(range ? range.end : naturalOff, midiTrimEnd) + midiOffset
 
     const stopFn = piano.start(playedMidi, shaped, onTime, `s${n.id}`)
     stopFn(actualOff + STOP_BUFFER)

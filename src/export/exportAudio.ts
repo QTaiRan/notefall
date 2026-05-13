@@ -41,7 +41,13 @@ export async function exportSongToWav(
     fileName?: string
     onProgress?: (p: AudioRenderProgress) => void
     signal?: AbortSignal
-    userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null
+    userAudio?: {
+      buffer: AudioBuffer
+      offsetSec: number
+      volume: number
+      trimStartSec: number
+      trimEndSec: number | null
+    } | null
   },
 ): Promise<AudioExportResult> {
   try {

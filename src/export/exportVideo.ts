@@ -92,7 +92,13 @@ export type Mp4ExportOptions = {
   /** `null` to produce a silent MP4 (no audio track). */
   audio: AudioTrackConfig
   /** Optional accompaniment buffer mixed into the audio track. */
-  userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null
+  userAudio?: {
+    buffer: AudioBuffer
+    offsetSec: number
+    volume: number
+    trimStartSec: number
+    trimEndSec: number | null
+  } | null
   fileName?: string
   signal?: AbortSignal
   onProgress?: (p: VideoRenderProgress) => void

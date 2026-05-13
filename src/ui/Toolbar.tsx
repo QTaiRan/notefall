@@ -489,6 +489,8 @@ export function Toolbar() {
               buffer: ua.buffer,
               offsetSec: settings.userAudioOffsetSec,
               volume: settings.userAudioVolume,
+              trimStartSec: settings.userAudioTrimStartSec,
+              trimEndSec: settings.userAudioTrimEndSec,
             }
           : null
 

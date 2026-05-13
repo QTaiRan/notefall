@@ -126,6 +126,15 @@ export function Layout() {
   useEffect(() => {
     audioEngine.setMidiOffset(settings.midiOffsetSec)
   }, [settings.midiOffsetSec])
+  useEffect(() => {
+    audioEngine.setMidiTrim(settings.midiTrimStartSec, settings.midiTrimEndSec)
+  }, [settings.midiTrimStartSec, settings.midiTrimEndSec])
+  useEffect(() => {
+    audioEngine.setUserAudioTrim(
+      settings.userAudioTrimStartSec,
+      settings.userAudioTrimEndSec,
+    )
+  }, [settings.userAudioTrimStartSec, settings.userAudioTrimEndSec])
 
   // sync transport state if engine auto-stopped at end-of-song
   useEffect(() => {

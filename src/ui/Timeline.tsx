@@ -644,6 +644,56 @@ function LaneVolumeAffordance({
   )
 }
 
+/**
+ * Scrollbar-thumb–style trim handle. A short rounded vertical pill
+ * inset slightly from the clip edge, centred vertically and shorter
+ * than the lane. The visible pill is decorative (pointer-events:
+ * none); the surrounding transparent wrapper carries the hit area so
+ * the grab target is comfortably wider than the visual.
+ */
+function TrimHandle({
+  side,
+  laneHeight,
+  ariaLabel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+}: {
+  side: 'left' | 'right'
+  laneHeight: number
+  ariaLabel: string
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void
+  onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => void
+  onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => void
+}) {
+  const HIT_WIDTH = 10
+  const INSET = 0
+  const pillHeight = Math.round(laneHeight * 0.55)
+  return (
+    <div
+      aria-label={ariaLabel}
+      title="Drag to trim"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className="group absolute top-1/2 -translate-y-1/2 cursor-ew-resize"
+      style={{
+        [side]: INSET,
+        width: HIT_WIDTH,
+        height: laneHeight,
+        touchAction: 'none',
+      }}
+    >
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/25 transition-colors group-hover:bg-white/60"
+        style={{ width: 3, height: pillHeight }}
+      />
+    </div>
+  )
+}
+
 // Zoom limits. 1 = fit-to-width; the upper bound is generous enough
 // to land at ~10 px / 100 ms for a 4-minute song in a 1000 px-wide
 // timeline (still useful for sub-second sync work without making the
@@ -709,8 +759,22 @@ export function Timeline() {
   const songDuration = song?.duration ?? 0
   const audioDuration = peaks?.totalDurationSec ?? 0
   const midiOffsetSec = useStore((s) => s.settings.midiOffsetSec)
-  const audioEnd = audioDuration > 0 ? offsetSec + audioDuration : 0
-  const midiEnd = songDuration > 0 ? songDuration + midiOffsetSec : 0
+  const midiTrimStartSec = useStore((s) => s.settings.midiTrimStartSec)
+  const midiTrimEndSecRaw = useStore((s) => s.settings.midiTrimEndSec)
+  const userAudioTrimStartSec = useStore(
+    (s) => s.settings.userAudioTrimStartSec,
+  )
+  const userAudioTrimEndSecRaw = useStore(
+    (s) => s.settings.userAudioTrimEndSec,
+  )
+  const midiTrimEndSec = midiTrimEndSecRaw ?? songDuration
+  const audioTrimEndSec = userAudioTrimEndSecRaw ?? audioDuration
+  // Visible window endpoints — collapse to the trimmed range so the
+  // timeline reflects what will actually play / be exported. Note the
+  // base scale is still anchored to natural durations (see
+  // `baseDuration` below) so trimming doesn't rescale the timeline.
+  const audioEnd = audioDuration > 0 ? offsetSec + audioTrimEndSec : 0
+  const midiEnd = songDuration > 0 ? midiTrimEndSec + midiOffsetSec : 0
   const totalDuration = Math.max(0.001, midiEnd, audioEnd)
 
   const showAudioLane =
@@ -940,7 +1004,10 @@ export function Timeline() {
     if (!drag || !peaks) return
     const dx = e.clientX - drag.startX
     const dt = pxPerSec > 0 ? dx / pxPerSec : 0
-    const next = Math.max(0, drag.startOffset + dt)
+    // Same as the MIDI clip: trimmed head shouldn't pin the visible
+    // left edge above 0 on the timeline.
+    const minOffset = -userAudioTrimStartSec
+    const next = Math.max(minOffset, drag.startOffset + dt)
     if (next !== offsetSec) updateSettings({ userAudioOffsetSec: next })
   }
   const onAudioPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1076,6 +1143,119 @@ export function Timeline() {
     }
   }
 
+  // ── Trim handles (drag clip head/tail to hide content) ──
+  // Trim is non-destructive: notes / audio samples outside the window
+  // are silenced at playback time but the underlying ParsedSong /
+  // AudioBuffer is untouched. Dragging the right handle leftward
+  // shortens the audible tail; dragging the left handle rightward
+  // hides the head. The clip BODY drag still controls offset, so the
+  // gesture taxonomy is: edge = trim, body = position.
+  const MIN_CLIP_DURATION = 0.05
+  const midiTrimDragRef = useRef<{
+    side: 'left' | 'right'
+    startX: number
+    startTrimStart: number
+    startTrimEnd: number
+  } | null>(null)
+  const onMidiTrimPointerDown =
+    (side: 'left' | 'right') =>
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!song || e.button !== 0) return
+      e.stopPropagation()
+      midiTrimDragRef.current = {
+        side,
+        startX: e.clientX,
+        startTrimStart: midiTrimStartSec,
+        startTrimEnd: midiTrimEndSec,
+      }
+      e.currentTarget.setPointerCapture(e.pointerId)
+      beginEdit()
+    }
+  const onMidiTrimPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = midiTrimDragRef.current
+    if (!d || !song) return
+    e.stopPropagation()
+    const dt = pxPerSec > 0 ? (e.clientX - d.startX) / pxPerSec : 0
+    if (d.side === 'left') {
+      const max = d.startTrimEnd - MIN_CLIP_DURATION
+      const next = Math.max(0, Math.min(max, d.startTrimStart + dt))
+      if (next !== midiTrimStartSec) updateSettings({ midiTrimStartSec: next })
+    } else {
+      const min = d.startTrimStart + MIN_CLIP_DURATION
+      const next = Math.max(min, Math.min(songDuration, d.startTrimEnd + dt))
+      // Collapse "trimmed exactly to natural end" back to null so the
+      // value stays meaningful if the underlying song's duration
+      // changes later (live-edited note past the previous end, etc.).
+      const stored = next >= songDuration - 0.001 ? null : next
+      if (stored !== midiTrimEndSecRaw) {
+        updateSettings({ midiTrimEndSec: stored })
+      }
+    }
+  }
+  const onMidiTrimPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!midiTrimDragRef.current) return
+    e.stopPropagation()
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+    midiTrimDragRef.current = null
+    endEdit()
+  }
+
+  const audioTrimDragRef = useRef<{
+    side: 'left' | 'right'
+    startX: number
+    startTrimStart: number
+    startTrimEnd: number
+  } | null>(null)
+  const onAudioTrimPointerDown =
+    (side: 'left' | 'right') =>
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!peaks || e.button !== 0) return
+      e.stopPropagation()
+      audioTrimDragRef.current = {
+        side,
+        startX: e.clientX,
+        startTrimStart: userAudioTrimStartSec,
+        startTrimEnd: audioTrimEndSec,
+      }
+      e.currentTarget.setPointerCapture(e.pointerId)
+      beginEdit()
+    }
+  const onAudioTrimPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = audioTrimDragRef.current
+    if (!d || !peaks) return
+    e.stopPropagation()
+    const dt = pxPerSec > 0 ? (e.clientX - d.startX) / pxPerSec : 0
+    if (d.side === 'left') {
+      const max = d.startTrimEnd - MIN_CLIP_DURATION
+      const next = Math.max(0, Math.min(max, d.startTrimStart + dt))
+      if (next !== userAudioTrimStartSec) {
+        updateSettings({ userAudioTrimStartSec: next })
+      }
+    } else {
+      const min = d.startTrimStart + MIN_CLIP_DURATION
+      const next = Math.max(min, Math.min(audioDuration, d.startTrimEnd + dt))
+      const stored = next >= audioDuration - 0.001 ? null : next
+      if (stored !== userAudioTrimEndSecRaw) {
+        updateSettings({ userAudioTrimEndSec: stored })
+      }
+    }
+  }
+  const onAudioTrimPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!audioTrimDragRef.current) return
+    e.stopPropagation()
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+    audioTrimDragRef.current = null
+    endEdit()
+  }
+
   // ── MIDI clip drag (positive offset only, like audio) ──
   const midiDragRef = useRef<{
     startX: number
@@ -1097,7 +1277,12 @@ export function Timeline() {
     if (!drag || !song) return
     const dx = e.clientX - drag.startX
     const dt = pxPerSec > 0 ? dx / pxPerSec : 0
-    const next = Math.max(0, drag.startOffset + dt)
+    // The clip's visible left edge sits at `offset + trimStart`; clamp
+    // so it can reach 0 on the timeline (i.e. offset ≥ -trimStart),
+    // not 0 minus the trim — the trimmed head represents removed
+    // content, not invisible padding.
+    const minOffset = -midiTrimStartSec
+    const next = Math.max(minOffset, drag.startOffset + dt)
     if (next !== midiOffsetSec) updateSettings({ midiOffsetSec: next })
   }
   const onMidiPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1115,24 +1300,34 @@ export function Timeline() {
   // portion of each clip overlapping the visible window gets drawn,
   // keeping canvas memory bounded at high zoom levels (without this, a
   // 4-minute clip at 50× zoom would allocate a 200 000-px-wide canvas).
-  const audioClipStart = offsetSec
-  const audioClipEnd = offsetSec + audioDuration
+  // Clip starts/ends include the trim window — content outside the
+  // trim is hidden visually (mirroring engine playback) so the
+  // drawable surface shrinks to the trimmed range.
+  const audioClipStart = offsetSec + userAudioTrimStartSec
+  const audioClipEnd = offsetSec + audioTrimEndSec
   const audioVisStart = Math.max(clampedScroll, audioClipStart)
   const audioVisEnd = Math.min(clampedScroll + viewDuration, audioClipEnd)
   const audioClipLeft = (audioVisStart - clampedScroll) * pxPerSec
   const audioClipWidth = Math.max(0, (audioVisEnd - audioVisStart) * pxPerSec)
-  const audioStartInBuffer = Math.max(0, audioVisStart - audioClipStart)
+  // Buffer offset = timeline offset from the *natural* audio start
+  // (NOT the trimmed start). Trim only hides; the underlying buffer
+  // origin doesn't move, so the waveform under the trimmed clip still
+  // matches the corresponding samples in the audio file.
+  const audioStartInBuffer = Math.max(0, audioVisStart - offsetSec)
 
-  const midiClipStart = midiOffsetSec
-  const midiClipEnd = midiOffsetSec + songDuration
+  const midiClipStart = midiOffsetSec + midiTrimStartSec
+  const midiClipEnd = midiOffsetSec + midiTrimEndSec
   const midiVisStart = Math.max(clampedScroll, midiClipStart)
   const midiVisEnd = Math.min(clampedScroll + viewDuration, midiClipEnd)
   const midiClipLeft = (midiVisStart - clampedScroll) * pxPerSec
   const midiClipWidth = Math.max(0, (midiVisEnd - midiVisStart) * pxPerSec)
   // Notes are stored in MIDI-time; the canvas's "time at x=0" is the
   // visible-window start expressed in MIDI-time so existing positioning
-  // math `(n.time - startTimeSec) * pxPerSec` lands on screen-x.
-  const midiStartInSong = Math.max(0, midiVisStart - midiClipStart)
+  // math `(n.time - startTimeSec) * pxPerSec` lands on screen-x. This
+  // uses `midiOffsetSec` (NOT the trimmed clip start) so a note's
+  // natural MIDI-time still maps to the right screen-x — trim only
+  // shrinks the canvas viewport, it doesn't shift content.
+  const midiStartInSong = Math.max(0, midiVisStart - midiOffsetSec)
   const totalRowHeight =
     MINIMAP_HEIGHT +
     ROW_GAP +
@@ -1257,6 +1452,22 @@ export function Timeline() {
                   startTimeSec={midiStartInSong}
                   color={noteColor}
                 />
+                <TrimHandle
+                  side="left"
+                  laneHeight={LANE_HEIGHT_MIDI}
+                  ariaLabel="Trim MIDI head"
+                  onPointerDown={onMidiTrimPointerDown('left')}
+                  onPointerMove={onMidiTrimPointerMove}
+                  onPointerUp={onMidiTrimPointerUp}
+                />
+                <TrimHandle
+                  side="right"
+                  laneHeight={LANE_HEIGHT_MIDI}
+                  ariaLabel="Trim MIDI tail"
+                  onPointerDown={onMidiTrimPointerDown('right')}
+                  onPointerMove={onMidiTrimPointerMove}
+                  onPointerUp={onMidiTrimPointerUp}
+                />
               </div>
             )}
             {song && (
@@ -1303,6 +1514,22 @@ export function Timeline() {
                     pxPerSec={pxPerSec}
                     startInBufferSec={audioStartInBuffer}
                     color="rgba(125, 211, 252, 0.85)"
+                  />
+                  <TrimHandle
+                    side="left"
+                    laneHeight={LANE_HEIGHT_AUDIO}
+                    ariaLabel="Trim audio head"
+                    onPointerDown={onAudioTrimPointerDown('left')}
+                    onPointerMove={onAudioTrimPointerMove}
+                    onPointerUp={onAudioTrimPointerUp}
+                  />
+                  <TrimHandle
+                    side="right"
+                    laneHeight={LANE_HEIGHT_AUDIO}
+                    ariaLabel="Trim audio tail"
+                    onPointerDown={onAudioTrimPointerDown('right')}
+                    onPointerMove={onAudioTrimPointerMove}
+                    onPointerUp={onAudioTrimPointerUp}
                   />
                 </div>
               )}

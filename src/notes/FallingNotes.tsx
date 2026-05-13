@@ -650,8 +650,21 @@ export function FallingNotes() {
 
     let count = 0
     const notes = song?.notes ?? []
+    // Non-destructive trim window — notes outside `[trimStart, trimEnd)`
+    // are skipped on the canvas, mirroring the engine's playback
+    // filter so what the user sees matches what they hear.
+    const trimStart = settings.midiTrimStartSec
+    const trimEnd =
+      settings.midiTrimEndSec ?? song?.duration ?? Number.POSITIVE_INFINITY
     for (let i = 0; i < notes.length; i++) {
       const n = notes[i]
+      if (n.time < trimStart) continue
+      if (n.time >= trimEnd) continue
+      // Clamp duration to the trim window so a note whose natural
+      // release sits past trimEnd visually shortens to land its tail
+      // at the trim point (mirroring the audio engine's clamped
+      // note-off).
+      const effDuration = Math.min(n.duration, trimEnd - n.time)
       let topY: number
       let bottomY: number
 
@@ -661,7 +674,7 @@ export function FallingNotes() {
         // the hit line. The fragment shader clips pixels with worldY < hitY,
         // so geometry below the hit line is invisible.
         const headT = n.time - t
-        const tailT = headT + n.duration
+        const tailT = headT + effDuration
         if (headT > downSpawnCutoff) break // sorted by time → no later notes are visible yet
         const headY = hitY + (headT / fall) * FALL_DISTANCE
         const tailY = hitY + (tailT / fall) * FALL_DISTANCE
@@ -673,7 +686,7 @@ export function FallingNotes() {
       } else {
         // Past notes rise from the keyboard upward (history trail).
         // Same geometry as the live-note path below — see computeRisingRect.
-        const rect = computeRisingRect(t - n.time, n.duration, hitY, fall, FALL_DISTANCE, minLength)
+        const rect = computeRisingRect(t - n.time, effDuration, hitY, fall, FALL_DISTANCE, minLength)
         if (rect === null) break // not yet emerged (sorted → no later notes either)
         if (rect.bottomY >= visibleTop) continue
         if (rect.topY <= hitY) continue

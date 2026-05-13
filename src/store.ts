@@ -266,6 +266,22 @@ export type Settings = {
   // are not supported yet for the same viewport reason as the audio
   // offset.
   midiOffsetSec: number
+  // Non-destructive head / tail trim for the MIDI clip, in MIDI-time
+  // seconds (NOT timeline-time). Notes/pedals whose `n.time` falls
+  // outside `[midiTrimStartSec, midiTrimEndSec ?? song.duration)` are
+  // skipped at playback / render / visualization time. Notes that span
+  // the tail trim have their note-off clamped to the trim point.
+  // `null` for the end means "no tail trim" so the values stay
+  // meaningful when the song loaded underneath the user changes
+  // duration. Trimming only HIDES content; the underlying ParsedSong
+  // is never mutated.
+  midiTrimStartSec: number
+  midiTrimEndSec: number | null
+  // Same idea for the user-provided audio clip, but in buffer-time
+  // seconds (offset into the decoded AudioBuffer). Used to mute the
+  // tail of a long recording or skip a noisy intro without re-encoding.
+  userAudioTrimStartSec: number
+  userAudioTrimEndSec: number | null
   // Whether the bottom TimelineEditor section is expanded. Persisted
   // so a user who collapses it to reclaim vertical canvas space gets
   // their layout back on reload.
@@ -391,6 +407,10 @@ export const defaultSettings: Settings = {
   userAudioOffsetSec: 0,
   userAudioVolume: 1.0,
   midiOffsetSec: 0,
+  midiTrimStartSec: 0,
+  midiTrimEndSec: null,
+  userAudioTrimStartSec: 0,
+  userAudioTrimEndSec: null,
   timelineEditorOpen: true,
   followPlayhead: true,
 }
