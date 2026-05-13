@@ -587,9 +587,12 @@ export function Viewport() {
       e.preventDefault();
       // Source of truth is the engine's clock, not the store's
       // currentTime — the store only updates on SeekBar drags / skip
-      // buttons and would lag the actual playhead in the paused state.
+      // buttons and would lag the actual playhead in the paused
+      // state. `currentSongTime` is TL_audio (the elapsed-time axis
+      // that `seek` expects); the wheel delta is in wall-clock
+      // seconds so adding directly is correct.
       const cur = audioEngine.currentSongTime();
-      const duration = s.song.duration;
+      const duration = audioEngine.midiTimeToTimeline(s.song.duration);
       const next = Math.max(0, Math.min(duration, cur + dt));
       if (next === cur) return;
       audioEngine.seek(next);

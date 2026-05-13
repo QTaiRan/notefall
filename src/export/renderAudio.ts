@@ -1,5 +1,6 @@
 import { Scheduler } from 'smplr'
 import type { ParsedSong } from '../midi/types'
+import { buildSpeedMap, midiToTimeline } from '../midi/speedMap'
 import type { Settings } from '../store'
 import { createPiano } from '../audio/sampler'
 
@@ -141,12 +142,17 @@ export async function renderSongAudio(
   const midiOffset = settings.midiOffsetSec
   const midiTrimStart = settings.midiTrimStartSec
   const midiTrimEnd = settings.midiTrimEndSec ?? song.duration
+  // Speed automation maps MIDI-time to a stretched / compressed
+  // timeline. Apply the same mapping the realtime engine uses so an
+  // export comes out sample-identical to live playback.
+  const speedMap = buildSpeedMap(settings.midiSpeedAutomation)
+  const midiTrimEndTimeline = midiToTimeline(speedMap, midiTrimEnd)
   const audioTrimStart = userAudio ? Math.max(0, userAudio.trimStartSec) : 0
   const audioTrimEnd = userAudio
     ? Math.min(userAudio.buffer.duration, userAudio.trimEndSec ?? userAudio.buffer.duration)
     : 0
   const audioEnd = userAudio ? userAudio.offsetSec + audioTrimEnd : 0
-  const songEnd = Math.max(midiTrimEnd + midiOffset, audioEnd)
+  const songEnd = Math.max(midiTrimEndTimeline + midiOffset, audioEnd)
   const totalDuration = songEnd + TAIL_SECONDS
   const length = Math.max(1, Math.ceil(totalDuration * sampleRate))
 
@@ -259,14 +265,18 @@ export async function renderSongAudio(
       settings.velocityFloor,
       settings.velocityCap,
     )
-    // n.time is MIDI-time; shift to timeline-time by the configured
-    // MIDI offset so the export matches the live render.
-    const onTime = n.time + midiOffset + LOOKAHEAD
-    // Clamp the natural note-off to the trim end so notes that
-    // originally extend past the trim point cut at the boundary.
+    // n.time is MIDI-time; map through the speed curve and shift by
+    // `midiOffset` to land on the export timeline. Without
+    // automation `midiToTimeline` is the identity, so this collapses
+    // to the linear `n.time + midiOffset` of before.
+    const onTime = midiOffset + midiToTimeline(speedMap, n.time) + LOOKAHEAD
+    // Clamp the natural note-off to the trim end (MIDI-time), then
+    // optionally extend via pedal sustain (still MIDI-time), and
+    // finally map to timeline-time.
     const naturalOff = Math.min(n.time + n.duration, midiTrimEnd)
     const range = findRangeContaining(pedalRanges, naturalOff)
-    const actualOff = Math.min(range ? range.end : naturalOff, midiTrimEnd) + midiOffset
+    const offMidi = Math.min(range ? range.end : naturalOff, midiTrimEnd)
+    const actualOff = midiOffset + midiToTimeline(speedMap, offMidi)
 
     const stopFn = piano.start(playedMidi, shaped, onTime, `s${n.id}`)
     stopFn(actualOff + STOP_BUFFER)

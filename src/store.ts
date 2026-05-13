@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ParsedSong } from './midi/types'
+import type { SpeedPoint } from './midi/speedMap'
 import { audioEngine } from './audio/engine'
 import type { FileRef } from './projects/types'
 
@@ -282,10 +283,35 @@ export type Settings = {
   // tail of a long recording or skip a noisy intro without re-encoding.
   userAudioTrimStartSec: number
   userAudioTrimEndSec: number | null
+  // Speed automation breakpoints for the MIDI track. Each entry is
+  // `(time, value)` where `time` is MIDI-time seconds and `value` is
+  // the speed multiplier at that point (linear-interpolated between
+  // points). Empty = constant 1.0 (no automation). Only affects MIDI
+  // playback / visualisation; user-provided audio plays at constant
+  // rate so it isn't degraded by naïve resampling.
+  midiSpeedAutomation: SpeedPoint[]
+  // Half-range of the speed automation lane in log₂ units (so the
+  // visible range is `[2^-range, 2^range]` around 1.0). Tunable
+  // because the default of 2 (i.e. 0.25× – 4×) is too sensitive for
+  // small rubato-style adjustments — users editing in [0.9×, 1.1×]
+  // want a finer Y-axis. Wheel-over-the-lane adjusts this live.
+  midiSpeedAutomationYRangeLog2: number
+  // Log₂-center of the visible speed range — 0 means the lane is
+  // centred on 1.0×. Drifts away from 0 when the user zooms in over
+  // a breakpoint whose value isn't 1.0× (cursor-anchored zoom), so
+  // they can fine-tune values around any speed without the dot
+  // clamping to the top/bottom edge of the lane.
+  midiSpeedAutomationYCenterLog2: number
   // Whether the bottom TimelineEditor section is expanded. Persisted
   // so a user who collapses it to reclaim vertical canvas space gets
   // their layout back on reload.
   timelineEditorOpen: boolean
+  // Scale factor on the timeline editor's lane heights. 1.0 = the
+  // natural minimum (current values for MIDI / audio / speed lanes).
+  // Higher values grow the clips proportionally while leaving the
+  // ruler / minimap fixed. Driven by the resize handle at the top
+  // of the editor section.
+  timelineLaneScale: number
   // When true and the user has zoomed in, the timeline auto-pans so
   // the playhead stays centred during playback. Auto-disables when
   // the user manually pans / zooms (minimap drag, edge resize, wheel
@@ -411,7 +437,11 @@ export const defaultSettings: Settings = {
   midiTrimEndSec: null,
   userAudioTrimStartSec: 0,
   userAudioTrimEndSec: null,
+  midiSpeedAutomation: [],
+  midiSpeedAutomationYRangeLog2: 1,
+  midiSpeedAutomationYCenterLog2: 0,
   timelineEditorOpen: true,
+  timelineLaneScale: 1,
   followPlayhead: true,
 }
 

@@ -1,5 +1,13 @@
 import * as Tone from 'tone'
 import type { ParsedSong } from '../midi/types'
+import {
+  buildSpeedMap,
+  EMPTY_SPEED_MAP,
+  midiToTimeline,
+  timelineToMidi,
+  type SpeedMap,
+  type SpeedPoint,
+} from '../midi/speedMap'
 import { createPiano, type PianoInstrument, type LoadProgress } from './sampler'
 import { now } from './clock'
 
@@ -190,6 +198,10 @@ export class AudioEngine {
   private midiTrimEnd: number | null = null
   private userAudioTrimStart = 0
   private userAudioTrimEnd: number | null = null
+  // Speed automation curve. Only affects MIDI playback / scheduling;
+  // user audio plays at constant rate. See `midi/speedMap.ts` for the
+  // coordinate-mapping conventions.
+  private speedMap: SpeedMap = EMPTY_SPEED_MAP
 
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
     if (this.piano) return
@@ -458,6 +470,20 @@ export class AudioEngine {
     return this.userAudioTrimEnd ?? (this.userAudioBuffer?.duration ?? 0)
   }
 
+  /**
+   * Replace the MIDI speed automation curve. Empty `points` resets to
+   * constant 1.0. Active scheduling cursor is re-walked so the next
+   * tick lands on the right note for the new curve. Note: changing
+   * the curve during playback can cause the MIDI playhead to jump in
+   * MIDI-time (user audio stays put, since timeline-time is the
+   * shared anchor); minor edits near the playhead produce near-zero
+   * jumps, so this only matters for sweeping mid-play edits.
+   */
+  setSpeedAutomation(points: readonly SpeedPoint[]): void {
+    this.speedMap = buildSpeedMap(points)
+    if (this.song) this.recomputeIndices(this.currentSongTime())
+  }
+
   setUserAudioVolume(linear: number): void {
     this.userAudioVolume = Math.max(0, linear)
     // Stacks with masterVolume — `applyVolumes` does the multiply and
@@ -680,16 +706,22 @@ export class AudioEngine {
     this.stopUserAudioSource()
   }
 
-  seek(t: number): void {
+  seek(tlAudio: number): void {
     const wasPlaying = this.playing
-    // Timeline-time clamp: extend by the MIDI offset so seeking to the
-    // very end of a clip that's been dragged forward still works.
-    const dur = (this.song?.duration ?? 0) + this.midiOffsetSec
-    const clamped = Math.max(0, Math.min(dur, t))
-    // MIDI-time playhead — what notes are sounding at this timeline
-    // position. Negative values (timeline cursor before the MIDI
-    // begins) collapse to "no notes sounding".
-    const midiClamped = clamped - this.midiOffsetSec
+    // `tlAudio` is the engine's INTERNAL time axis (wall-clock × rate
+    // since playback start). Aligned with the AudioContext schedule
+    // and what the SeekBar shows as "elapsed time". For the diff-
+    // based release/retrigger logic below we also need the
+    // corresponding MIDI-time, which goes through the inverse speed
+    // map.
+    const songDur = this.song?.duration ?? 0
+    const midiEndTimeline = midiToTimeline(this.speedMap, songDur)
+    const dur = midiEndTimeline + this.midiOffsetSec
+    const clamped = Math.max(0, Math.min(dur, tlAudio))
+    const midiClamped = timelineToMidi(
+      this.speedMap,
+      clamped - this.midiOffsetSec,
+    )
 
     // Diff-based release/retrigger so notes that span the new playback
     // position stay sounding (and stay represented in the visual layer's
@@ -782,6 +814,16 @@ export class AudioEngine {
     return this.playing
   }
 
+  /**
+   * The engine's INTERNAL playback clock — TL_audio. Advances at
+   * `rate × wall-clock` from `startedAt`. This is the time axis the
+   * audio context is actually scheduled against; it's NOT the
+   * timeline shown in the UI (which is in natural MIDI-time when
+   * speed automation is active).
+   *
+   * Callers that need "where the cursor should sit on the UI
+   * timeline" want `currentDisplayTime()` instead.
+   */
   currentSongTime(): number {
     if (!this.playing) return this.offsetAtStart
     const wall = now()
@@ -789,16 +831,48 @@ export class AudioEngine {
   }
 
   /**
-   * MIDI-time playhead — `currentSongTime` shifted back by the user's
-   * MIDI offset. Visual code that compares against `n.time` (which is
-   * stored in MIDI-time) should read THIS so falling notes / hit tests /
-   * click-to-time stay aligned when the user has dragged the MIDI
-   * clip on the timeline editor. UI clocks (transport readout, seek
-   * progress) should keep using `currentSongTime` since they
-   * represent absolute timeline position.
+   * MIDI-time playhead — the MIDI position the sampler is currently
+   * voicing. Routes the TL_audio clock through the inverse speed
+   * map. Visual code that compares against `n.time` (e.g. note
+   * highlighting at the cursor) reads this. Falling-note placement
+   * does NOT — see `midiTimeToTimeline` for the "constant descent
+   * rate" model.
    */
   currentMidiTime(): number {
-    return this.currentSongTime() - this.midiOffsetSec
+    return timelineToMidi(this.speedMap, this.currentSongTime() - this.midiOffsetSec)
+  }
+
+  /**
+   * Cursor position on the natural-duration UI timeline = MIDI-time
+   * of audio playhead, shifted by the configured MIDI clip offset.
+   * Advances at the speed-curve-adjusted rate so the cursor sits at
+   * the MIDI position the user is actually hearing.
+   *
+   * The UI's seek bar / timeline cursor / time readout all use THIS,
+   * not `currentSongTime()`, so the timeline doesn't visually
+   * stretch with the speed curve.
+   */
+  currentDisplayTime(): number {
+    return this.midiOffsetSec + this.currentMidiTime()
+  }
+
+  /**
+   * Convert a MIDI-time position to its TL_audio firing moment
+   * (offset + map(midiTime)). Used by the visual layer to compute
+   * each falling note's "wall-clock seconds until it lands", which
+   * is what keeps the descent rate constant regardless of the speed
+   * curve. With no automation this collapses to `offset + midiTime`.
+   */
+  midiTimeToTimeline(midiTime: number): number {
+    return this.midiOffsetSec + midiToTimeline(this.speedMap, midiTime)
+  }
+
+  /** Returns a shallow snapshot of the current speed map for callers
+   *  that need to render the curve (Timeline editor). The internal
+   *  map is treated as immutable, so the snapshot doesn't need to be
+   *  defensively copied. */
+  getSpeedMap(): SpeedMap {
+    return this.speedMap
   }
 
   isPedalDown(): boolean {
@@ -975,7 +1049,12 @@ export class AudioEngine {
    *  MIDI-time) compare correctly. Negative MIDI-times collapse to 0
    *  — the cursor then sits at the start of the song. */
   private recomputeIndices(songTime: number): void {
-    const midiSongTime = songTime - this.midiOffsetSec
+    // Timeline-time → MIDI-time via the speed automation curve. With
+    // no curve this collapses to the linear subtract.
+    const midiSongTime = timelineToMidi(
+      this.speedMap,
+      songTime - this.midiOffsetSec,
+    )
     if (!this.song) return
     let ni = 0
     while (ni < this.song.notes.length && this.song.notes[ni].time <= midiSongTime) ni++
@@ -1011,9 +1090,14 @@ export class AudioEngine {
       }
     }
     const songTime = this.currentSongTime()
-    // Notes + pedals are stored in MIDI-time; shift the timeline-time
-    // cursor back so all the unchanged comparisons below stay valid.
-    const midiSongTime = songTime - this.midiOffsetSec
+    // Notes + pedals are stored in MIDI-time. With speed automation
+    // the timeline ↔ MIDI relationship is non-linear, so we go
+    // through the speed map. Without a curve, `timelineToMidi` is
+    // the identity, leaving this equivalent to the legacy subtract.
+    const midiSongTime = timelineToMidi(
+      this.speedMap,
+      songTime - this.midiOffsetSec,
+    )
 
     // process pedal events
     while (this.pedalIdx < this.song.pedals.length && this.song.pedals[this.pedalIdx].time <= midiSongTime) {
@@ -1052,8 +1136,13 @@ export class AudioEngine {
       const playedMidi = n.midi + this.transpose
       if (playedMidi < 0 || playedMidi > 127) continue
       // Notes that are slightly overdue still align to the same lookahead floor,
-      // notes scheduled close to "on time" land precisely.
-      const offset = Math.max(0, (n.time - midiSongTime) / this.rate)
+      // notes scheduled close to "on time" land precisely. The delay
+      // must be measured in TIMELINE-time (which `audioBase` lives
+      // in) — going through the speed map keeps the offset accurate
+      // when the upcoming MIDI-time region is at a non-unity speed.
+      const noteTimelineRel = midiToTimeline(this.speedMap, n.time)
+      const currentTimelineRel = songTime - this.midiOffsetSec
+      const offset = Math.max(0, (noteTimelineRel - currentTimelineRel) / this.rate)
       // Unique stopId per note prevents cross-talk when the same pitch repeats
       // close enough that voices overlap in smplr's voice manager.
       const shaped = this.shapeVelocity(n.velocity)
@@ -1100,8 +1189,12 @@ export class AudioEngine {
       // MIDI now starts at `midiOffsetSec` on the timeline, so its end
       // in timeline-time is `songDuration + midiOffsetSec`. Audio end
       // is already in timeline-time (`userAudioOffsetSec + dur`).
+      // MIDI clip end in timeline-time = offset + map(trimEnd). With
+      // a speed curve below 1 over part of the range this stretches
+      // beyond the natural song duration — auto-stop must wait for
+      // the stretched end.
       const effectiveEnd = Math.max(
-        this.effectiveMidiTrimEnd() + this.midiOffsetSec,
+        this.midiOffsetSec + midiToTimeline(this.speedMap, this.effectiveMidiTrimEnd()),
         audioEnd,
       )
       const endThreshold = effectiveEnd + (this.loop ? 0 : SONG_TAIL_SECONDS)

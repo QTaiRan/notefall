@@ -9,7 +9,14 @@ import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard
 import { useCustomTexture } from './customTexture'
 import { deleteNotes, moveNotes, splitNote } from '../midi/edit'
 import { ensureSamplerLoaded, previewNote } from '../audio/preview'
-import { clickXToMidi, clickYToTime, fallDistance, noteVisualBounds } from './positions'
+import {
+  clickXToMidi,
+  clickYToTime,
+  fallDistance,
+  noteVisualBounds,
+  type TimeContext,
+} from './positions'
+import { buildSpeedMap, midiToTimeline } from '../midi/speedMap'
 import { noteDeathFx, FADE_DURATION as DEATH_FADE_DURATION } from './noteDeathFx'
 
 const MAX_INSTANCES = 4096
@@ -429,6 +436,21 @@ export function FallingNotes() {
   const song = useStore((s) => s.song)
   const customTexture = useCustomTexture((s) => s.texture)
   const transport = useStore((s) => s.transport)
+  // Speed automation map — memoised against the breakpoint array so
+  // useFrame re-uses the same instance until the user actually
+  // edits the curve. With no automation this is `EMPTY_SPEED_MAP`,
+  // which makes `midiToTimeline` an identity (zero cost).
+  const speedMap = useMemo(
+    () => buildSpeedMap(settings.midiSpeedAutomation),
+    [settings.midiSpeedAutomation],
+  )
+  // Shared geometry context handed to the per-note helpers. Built
+  // here so the per-frame closure / per-event handlers don't need
+  // to thread the speed map + offset through every call site.
+  const timeCtx: TimeContext = useMemo(
+    () => ({ speedMap, midiOffset: settings.midiOffsetSec }),
+    [speedMap, settings.midiOffsetSec],
+  )
 
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
@@ -588,10 +610,14 @@ export function FallingNotes() {
     const mesh = meshRef.current
     if (!mesh) return
 
-    // Falling-note placement compares against `n.time` (MIDI-time),
-    // so use the engine's MIDI-time playhead. Otherwise a non-zero
-    // `midiOffsetSec` would desync the visual notes from the audio.
-    const t = audioEngine.currentMidiTime()
+    // Falling-note placement is in TL_audio (wall-clock × rate) and
+    // each note's "fire moment" is `midiOffset + map(n.time)`. This
+    // keeps the descent rate constant in wall-clock seconds — speed
+    // automation only changes WHEN audio fires, not how fast the
+    // visual moves. Without automation the map collapses to identity
+    // and this reduces to the legacy `n.time` vs `currentSongTime`.
+    const tl = audioEngine.currentSongTime()
+    const midiOffset = settings.midiOffsetSec
     const hitY = noteHitYWorld(settings.keyboardY)
     const isDown = settings.fallDirection === 'down'
     const fall = settings.fallDurationSec
@@ -664,17 +690,25 @@ export function FallingNotes() {
       // release sits past trimEnd visually shortens to land its tail
       // at the trim point (mirroring the audio engine's clamped
       // note-off).
-      const effDuration = Math.min(n.duration, trimEnd - n.time)
+      const effEndMidi = Math.min(n.time + n.duration, trimEnd)
+      // Each note's head/tail FIRE MOMENT in TL_audio (= when audio
+      // will play that point). With the speed map, this stretches /
+      // compresses the visual note length to match audio duration in
+      // wall-clock seconds; outside automation, the map is identity
+      // and this collapses to `midiOffset + n.time`.
+      const headFire = midiOffset + midiToTimeline(speedMap, n.time)
+      const tailFire = midiOffset + midiToTimeline(speedMap, effEndMidi)
       let topY: number
       let bottomY: number
 
       if (isDown) {
-        // Future notes fall from above onto the keyboard.
-        // headT positive = head still in the future; negative = head has crossed
-        // the hit line. The fragment shader clips pixels with worldY < hitY,
-        // so geometry below the hit line is invisible.
-        const headT = n.time - t
-        const tailT = headT + effDuration
+        // Future notes fall from above onto the keyboard. `headT` is
+        // TL_audio seconds until the note's audio fires; under the
+        // engine's wall × rate clock it shrinks at constant rate so
+        // the visual descent stays at `FALL_DISTANCE / fall` per
+        // wall-second regardless of the speed curve.
+        const headT = headFire - tl
+        const tailT = tailFire - tl
         if (headT > downSpawnCutoff) break // sorted by time → no later notes are visible yet
         const headY = hitY + (headT / fall) * FALL_DISTANCE
         const tailY = hitY + (tailT / fall) * FALL_DISTANCE
@@ -686,7 +720,15 @@ export function FallingNotes() {
       } else {
         // Past notes rise from the keyboard upward (history trail).
         // Same geometry as the live-note path below — see computeRisingRect.
-        const rect = computeRisingRect(t - n.time, effDuration, hitY, fall, FALL_DISTANCE, minLength)
+        const audioDuration = tailFire - headFire
+        const rect = computeRisingRect(
+          tl - headFire,
+          audioDuration,
+          hitY,
+          fall,
+          FALL_DISTANCE,
+          minLength,
+        )
         if (rect === null) break // not yet emerged (sorted → no later notes either)
         if (rect.bottomY >= visibleTop) continue
         if (rect.topY <= hitY) continue
@@ -1113,8 +1155,8 @@ export function FallingNotes() {
     if (!state.song) return
     const note = state.song.notes.find((n) => n.id === noteId)
     if (!note) return
-    const t = audioEngine.currentMidiTime()
-    const b = noteVisualBounds(note, t, state.settings)
+    const tl = audioEngine.currentSongTime()
+    const b = noteVisualBounds(note, tl, state.settings, timeCtx)
     if (!b) {
       hoveredEdgeRef.current = null
       gl.domElement.style.cursor = ''
@@ -1200,8 +1242,8 @@ export function FallingNotes() {
         // so the death FX can puff out from the spot the note actually
         // occupied (querying after the delete would find nothing).
         if (targetNote) {
-          const t = audioEngine.currentMidiTime()
-          const b = noteVisualBounds(targetNote, t, state.settings)
+          const tl = audioEngine.currentSongTime()
+          const b = noteVisualBounds(targetNote, tl, state.settings, timeCtx)
           if (b) {
             noteDeathFx.emit({
               midi: targetNote.midi + state.settings.transpose,
@@ -1226,7 +1268,12 @@ export function FallingNotes() {
     // Alt+click splits the note at the click position. The split time uses
     // the click's world Y so the cut lands exactly where the user pointed.
     if (native.altKey) {
-      const splitTime = clickYToTime(e.point.y, audioEngine.currentMidiTime(), state.settings)
+      const splitTime = clickYToTime(
+        e.point.y,
+        audioEngine.currentSongTime(),
+        state.settings,
+        timeCtx,
+      )
       const result = splitNote(state.song, noteId, splitTime)
       if (result) {
         state.applySongEdit(result.song)

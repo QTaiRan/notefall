@@ -1,16 +1,18 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { ensureSamplerLoaded, previewNote } from '../audio/preview'
 import { addNote, deleteNotes, moveNotes } from '../midi/edit'
+import { buildSpeedMap } from '../midi/speedMap'
 import type { ParsedSong } from '../midi/types'
 import {
   clickXToMidi,
   clickYToTime,
   fallDistance,
   noteVisualBounds,
+  type TimeContext,
 } from '../notes/positions'
 import { noteDeathFx } from '../notes/noteDeathFx'
 import {
@@ -92,6 +94,16 @@ const PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), -NOTE_Z)
 export function EditTools() {
   const s = useStore((st) => st.settings)
   const { camera, gl } = useThree()
+  // Time-context for the geometry helpers. Same shape FallingNotes
+  // builds; mirroring it here keeps click→time conversions aligned
+  // with what the user sees under speed automation.
+  const timeCtx: TimeContext = useMemo(
+    () => ({
+      speedMap: buildSpeedMap(s.midiSpeedAutomation),
+      midiOffset: s.midiOffsetSec,
+    }),
+    [s.midiSpeedAutomation, s.midiOffsetSec],
+  )
 
   // EditTools is conditionally mounted (only in edit mode). When the
   // user starts playback we unmount and the canvas cursor would be
@@ -136,9 +148,9 @@ export function EditTools() {
   const tryDeleteAt = (world: THREE.Vector3): boolean => {
     const cur = useStore.getState()
     if (!cur.song) return false
-    const t = audioEngine.currentMidiTime()
+    const tl = audioEngine.currentSongTime()
     for (const n of cur.song.notes) {
-      const b = noteVisualBounds(n, t, cur.settings)
+      const b = noteVisualBounds(n, tl, cur.settings, timeCtx)
       if (!b) continue
       if (
         world.x >= b.xMin &&
@@ -266,9 +278,9 @@ export function EditTools() {
       const newSel = new Set<number>(initialSelection)
       const cur = useStore.getState()
       if (cur.song) {
-        const t = audioEngine.currentMidiTime()
+        const tl = audioEngine.currentSongTime()
         for (const n of cur.song.notes) {
-          const b = noteVisualBounds(n, t, cur.settings)
+          const b = noteVisualBounds(n, tl, cur.settings, timeCtx)
           if (!b) continue
           if (b.xMax < xMin || b.xMin > xMax) continue
           if (b.yMax < yMin || b.yMin > yMax) continue
@@ -328,8 +340,8 @@ export function EditTools() {
       useStore.getState().setSong(baseSong)
     }
 
-    const t = audioEngine.currentMidiTime()
-    const time = clickYToTime(startWorld.y, t, settings)
+    const tl = audioEngine.currentSongTime()
+    const time = clickYToTime(startWorld.y, tl, settings, timeCtx)
     const midi = clickXToMidi(startWorld.x, settings.transpose)
 
     // New notes inherit the duration & velocity of the most recently

@@ -1,6 +1,29 @@
 import type { NoteEvent } from '../midi/types'
 import type { Settings } from '../store'
+import { midiToTimeline, timelineToMidi, type SpeedMap } from '../midi/speedMap'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, noteHitYWorld } from '../keyboard/layout'
+
+/**
+ * Shared context for the geometry helpers below. With speed automation,
+ * a note's screen Y depends on its FIRE TIME on the audio timeline
+ * (`midiOffset + midiToTimeline(map, n.time)`), not its raw MIDI-time.
+ * Passing the speed map + offset around (instead of going through the
+ * engine each call) keeps these helpers pure and testable.
+ *
+ * `currentAudioTime` is in TL_audio coords (= engine.currentSongTime),
+ * the same axis that `(midiOffset + map(n.time))` lives on. Without
+ * automation `map` is the identity and `currentAudioTime` collapses
+ * to the legacy "currentTime in MIDI-time" — passing an empty map +
+ * 0 offset reproduces the old single-arg behaviour.
+ */
+export type TimeContext = {
+  speedMap: SpeedMap
+  midiOffset: number
+}
+
+function noteFireAudio(note: NoteEvent, ctx: TimeContext): number {
+  return ctx.midiOffset + midiToTimeline(ctx.speedMap, note.time)
+}
 
 /**
  * Shared geometry between the renderer (FallingNotes) and the editor
@@ -42,14 +65,26 @@ export function fallDistance(settings: Settings): number {
 }
 
 /**
- * World Y of a click → song time, accounting for fall direction. Used by
- * "double-click empty space to add a note" so the new note lands exactly
- * where the user pointed.
+ * World Y of a click → MIDI-time the click corresponds to, accounting
+ * for fall direction. Used by "double-click empty space to add a
+ * note" so the new note lands exactly where the user pointed. With
+ * speed automation, the click position maps to a TL_audio moment
+ * first; we then invert through the speed map to get the MIDI-time
+ * that, when fired, would visually land at the click Y.
  */
-export function clickYToTime(y: number, currentTime: number, settings: Settings): number {
+export function clickYToTime(
+  y: number,
+  currentAudioTime: number,
+  settings: Settings,
+  ctx: TimeContext,
+): number {
   const hitY = noteHitYWorld(settings.keyboardY)
   const headT = ((y - hitY) / fallDistance(settings)) * settings.fallDurationSec
-  return settings.fallDirection === 'down' ? currentTime + headT : currentTime - headT
+  const audioAtClick =
+    settings.fallDirection === 'down'
+      ? currentAudioTime + headT
+      : currentAudioTime - headT
+  return timelineToMidi(ctx.speedMap, audioAtClick - ctx.midiOffset)
 }
 
 /**
@@ -74,13 +109,23 @@ export function clickXToMidi(x: number, transpose: number): number {
 }
 
 /**
- * Inverse of clickYToTime — used by range-select to know where each note's
- * head currently sits on screen. Mirrors the `headY` line above.
+ * Inverse of clickYToTime — given a MIDI-time, return the screen Y
+ * where that note's HEAD currently sits. Routes through the speed
+ * map so the head lands on screen at its actual fire moment.
  */
-export function timeToHeadY(time: number, currentTime: number, settings: Settings): number {
+export function timeToHeadY(
+  time: number,
+  currentAudioTime: number,
+  settings: Settings,
+  ctx: TimeContext,
+): number {
   const hitY = noteHitYWorld(settings.keyboardY)
   const fd = fallDistance(settings)
-  const headT = settings.fallDirection === 'down' ? time - currentTime : currentTime - time
+  const fireAudio = ctx.midiOffset + midiToTimeline(ctx.speedMap, time)
+  const headT =
+    settings.fallDirection === 'down'
+      ? fireAudio - currentAudioTime
+      : currentAudioTime - fireAudio
   return hitY + (headT / settings.fallDurationSec) * fd
 }
 
@@ -108,8 +153,9 @@ export function midiToX(displayedMidi: number): number | null {
  */
 export function noteVisualBounds(
   note: NoteEvent,
-  currentTime: number,
+  currentAudioTime: number,
   settings: Settings,
+  ctx: TimeContext,
 ): { xMin: number; xMax: number; yMin: number; yMax: number } | null {
   const idx = note.midi + settings.transpose - MIDI_MIN
   if (idx < 0 || idx >= KEY_COUNT) return null
@@ -122,11 +168,18 @@ export function noteVisualBounds(
   const fall = settings.fallDurationSec
   const minLength = Math.max(0.01, settings.noteMinLength)
 
+  // Note's head + tail fire moments in TL_audio. Both ends go through
+  // the speed map so a note that spans a non-unity-speed region has
+  // its visual length match what the audio will produce.
+  const headFire = noteFireAudio(note, ctx)
+  const tailFire =
+    ctx.midiOffset + midiToTimeline(ctx.speedMap, note.time + note.duration)
+
   let bottomY: number
   let topY: number
   if (settings.fallDirection === 'down') {
-    const headT = note.time - currentTime
-    const tailT = headT + note.duration
+    const headT = headFire - currentAudioTime
+    const tailT = tailFire - currentAudioTime
     if (headT > fall) return null
     const headY = hitY + (headT / fall) * fd
     const tailY = hitY + (tailT / fall) * fd
@@ -135,9 +188,9 @@ export function noteVisualBounds(
     topY = bottomY + visualLength
     if (topY <= hitY) return null
   } else {
-    const headT = currentTime - note.time
+    const headT = currentAudioTime - headFire
     if (headT < 0) return null
-    const tailT = headT - note.duration
+    const tailT = currentAudioTime - tailFire
     const headY = hitY + (headT / fall) * fd
     const tailY = hitY + (tailT / fall) * fd
     topY = headY

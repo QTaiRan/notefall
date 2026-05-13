@@ -191,6 +191,12 @@ export function SeekBar({
   const volume = useStore((s) => s.settings.volume);
   const playbackRate = useStore((s) => s.settings.playbackRate);
   const updateSettings = useStore((s) => s.updateSettings);
+  // Subscribe to inputs that affect the TL_audio total duration so
+  // the slider rescales when the user changes the speed curve / MIDI
+  // offset. The values themselves aren't read here — only the
+  // subscription matters; the actual map lives in the engine.
+  useStore((s) => s.settings.midiSpeedAutomation);
+  useStore((s) => s.settings.midiOffsetSec);
 
   // Single shared "which popover is open" slot. Mutual exclusion: opening
   // one popover (e.g. Speed) immediately drops any other (e.g. Volume) so
@@ -215,7 +221,12 @@ export function SeekBar({
     }
   };
 
-  const duration = song?.duration ?? 0;
+  // Total song length on the engine's INTERNAL TL_audio axis (the
+  // same axis `currentTime` lives on). With speed automation this
+  // can differ from the natural MIDI duration — what matters here
+  // is "elapsed real time at the end of the song", which is what
+  // the slider's progress and time readout reflect.
+  const duration = song ? audioEngine.midiTimeToTimeline(song.duration) : 0;
 
   const onRewind = () => {
     audioEngine.seek(0);

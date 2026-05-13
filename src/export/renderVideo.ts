@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer'
 import type { ParsedSong } from '../midi/types'
+import { buildSpeedMap, midiToTimeline } from '../midi/speedMap'
 import type { Settings } from '../store'
 import { VirtualClock, resetActiveClock, setActiveClock } from '../audio/clock'
 import { audioEngine } from '../audio/engine'
@@ -336,12 +337,16 @@ export async function renderSongVideo(
       : 0
     const audioEnd = userAudio ? userAudio.offsetSec + audioTrimEnd : 0
     const midiTrimEnd = settings.midiTrimEndSec ?? song.duration
+    // Speed automation can stretch the MIDI past its natural length;
+    // walk the map to get the actual timeline end.
+    const speedMap = buildSpeedMap(settings.midiSpeedAutomation)
+    const midiTrimEndTimeline = midiToTimeline(speedMap, midiTrimEnd)
     // Mirror renderAudio: MIDI is shifted by `settings.midiOffsetSec`
     // on the export timeline so the rendered video extends past the
     // delayed song end. Trim ends shrink the rendered window so we
     // don't burn frames on a silent tail.
     const totalDuration =
-      Math.max(midiTrimEnd + settings.midiOffsetSec, audioEnd) + TAIL_SECONDS
+      Math.max(midiTrimEndTimeline + settings.midiOffsetSec, audioEnd) + TAIL_SECONDS
     const totalFrames = Math.max(1, Math.ceil(totalDuration * fps))
     const usPerFrame = Math.round(1_000_000 / fps)
     const keyframeInterval = Math.max(1, Math.round(KEYFRAME_INTERVAL_SECONDS * fps))

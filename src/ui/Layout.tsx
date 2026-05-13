@@ -135,6 +135,9 @@ export function Layout() {
       settings.userAudioTrimEndSec,
     )
   }, [settings.userAudioTrimStartSec, settings.userAudioTrimEndSec])
+  useEffect(() => {
+    audioEngine.setSpeedAutomation(settings.midiSpeedAutomation)
+  }, [settings.midiSpeedAutomation])
 
   // sync transport state if engine auto-stopped at end-of-song
   useEffect(() => {

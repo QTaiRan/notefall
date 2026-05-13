@@ -1,10 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Slider, SliderThumb, SliderTrack } from 'react-aria-components'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { useUserAudio, type UserAudioPeaks } from '../audio/userAudio'
-import { useCurrentTime } from '../audio/useCurrentTime'
+import { useCurrentDisplayTime } from '../audio/useCurrentTime'
 import type { NoteEvent } from '../midi/types'
+import {
+  buildSpeedMap,
+  midiToTimeline,
+  timelineToMidi,
+  speedAt,
+  MIN_SPEED,
+  MAX_SPEED,
+  MIN_CURVATURE,
+  MAX_CURVATURE,
+  type SpeedMap,
+  type SpeedPoint,
+} from '../midi/speedMap'
 import {
   CloseIcon,
   EllipsisVerticalIcon,
@@ -46,6 +58,10 @@ const MINIMAP_HEIGHT = 10
 const RULER_HEIGHT = 18
 const LANE_HEIGHT_MIDI = 56
 const LANE_HEIGHT_AUDIO = 48
+// Compact lane below MIDI that visualises and edits the speed
+// automation curve. Tall enough for the curve to be readable but
+// short enough not to crowd the other lanes.
+const LANE_HEIGHT_SPEED = 32
 // Vertical gap between rows.
 const ROW_GAP = 4
 
@@ -139,8 +155,10 @@ function MidiPreviewCanvas({
   width,
   height,
   pxPerSec,
-  /** Time at canvas x = 0. Lets the same canvas render any visible
-   *  window without reallocating; consumers update this on zoom/pan. */
+  /** MIDI-time at canvas x = 0. The timeline editor's x-axis is in
+   *  natural MIDI-time (speed automation only affects WHEN audio
+   *  fires, not where notes appear), so this is simply
+   *  `visStart - midiOffset`. */
   startTimeSec,
   color,
 }: {
@@ -181,7 +199,7 @@ function MidiPreviewCanvas({
     const rowHeight = Math.max(1.5, height / (pitchSpan + 1))
     const noteThickness = Math.max(1.5, rowHeight * 0.85)
 
-    // Visible time window in song coordinates.
+    // Visible window in natural MIDI-time.
     const endTimeSec = startTimeSec + width / pxPerSec
     ctx.fillStyle = color
     for (const n of notes) {
@@ -244,11 +262,19 @@ function RulerCanvas({
   height,
   startTimeSec,
   pxPerSec,
+  speedMap,
+  midiOffsetSec,
 }: {
   width: number
   height: number
+  /** Display-time at canvas x=0 (natural-MIDI-time + offset, the
+   *  editor's x-axis). */
   startTimeSec: number
   pxPerSec: number
+  /** Speed automation curve — used to map display-time positions to
+   *  TL_audio for the visible labels. */
+  speedMap: SpeedMap
+  midiOffsetSec: number
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   useEffect(() => {
@@ -263,29 +289,44 @@ function RulerCanvas({
     ctx.clearRect(0, 0, width, height)
     if (width <= 0 || pxPerSec <= 0) return
 
-    const viewDur = width / pxPerSec
-    const major = pickTickInterval(viewDur)
+    // Ticks are spaced at uniform TL_audio intervals so the labels
+    // read as honest elapsed-time (e.g. "0:10" lands exactly where
+    // 10 wall-clock seconds will have passed). On the display-time
+    // axis, that means the SPACING in pixels varies — wider in
+    // speed-up regions, narrower in slow-down regions — matching
+    // how fast the cursor moves through that area.
+    const visStartMidi = startTimeSec - midiOffsetSec
+    const visEndMidi = visStartMidi + width / pxPerSec
+    const visStartAudio = midiOffsetSec + midiToTimeline(speedMap, visStartMidi)
+    const visEndAudio = midiOffsetSec + midiToTimeline(speedMap, visEndMidi)
+    const audioVisDur = Math.max(1e-6, visEndAudio - visStartAudio)
+    const major = pickTickInterval(audioVisDur)
     const minor = major / 5
-    const endTime = startTimeSec + viewDur
+
+    /** TL_audio → x-pixel on the (display-time-based) canvas. */
+    const audioToX = (audioT: number): number => {
+      const midiT = timelineToMidi(speedMap, audioT - midiOffsetSec)
+      const displayT = midiT + midiOffsetSec
+      return Math.round((displayT - startTimeSec) * pxPerSec)
+    }
 
     // Minor ticks first (drawn under majors).
     ctx.fillStyle = 'rgba(255,255,255,0.18)'
-    const firstMinor = Math.ceil(startTimeSec / minor) * minor
-    for (let t = firstMinor; t <= endTime + 1e-6; t += minor) {
-      const x = Math.round((t - startTimeSec) * pxPerSec)
-      ctx.fillRect(x, height - 4, 1, 4)
+    const firstMinor = Math.ceil(visStartAudio / minor) * minor
+    for (let t = firstMinor; t <= visEndAudio + 1e-6; t += minor) {
+      ctx.fillRect(audioToX(t), height - 4, 1, 4)
     }
     // Major ticks + labels.
     ctx.fillStyle = 'rgba(255,255,255,0.55)'
     ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace'
     ctx.textBaseline = 'top'
-    const firstMajor = Math.ceil(startTimeSec / major) * major
-    for (let t = firstMajor; t <= endTime + 1e-6; t += major) {
-      const x = Math.round((t - startTimeSec) * pxPerSec)
+    const firstMajor = Math.ceil(visStartAudio / major) * major
+    for (let t = firstMajor; t <= visEndAudio + 1e-6; t += major) {
+      const x = audioToX(t)
       ctx.fillRect(x, height - 8, 1, 8)
       ctx.fillText(formatRulerLabel(t, major), x + 3, 1)
     }
-  }, [width, height, startTimeSec, pxPerSec])
+  }, [width, height, startTimeSec, pxPerSec, speedMap, midiOffsetSec])
   return (
     <canvas
       ref={canvasRef}
@@ -644,6 +685,525 @@ function LaneVolumeAffordance({
   )
 }
 
+// Y-axis mapping for the speed automation lane. Log₂-scaled so 0.5×
+// and 2× sit equidistant from 1.0 — natural for tempo-ish quantities.
+// `rangeLog2` is the user-tunable half-range: the visible y span
+// covers `[2^-r, 2^r]`. Larger `r` = coarser editing (more headroom
+// for big speed changes); smaller `r` = finer rubato edits.
+// Y-axis maps `[2^(center-range), 2^(center+range)]` to `[height, 0]`.
+// `center` defaults to 0 (i.e. centred on 1.0×) and drifts when the
+// user zooms in over a breakpoint whose value isn't 1.0× — see the
+// wheel handler in `SpeedAutomationLane` for the cursor-anchored
+// derivation.
+function speedToY(
+  speed: number,
+  height: number,
+  rangeLog2: number,
+  centerLog2: number,
+): number {
+  const clamped = Math.max(MIN_SPEED, Math.min(MAX_SPEED, speed))
+  const l = Math.log2(clamped) // negative below 1, positive above
+  const t = (centerLog2 + rangeLog2 - l) / (rangeLog2 * 2)
+  return Math.max(0, Math.min(height, t * height))
+}
+function yToSpeed(
+  y: number,
+  height: number,
+  rangeLog2: number,
+  centerLog2: number,
+): number {
+  const t = Math.max(0, Math.min(1, y / height))
+  const l = centerLog2 + rangeLog2 - t * rangeLog2 * 2
+  return Math.max(MIN_SPEED, Math.min(MAX_SPEED, Math.pow(2, l)))
+}
+
+/**
+ * Visual lane underneath the MIDI clip — shows the speed automation
+ * curve and lets the user edit it. Each breakpoint is a small dot
+ * the user can drag (changes time AND speed value); clicking empty
+ * area adds a new breakpoint at that location; right-click or Alt-
+ * click on a dot removes it.
+ *
+ * The curve is rendered on a canvas (sampled per pixel because
+ * linear-in-MIDI-time is non-linear in timeline-time when the speed
+ * isn't constant); breakpoints are React divs so hit-testing /
+ * accessibility / cursor styles come for free.
+ */
+function SpeedAutomationLane({
+  points,
+  speedMap,
+  areaWidth,
+  laneHeight,
+  pxPerSec,
+  clampedScroll,
+  viewDuration,
+  midiOffsetSec,
+  songDuration,
+  yRangeLog2,
+  yCenterLog2,
+  onPointsChange,
+  beginEdit,
+  endEdit,
+}: {
+  points: readonly SpeedPoint[]
+  speedMap: SpeedMap
+  areaWidth: number
+  laneHeight: number
+  pxPerSec: number
+  clampedScroll: number
+  viewDuration: number
+  midiOffsetSec: number
+  songDuration: number
+  yRangeLog2: number
+  yCenterLog2: number
+  onPointsChange: (next: SpeedPoint[]) => void
+  beginEdit: () => void
+  endEdit: () => void
+}) {
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  // Curve repaint — samples speed at each pixel column. The
+  // timeline x-axis is in NATURAL MIDI-time (with offset), so each
+  // pixel column maps directly to a MIDI-time without any inverse
+  // map lookup.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(areaWidth * dpr))
+    canvas.height = Math.max(1, Math.floor(laneHeight * dpr))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+    ctx.clearRect(0, 0, areaWidth, laneHeight)
+    if (areaWidth <= 0 || pxPerSec <= 0) return
+
+    // Unity (1.0) reference line — quickly tells the user where
+    // "no change" is on the y-axis.
+    const unityY = speedToY(1, laneHeight, yRangeLog2, yCenterLog2)
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, unityY + 0.5)
+    ctx.lineTo(areaWidth, unityY + 0.5)
+    ctx.stroke()
+
+    // The curve. Sample one MIDI-time per pixel column. With
+    // points.length===0, `speedAt` returns 1 everywhere, so the
+    // canvas just shows the unity line above and a flat curve at
+    // the same height — fine.
+    ctx.strokeStyle = 'rgba(125,211,252,0.85)'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    for (let x = 0; x < areaWidth; x++) {
+      const midiAtX = clampedScroll + x / pxPerSec - midiOffsetSec
+      const v = speedAt(speedMap, midiAtX)
+      const y = speedToY(v, laneHeight, yRangeLog2, yCenterLog2)
+      if (x === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+  }, [
+    areaWidth,
+    laneHeight,
+    pxPerSec,
+    clampedScroll,
+    speedMap,
+    midiOffsetSec,
+    yRangeLog2,
+    yCenterLog2,
+  ])
+
+  // Drag state for a breakpoint move. We snapshot the surrounding
+  // ARRAY so each move just rewrites the dragged index — keeps
+  // commits idempotent and avoids accumulating tiny float deltas.
+  const dragRef = useRef<{
+    index: number
+    snapshot: SpeedPoint[]
+    didMove: boolean
+  } | null>(null)
+
+  const onDotPointerDown =
+    (index: number) => (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return
+      e.stopPropagation()
+      dragRef.current = {
+        index,
+        snapshot: [...points],
+        didMove: false,
+      }
+      e.currentTarget.setPointerCapture(e.pointerId)
+      beginEdit()
+    }
+  const onDotPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    const wrap = wrapRef.current
+    if (!wrap) return
+    e.stopPropagation()
+    const rect = wrap.getBoundingClientRect()
+    const localX = e.clientX - rect.left
+    const localY = e.clientY - rect.top
+    // x → MIDI-time directly (natural timeline). No inverse map.
+    const rawMidi = Math.max(0, clampedScroll + localX / pxPerSec - midiOffsetSec)
+    // Prevent neighbour-crossing — breakpoints must stay in time
+    // order so the drag's index reference stays valid and the
+    // speed-map sort doesn't re-shuffle (which would otherwise jump
+    // the drag onto a different point mid-gesture). Adjacent
+    // breakpoints can stack at the exact same time but not cross.
+    const idx = d.index
+    const prevTime = idx > 0 ? d.snapshot[idx - 1].time : 0
+    const nextTime =
+      idx < d.snapshot.length - 1
+        ? d.snapshot[idx + 1].time
+        : Number.POSITIVE_INFINITY
+    const midiTime = Math.max(prevTime, Math.min(nextTime, rawMidi))
+    const value = yToSpeed(localY, laneHeight, yRangeLog2, yCenterLog2)
+    const next = d.snapshot.slice()
+    // Preserve the breakpoint's existing curvature so dragging
+    // doesn't accidentally straighten an in-progress curve edit.
+    next[idx] = { ...d.snapshot[idx], time: midiTime, value }
+    d.didMove = true
+    onPointsChange(next)
+  }
+  const onDotPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    e.stopPropagation()
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+    dragRef.current = null
+    endEdit()
+  }
+  const onDotContextMenu =
+    (index: number) => (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (dragRef.current) return
+      beginEdit()
+      const next = points.slice()
+      next.splice(index, 1)
+      onPointsChange(next)
+      endEdit()
+    }
+
+  // Click on empty lane → add a breakpoint at the click position
+  // with a value matching the curve's current speed there. That way
+  // the curve doesn't visually jump on point-add (it just gains a
+  // new draggable handle along the same shape). The PREDECESSOR
+  // point's curvature is reset to 0 because its old curvature
+  // applied to the now-replaced segment — keeping it would carry the
+  // previous segment's "bend" into the truncated half, which feels
+  // surprising. Both sides of the new point start as straight lines.
+  const onLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    if (dragRef.current) return
+    const wrap = wrapRef.current
+    if (!wrap) return
+    e.stopPropagation()
+    const rect = wrap.getBoundingClientRect()
+    const localX = e.clientX - rect.left
+    const localY = e.clientY - rect.top
+    const midiTime = Math.max(0, clampedScroll + localX / pxPerSec - midiOffsetSec)
+    const cappedMidi = songDuration > 0 ? Math.min(songDuration, midiTime) : midiTime
+    // Use the click's Y position for the value (so the dot lands
+    // exactly where the cursor is) rather than the current curve's
+    // value at that x.
+    const value = yToSpeed(localY, laneHeight, yRangeLog2, yCenterLog2)
+    const newPoint: SpeedPoint = { time: cappedMidi, value }
+    const merged: SpeedPoint[] = [...points, newPoint].sort(
+      (a, b) => a.time - b.time,
+    )
+    const newIdx = merged.indexOf(newPoint)
+    if (newIdx > 0) {
+      // Reset the predecessor's curvature so its segment to the new
+      // point becomes a straight line (default).
+      merged[newIdx - 1] = { ...merged[newIdx - 1], curvature: 0 }
+    }
+    beginEdit()
+    onPointsChange(merged)
+    endEdit()
+  }
+
+  const visEnd = clampedScroll + viewDuration
+
+  // Drag state for midpoint curvature edit. Same gesture model as
+  // the breakpoint drag — beginEdit at pointerdown, per-move writes
+  // through `setSongPreview`-equivalent updates, endEdit on
+  // pointerup — so the whole drag collapses to a single undo entry.
+  const midDragRef = useRef<{
+    index: number
+    startCurvature: number
+  } | null>(null)
+
+  // Per-segment midpoint handle geometry. Recomputed each render so
+  // points / view changes flow through naturally.
+  type MidHandle = {
+    /** Index of the FROM-point of the segment (curvature stored on
+     *  this point applies to the segment going to point[i+1]). */
+    index: number
+    x: number
+    y: number
+    curvature: number
+  }
+  const midHandles: MidHandle[] = []
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    const midTime = (a.time + b.time) / 2
+    const midTl = midiOffsetSec + midTime
+    if (midTl < clampedScroll || midTl > visEnd) continue
+    const midX = (midTl - clampedScroll) * pxPerSec
+    const midValue = speedAt(speedMap, midTime)
+    const midY = speedToY(midValue, laneHeight, yRangeLog2, yCenterLog2)
+    midHandles.push({
+      index: i,
+      x: midX,
+      y: midY,
+      curvature: a.curvature ?? 0,
+    })
+  }
+
+  // Wheel-on-lane = adjust curvature of the nearest midpoint handle.
+  // No vertical scroll behaviour; the lane swallows wheel only to
+  // both (a) edit curvature when over a midpoint, and (b) prevent
+  // the surrounding timeline from interpreting the wheel as
+  // horizontal zoom on top of our handles.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      // Find the closest midpoint handle to the cursor; only adjust
+      // when the cursor is actually within a sensible hit radius.
+      const rect = el.getBoundingClientRect()
+      const cursorX = e.clientX - rect.left
+      const cursorY = e.clientY - rect.top
+      let bestI = -1
+      let bestD = Infinity
+      for (const h of midHandles) {
+        const d = Math.hypot(cursorX - h.x, cursorY - h.y)
+        if (d < bestD) {
+          bestD = d
+          bestI = h.index
+        }
+      }
+      if (bestI < 0 || bestD > 18) return
+      e.preventDefault()
+      e.stopPropagation()
+      const cur = points[bestI].curvature ?? 0
+      const step = Math.sign(e.deltaY) * 0.05
+      const next = Math.max(MIN_CURVATURE, Math.min(MAX_CURVATURE, cur + step))
+      if (next === cur) return
+      beginEdit()
+      const nextPts = points.slice()
+      nextPts[bestI] = { ...points[bestI], curvature: next }
+      onPointsChange(nextPts)
+      endEdit()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [points, midHandles, beginEdit, endEdit, onPointsChange])
+
+  // Speed range labels — visible reminders of what the y-axis spans
+  // at the current range + centre.
+  const topSpeed = Math.pow(2, yCenterLog2 + yRangeLog2)
+  const botSpeed = Math.pow(2, yCenterLog2 - yRangeLog2)
+  return (
+    <div
+      ref={wrapRef}
+      onPointerDown={onLanePointerDown}
+      style={{ height: laneHeight, touchAction: 'none' }}
+      className="relative overflow-hidden rounded bg-neutral-900/40"
+      aria-label="MIDI speed automation"
+      title="Click to add a breakpoint · drag to move · right-click to delete · scroll over midpoint to adjust curve"
+    >
+      <canvas
+        ref={canvasRef}
+        style={{ width: areaWidth, height: laneHeight, display: 'block' }}
+        aria-hidden
+      />
+      {points.map((p, i) => {
+        const tl = midiOffsetSec + p.time
+        if (tl < clampedScroll || tl > visEnd) return null
+        const x = (tl - clampedScroll) * pxPerSec
+        const y = speedToY(p.value, laneHeight, yRangeLog2, yCenterLog2)
+        // Label sits ABOVE the dot when the dot is in the lower
+        // half, BELOW it otherwise — keeps the readout from being
+        // clipped off the top/bottom of the lane.
+        const labelBelow = y < laneHeight * 0.4
+        return (
+          <div
+            key={i}
+            className="absolute"
+            style={{ left: x, top: y, touchAction: 'none' }}
+          >
+            <div
+              onPointerDown={onDotPointerDown(i)}
+              onPointerMove={onDotPointerMove}
+              onPointerUp={onDotPointerUp}
+              onPointerCancel={onDotPointerUp}
+              onContextMenu={onDotContextMenu(i)}
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                // Double-click resets the value to 1.00× — quick way
+                // to "neutralise" a breakpoint without removing it.
+                if (Math.abs(p.value - 1) < 1e-6) return
+                beginEdit()
+                const next = points.slice()
+                next[i] = { ...points[i], value: 1 }
+                onPointsChange(next)
+                endEdit()
+              }}
+              title={`${p.value.toFixed(2)}× at ${p.time.toFixed(2)}s — double-click to reset · right-click to delete`}
+              className="absolute -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full bg-sky-300 ring-2 ring-sky-300/30 hover:bg-white active:cursor-grabbing"
+              style={{ width: 8, height: 8, touchAction: 'none' }}
+            />
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -translate-x-1/2 whitespace-nowrap rounded bg-neutral-950/80 px-1 font-mono text-[9px] text-sky-200"
+              style={{ top: labelBelow ? 8 : -16 }}
+            >
+              {p.value.toFixed(2)}×
+            </div>
+          </div>
+        )
+      })}
+      {/* Per-segment curvature handles. Sit at the curve's value at
+          u=0.5 — moving them isn't supported (they snap to the curve)
+          but SCROLLING over them adjusts the segment's curvature
+          (handled in the wheel listener above). */}
+      {midHandles.map((h) => {
+        const resetCurvature = () => {
+          if (h.curvature === 0) return
+          beginEdit()
+          const next = points.slice()
+          next[h.index] = { ...points[h.index], curvature: 0 }
+          onPointsChange(next)
+          endEdit()
+        }
+        const onMidPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+          e.stopPropagation()
+          if (e.button !== 0) return
+          midDragRef.current = { index: h.index, startCurvature: h.curvature }
+          e.currentTarget.setPointerCapture(e.pointerId)
+          beginEdit()
+        }
+        const onMidPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+          const d = midDragRef.current
+          if (!d) return
+          e.stopPropagation()
+          const wrap = wrapRef.current
+          if (!wrap) return
+          const a = points[d.index]
+          const b = points[d.index + 1]
+          if (!a || !b) return
+          // A flat segment (c1 == c2) has no shape to bend — the
+          // midpoint sits at the same speed value regardless of
+          // curvature, so leave the curvature alone.
+          const log2c1 = Math.log2(a.value)
+          const log2c2 = Math.log2(b.value)
+          const logRatio = log2c2 - log2c1
+          if (Math.abs(logRatio) < 1e-6) return
+          const rect = wrap.getBoundingClientRect()
+          const cursorY = e.clientY - rect.top
+          const targetSpeed = yToSpeed(
+            cursorY,
+            laneHeight,
+            yRangeLog2,
+            yCenterLog2,
+          )
+          // Invert applyCurvature at u=0.5 to recover the curvature
+          // that would land the midpoint on `targetSpeed`:
+          //   u' = (log2(target) − log2(c1)) / log2(c2/c1)
+          //   if u' < 0.5: u' = 0.5^k → curvature = (log(u')/log(0.5) − 1) / 3
+          //   if u' > 0.5: 1 − u' = 0.5^k → curvature = −((log(1−u')/log(0.5)) − 1) / 3
+          let uPrime = (Math.log2(targetSpeed) - log2c1) / logRatio
+          uPrime = Math.max(0.001, Math.min(0.999, uPrime))
+          let newCurvature: number
+          if (Math.abs(uPrime - 0.5) < 0.005) {
+            newCurvature = 0
+          } else if (uPrime < 0.5) {
+            const k = Math.log(uPrime) / Math.log(0.5)
+            newCurvature = (k - 1) / 3
+          } else {
+            const k = Math.log(1 - uPrime) / Math.log(0.5)
+            newCurvature = -(k - 1) / 3
+          }
+          newCurvature = Math.max(
+            MIN_CURVATURE,
+            Math.min(MAX_CURVATURE, newCurvature),
+          )
+          if (newCurvature === (a.curvature ?? 0)) return
+          const next = points.slice()
+          next[d.index] = { ...points[d.index], curvature: newCurvature }
+          onPointsChange(next)
+        }
+        const onMidPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+          if (!midDragRef.current) return
+          e.stopPropagation()
+          try {
+            e.currentTarget.releasePointerCapture(e.pointerId)
+          } catch {
+            /* capture may already be released — ignore */
+          }
+          midDragRef.current = null
+          endEdit()
+        }
+        return (
+          <div
+            key={`mid-${h.index}`}
+            onPointerDown={onMidPointerDown}
+            onPointerMove={onMidPointerMove}
+            onPointerUp={onMidPointerUp}
+            onPointerCancel={onMidPointerUp}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              resetCurvature()
+            }}
+            title={`curve ${h.curvature >= 0 ? '+' : ''}${h.curvature.toFixed(2)} — drag or scroll to bend · right-click to straighten`}
+            className="absolute -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full bg-white/35 ring-1 ring-white/20 hover:bg-white/70 active:bg-white"
+            style={{
+              left: h.x,
+              top: h.y,
+              width: 6,
+              height: 6,
+              touchAction: 'none',
+            }}
+          />
+        )
+      })}
+      {/* Static "speed" label on the left so the lane is identifiable
+          even before the user adds any points. Click-through so the
+          underlying "add a point" gesture still fires. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1.5 top-0.5 font-mono text-[9px] text-neutral-500"
+      >
+        speed
+      </div>
+      {/* Y-axis bounds — show the current visible range so the user
+          knows what wheel-zoom has set. Right-aligned so it doesn't
+          fight with the "speed" label. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute right-1.5 top-0.5 font-mono text-[9px] text-neutral-500"
+      >
+        {topSpeed.toFixed(2)}×
+      </div>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute bottom-0.5 right-1.5 font-mono text-[9px] text-neutral-500"
+      >
+        {botSpeed.toFixed(2)}×
+      </div>
+    </div>
+  )
+}
+
 /**
  * Scrollbar-thumb–style trim handle. A short rounded vertical pill
  * inset slightly from the clip edge, centred vertically and shorter
@@ -720,7 +1280,11 @@ export function Timeline() {
   const updateSettings = useStore((s) => s.updateSettings)
   const beginEdit = useStore((s) => s.beginSettingsEdit)
   const endEdit = useStore((s) => s.endSettingsEdit)
-  const currentTime = useCurrentTime()
+  // Cursor position on the editor's natural-MIDI-time x-axis. NOT
+  // TL_audio — the cursor sits at the MIDI position the audio is
+  // currently playing (which advances at the speed-curve rate),
+  // while the SeekBar's elapsed-time readout uses the TL_audio hook.
+  const currentTime = useCurrentDisplayTime()
   const midiEnabled = useStore((s) => s.settings.midiEnabled)
   const midiVolume = useStore((s) => s.settings.midiVolume)
   const audioVolume = useStore((s) => s.settings.userAudioVolume)
@@ -769,10 +1333,30 @@ export function Timeline() {
   )
   const midiTrimEndSec = midiTrimEndSecRaw ?? songDuration
   const audioTrimEndSec = userAudioTrimEndSecRaw ?? audioDuration
+  // Speed automation — empty array means constant 1.0. The compiled
+  // map is memoised against the breakpoint array reference so a
+  // zustand-stable points list doesn't reshape the map every render.
+  const laneScale = useStore((s) => s.settings.timelineLaneScale)
+  // Scaled lane heights — clip rows grow proportionally when the
+  // user drags the editor's resize handle. Ruler / minimap / gap
+  // stay fixed so the chrome doesn't bloat alongside the content.
+  const midiLaneH = LANE_HEIGHT_MIDI * laneScale
+  const audioLaneH = LANE_HEIGHT_AUDIO * laneScale
+  const speedLaneH = LANE_HEIGHT_SPEED * laneScale
+  const speedPoints = useStore((s) => s.settings.midiSpeedAutomation)
+  const speedYRangeLog2 = useStore(
+    (s) => s.settings.midiSpeedAutomationYRangeLog2,
+  )
+  const speedYCenterLog2 = useStore(
+    (s) => s.settings.midiSpeedAutomationYCenterLog2,
+  )
+  const speedMap = useMemo(() => buildSpeedMap(speedPoints), [speedPoints])
   // Visible window endpoints — collapse to the trimmed range so the
-  // timeline reflects what will actually play / be exported. Note the
-  // base scale is still anchored to natural durations (see
-  // `baseDuration` below) so trimming doesn't rescale the timeline.
+  // timeline reflects what will actually play / be exported. The
+  // x-axis stays in NATURAL-MIDI-time (no speed-curve stretching);
+  // speed automation only changes when audio fires, not where notes
+  // appear on the editor's timeline. This keeps editing operations
+  // (drag, click, etc.) predictable when curves are aggressive.
   const audioEnd = audioDuration > 0 ? offsetSec + audioTrimEndSec : 0
   const midiEnd = songDuration > 0 ? midiTrimEndSec + midiOffsetSec : 0
   const totalDuration = Math.max(0.001, midiEnd, audioEnd)
@@ -803,6 +1387,9 @@ export function Timeline() {
   // timeline (`totalDuration`, which includes offsets) is still used
   // for scroll extents below, so the user can pan to see clips that
   // have been pushed past the original end.
+  // Auto-fit anchored to the longest natural track. Speed automation
+  // doesn't affect the editor's x-scale; stretching the timeline on
+  // every curve edit makes coarse moves unwieldy.
   const baseDuration = Math.max(0.001, songDuration, audioDuration)
   const fitPxPerSec = areaWidth / baseDuration
   const pxPerSec = fitPxPerSec * zoom
@@ -944,13 +1531,17 @@ export function Timeline() {
     const r = el.getBoundingClientRect()
     return (clientX - r.left) / r.width
   }
-  const seekToTime = (t: number) => {
-    // Clamp at the timeline's right edge — which now includes the MIDI
-    // offset and any audio tail past the MIDI — so users can scrub
-    // through the entire visible window.
-    const clamped = Math.max(0, Math.min(totalDuration, t))
-    audioEngine.seek(clamped)
-    useStore.getState().setCurrentTime(clamped)
+  const seekToTime = (displayTime: number) => {
+    // The ruler / minimap / progress slider all operate in the
+    // editor's natural-MIDI-time + offset coords (display-time);
+    // the engine's seek API expects TL_audio. Map through the speed
+    // curve so a click on a TL_audio ruler tick actually seeks to
+    // the elapsed-time that tick represents.
+    const clamped = Math.max(0, Math.min(totalDuration, displayTime))
+    const tlAudio =
+      midiOffsetSec + midiToTimeline(speedMap, clamped - midiOffsetSec)
+    audioEngine.seek(tlAudio)
+    useStore.getState().setCurrentTime(tlAudio)
   }
   const seekVisibleWindow = (clientX: number, el: HTMLElement) => {
     seekToTime(clampedScroll + seekFraction(clientX, el) * viewDuration)
@@ -1175,18 +1766,23 @@ export function Timeline() {
     const d = midiTrimDragRef.current
     if (!d || !song) return
     e.stopPropagation()
+    // Pointer delta is timeline-pixels → timeline-seconds (and since
+    // the timeline x-axis is natural MIDI-time, the delta IS the
+    // MIDI-time delta — no speed-map conversion needed).
     const dt = pxPerSec > 0 ? (e.clientX - d.startX) / pxPerSec : 0
     if (d.side === 'left') {
       const max = d.startTrimEnd - MIN_CLIP_DURATION
-      const next = Math.max(0, Math.min(max, d.startTrimStart + dt))
-      if (next !== midiTrimStartSec) updateSettings({ midiTrimStartSec: next })
+      const clamped = Math.max(0, Math.min(max, d.startTrimStart + dt))
+      if (clamped !== midiTrimStartSec) {
+        updateSettings({ midiTrimStartSec: clamped })
+      }
     } else {
       const min = d.startTrimStart + MIN_CLIP_DURATION
-      const next = Math.max(min, Math.min(songDuration, d.startTrimEnd + dt))
+      const clamped = Math.max(min, Math.min(songDuration, d.startTrimEnd + dt))
       // Collapse "trimmed exactly to natural end" back to null so the
       // value stays meaningful if the underlying song's duration
       // changes later (live-edited note past the previous end, etc.).
-      const stored = next >= songDuration - 0.001 ? null : next
+      const stored = clamped >= songDuration - 0.001 ? null : clamped
       if (stored !== midiTrimEndSecRaw) {
         updateSettings({ midiTrimEndSec: stored })
       }
@@ -1277,10 +1873,10 @@ export function Timeline() {
     if (!drag || !song) return
     const dx = e.clientX - drag.startX
     const dt = pxPerSec > 0 ? dx / pxPerSec : 0
-    // The clip's visible left edge sits at `offset + trimStart`; clamp
-    // so it can reach 0 on the timeline (i.e. offset ≥ -trimStart),
-    // not 0 minus the trim — the trimmed head represents removed
-    // content, not invisible padding.
+    // The clip's visible left edge sits at `offset + trimStart` on
+    // the natural-duration timeline; clamp so it can reach 0. No
+    // speed-map conversion needed since the editor's x-axis is in
+    // natural MIDI-time.
     const minOffset = -midiTrimStartSec
     const next = Math.max(minOffset, drag.startOffset + dt)
     if (next !== midiOffsetSec) updateSettings({ midiOffsetSec: next })
@@ -1321,20 +1917,23 @@ export function Timeline() {
   const midiVisEnd = Math.min(clampedScroll + viewDuration, midiClipEnd)
   const midiClipLeft = (midiVisStart - clampedScroll) * pxPerSec
   const midiClipWidth = Math.max(0, (midiVisEnd - midiVisStart) * pxPerSec)
-  // Notes are stored in MIDI-time; the canvas's "time at x=0" is the
-  // visible-window start expressed in MIDI-time so existing positioning
-  // math `(n.time - startTimeSec) * pxPerSec` lands on screen-x. This
-  // uses `midiOffsetSec` (NOT the trimmed clip start) so a note's
-  // natural MIDI-time still maps to the right screen-x — trim only
-  // shrinks the canvas viewport, it doesn't shift content.
+  // Canvas's "time at x = 0" — in TIMELINE coordinates relative to
+  // the MIDI clip's natural t=0 (offset removed). The canvas's note
+  // drawing maps each note's MIDI-time through `speedMap` itself, so
+  // we hand it the timeline origin and let it convert per-note.
   const midiStartInSong = Math.max(0, midiVisStart - midiOffsetSec)
+  // Speed automation lane lives directly under the MIDI lane and
+  // only appears when there's a MIDI to automate. Sits inside the
+  // playhead-spanning section so the playhead line covers it too.
+  const showSpeedLane = !!song
   const totalRowHeight =
     MINIMAP_HEIGHT +
     ROW_GAP +
     RULER_HEIGHT +
     ROW_GAP +
-    LANE_HEIGHT_MIDI +
-    (showAudioLane ? ROW_GAP + LANE_HEIGHT_AUDIO : 0)
+    midiLaneH +
+    (showSpeedLane ? ROW_GAP + speedLaneH : 0) +
+    (showAudioLane ? ROW_GAP + audioLaneH : 0)
 
   const onToggleMidiMute = () => {
     beginEdit()
@@ -1390,6 +1989,8 @@ export function Timeline() {
                 height={RULER_HEIGHT}
                 startTimeSec={clampedScroll}
                 pxPerSec={pxPerSec}
+                speedMap={speedMap}
+                midiOffsetSec={midiOffsetSec}
               />
             )}
             {/* Fit / reset-zoom affordance — visible when zoomed in
@@ -1422,7 +2023,7 @@ export function Timeline() {
               opens the lane context menu (mute / volume / reset). */}
           <div
             onContextMenu={(e) => openMenuAt('midi', e)}
-            style={{ height: LANE_HEIGHT_MIDI }}
+            style={{ height: midiLaneH }}
             className="group relative overflow-hidden rounded bg-neutral-900/40"
           >
             {song && areaWidth > 0 && midiClipWidth > 0 && (
@@ -1435,7 +2036,7 @@ export function Timeline() {
                 style={{
                   left: midiClipLeft,
                   width: midiClipWidth,
-                  height: LANE_HEIGHT_MIDI,
+                  height: midiLaneH,
                   touchAction: 'none',
                   background:
                     midiOffsetSec > 0
@@ -1447,14 +2048,14 @@ export function Timeline() {
                 <MidiPreviewCanvas
                   notes={song.notes}
                   width={midiClipWidth}
-                  height={LANE_HEIGHT_MIDI}
+                  height={midiLaneH}
                   pxPerSec={pxPerSec}
                   startTimeSec={midiStartInSong}
                   color={noteColor}
                 />
                 <TrimHandle
                   side="left"
-                  laneHeight={LANE_HEIGHT_MIDI}
+                  laneHeight={midiLaneH}
                   ariaLabel="Trim MIDI head"
                   onPointerDown={onMidiTrimPointerDown('left')}
                   onPointerMove={onMidiTrimPointerMove}
@@ -1462,7 +2063,7 @@ export function Timeline() {
                 />
                 <TrimHandle
                   side="right"
-                  laneHeight={LANE_HEIGHT_MIDI}
+                  laneHeight={midiLaneH}
                   ariaLabel="Trim MIDI tail"
                   onPointerDown={onMidiTrimPointerDown('right')}
                   onPointerMove={onMidiTrimPointerMove}
@@ -1482,13 +2083,38 @@ export function Timeline() {
             )}
           </div>
 
+          {/* Speed automation lane — only meaningful with a MIDI
+              loaded. Sits between the MIDI clip and the audio clip
+              so the user sees the curve directly under the notes it
+              affects. */}
+          {showSpeedLane && (
+            <SpeedAutomationLane
+              points={speedPoints}
+              speedMap={speedMap}
+              areaWidth={areaWidth}
+              laneHeight={speedLaneH}
+              pxPerSec={pxPerSec}
+              clampedScroll={clampedScroll}
+              viewDuration={viewDuration}
+              midiOffsetSec={midiOffsetSec}
+              songDuration={songDuration}
+              yRangeLog2={speedYRangeLog2}
+              yCenterLog2={speedYCenterLog2}
+              onPointsChange={(next) =>
+                updateSettings({ midiSpeedAutomation: next })
+              }
+              beginEdit={beginEdit}
+              endEdit={endEdit}
+            />
+          )}
+
           {/* Audio lane — waveform clip the user can drag. Right-click
               opens the lane context menu. */}
           {showAudioLane && (
             <div
               onContextMenu={(e) => openMenuAt('audio', e)}
               className="group relative overflow-hidden rounded bg-neutral-900/40"
-              style={{ height: LANE_HEIGHT_AUDIO }}
+              style={{ height: audioLaneH }}
             >
               {peaks && areaWidth > 0 && audioClipWidth > 0 && (
                 <div
@@ -1502,7 +2128,7 @@ export function Timeline() {
                   style={{
                     left: audioClipLeft,
                     width: audioClipWidth,
-                    height: LANE_HEIGHT_AUDIO,
+                    height: audioLaneH,
                     touchAction: 'none',
                   }}
                   title={`Drag to sync — offset ${offsetSec.toFixed(2)}s`}
@@ -1510,14 +2136,14 @@ export function Timeline() {
                   <WaveformCanvas
                     peaks={peaks}
                     width={audioClipWidth}
-                    height={LANE_HEIGHT_AUDIO}
+                    height={audioLaneH}
                     pxPerSec={pxPerSec}
                     startInBufferSec={audioStartInBuffer}
                     color="rgba(125, 211, 252, 0.85)"
                   />
                   <TrimHandle
                     side="left"
-                    laneHeight={LANE_HEIGHT_AUDIO}
+                    laneHeight={audioLaneH}
                     ariaLabel="Trim audio head"
                     onPointerDown={onAudioTrimPointerDown('left')}
                     onPointerMove={onAudioTrimPointerMove}
@@ -1525,7 +2151,7 @@ export function Timeline() {
                   />
                   <TrimHandle
                     side="right"
-                    laneHeight={LANE_HEIGHT_AUDIO}
+                    laneHeight={audioLaneH}
                     ariaLabel="Trim audio tail"
                     onPointerDown={onAudioTrimPointerDown('right')}
                     onPointerMove={onAudioTrimPointerMove}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Button,
   Menu,
@@ -180,6 +180,67 @@ function EmptyState() {
  * lanes here are the "editing" surface and warrant a dedicated
  * section.
  */
+/**
+ * Resize handle pinned to the top edge of the editor. Drag UP to
+ * grow the lane heights (`settings.timelineLaneScale`); the minimum
+ * is the natural lane heights, so the user can't shrink past the
+ * default. Dragging is anchored to the pointer's wall-clock Y
+ * delta, divided by the combined natural height of the three lanes
+ * — that way one pixel of drag translates to one pixel of total
+ * editor growth, giving a "the handle follows my cursor" feel.
+ */
+function TimelineResizeHandle() {
+  const laneScale = useStore((s) => s.settings.timelineLaneScale)
+  const updateSettings = useStore((s) => s.updateSettings)
+  const dragRef = useRef<{ startY: number; startScale: number } | null>(null)
+  // Natural total height of all three lanes (MIDI + audio + speed)
+  // at scale=1. Drag pixel ↔ scale change uses this so the cursor
+  // tracks the visual growth 1:1.
+  const BASE_LANE_TOTAL = 56 + 48 + 32
+  const MAX_SCALE = 4
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    dragRef.current = { startY: e.clientY, startScale: laneScale }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    e.stopPropagation()
+    const dy = e.clientY - d.startY // +ve = downward = shrink
+    const nextScale = Math.max(
+      1,
+      Math.min(MAX_SCALE, d.startScale - dy / BASE_LANE_TOTAL),
+    )
+    if (nextScale !== laneScale) {
+      updateSettings({ timelineLaneScale: nextScale })
+    }
+  }
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    e.stopPropagation()
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+    dragRef.current = null
+  }
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      title="Drag to resize lanes"
+      aria-label="Resize timeline editor"
+      style={{ touchAction: 'none' }}
+      className="absolute inset-x-0 top-0 z-10 h-1 cursor-ns-resize bg-transparent transition-colors hover:bg-sky-500/40"
+    />
+  )
+}
+
 export function TimelineEditor() {
   const song = useStore((s) => s.song)
   const open = useStore((s) => s.settings.timelineEditorOpen)
@@ -197,7 +258,12 @@ export function TimelineEditor() {
   }, [audioLoaded])
   const toggle = () => updateSettings({ timelineEditorOpen: !open })
   return (
-    <div className="flex-shrink-0 bg-neutral-950">
+    <div className="relative flex-shrink-0 bg-neutral-950">
+      {/* Resize handle — top edge, only meaningful while the editor
+          is expanded AND a MIDI is loaded (no song = nothing to
+          resize). Sits above the header strip via z-index so the
+          drag works even when the cursor crosses the header. */}
+      {open && song && <TimelineResizeHandle />}
       {/* Header strip — collapse/expand toggle spans the full row
           with its chevron + label centred so the open/close
           affordance reads at a glance, especially when the section
