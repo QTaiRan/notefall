@@ -330,6 +330,13 @@ export type Settings = {
   // pan or zoom) — those gestures clearly imply "show me something
   // other than the playhead".
   followPlayhead: boolean
+  // Piano sample set. `'splendid'` = SplendidGrandPiano (~60 MB,
+  // 4 vel layers, default). `'salamander'` = Salamander Grand Piano
+  // V3 close-mic (~77 MB OGG, 16 vel layers). HQ but heavier; opt-
+  // in. The first switch triggers a one-time download into Cache
+  // Storage (see `src/audio/sampleCache.ts`); subsequent loads are
+  // instant.
+  pianoModel: 'splendid' | 'salamander'
 }
 
 export const defaultSettings: Settings = {
@@ -459,6 +466,7 @@ export const defaultSettings: Settings = {
   timelineAudioLaneRatio: 1,
   previewHighFps: false,
   followPlayhead: true,
+  pianoModel: 'splendid',
 }
 
 /**

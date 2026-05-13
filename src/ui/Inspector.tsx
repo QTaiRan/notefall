@@ -3,6 +3,8 @@ import { ColorRow, SectionTitle, SelectRow, SliderRow, SwitchRow, VerticalSlider
 import { Button, FileTrigger, OverlayArrow, Tooltip, TooltipTrigger } from 'react-aria-components'
 import { useCustomTexture } from '../notes/customTexture'
 import { CAMERA_LIMITS } from '../scene/cameraLimits'
+import { audioEngine } from '../audio/engine'
+import { ensureSamplerLoaded } from '../audio/preview'
 
 const EQ_LABELS = ['80', '250', '800', '2.5k', '6k', '12k']
 
@@ -405,6 +407,33 @@ export function Inspector() {
         <SliderRow label="Glow Decay (s)" value={s.keyGlowDecay} min={0.05} max={2} step={0.01} onChange={(v) => update({ keyGlowDecay: v })} defaultValue={def.keyGlowDecay} />
 
         <SectionTitle>Audio</SectionTitle>
+        <SwitchRow
+          label="HQ Piano (Salamander)"
+          value={s.pianoModel === 'salamander'}
+          onChange={(v) => {
+            const next = v ? 'salamander' : 'splendid'
+            update({ pianoModel: next })
+            audioEngine.setPianoModel(next)
+            // Kick the swap immediately ONLY when a sampler is already
+            // running under the old model — i.e. the user has been
+            // playing and expects the change to take effect now. When
+            // nothing is initialised, leave the load lazy so the
+            // ~500 MB Salamander DL doesn't trigger from a passive
+            // settings flip; it'll happen on the next user gesture
+            // that actually needs sound.
+            if (audioEngine.hasInstrument() && !audioEngine.isReady()) {
+              void (async () => {
+                await ensureSamplerLoaded()
+                // If the engine's fallback path kicked in (e.g.
+                // Salamander 404'd), reconcile the store so the
+                // toggle reflects what actually loaded.
+                const actual = audioEngine.getPianoModel()
+                if (actual !== next) update({ pianoModel: actual })
+              })()
+            }
+          }}
+          defaultValue={def.pianoModel === 'salamander'}
+        />
         <SliderRow label="Release (s)" value={s.releaseTime} min={0.01} max={1.5} step={0.01} onChange={(v) => update({ releaseTime: v })} defaultValue={def.releaseTime} />
         <SliderRow label="Detune (¢)" value={s.samplerDetune} min={-100} max={100} step={1} onChange={(v) => update({ samplerDetune: v })} defaultValue={def.samplerDetune} />
         <div className="px-2 pt-1 text-[10px] text-neutral-400">EQ (Hz)</div>

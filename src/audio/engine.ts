@@ -8,7 +8,12 @@ import {
   type SpeedMap,
   type SpeedPoint,
 } from '../midi/speedMap'
-import { createPiano, type PianoInstrument, type LoadProgress } from './sampler'
+import {
+  createPiano,
+  type PianoInstrument,
+  type LoadProgress,
+  type PianoModel,
+} from './sampler'
 import { now } from './clock'
 
 type ActiveNote = {
@@ -203,12 +208,53 @@ export class AudioEngine {
   // coordinate-mapping conventions.
   private speedMap: SpeedMap = EMPTY_SPEED_MAP
 
+  // Last sampler model successfully loaded. Used to detect a model
+  // change request and trigger a hot-swap (see `setPianoModel`).
+  private currentModel: PianoModel = 'splendid'
+  private pendingModel: PianoModel = 'splendid'
+
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
-    if (this.piano) return
+    if (this.piano && this.currentModel === this.pendingModel) return
     if (this.initPromise) return this.initPromise
+    const targetModel = this.pendingModel
     this.initPromise = (async () => {
       try {
-        this.piano = await createPiano(undefined, onProgress)
+        let next: PianoInstrument
+        let loadedModel = targetModel
+        try {
+          next = await createPiano(undefined, onProgress, {
+            model: targetModel,
+          })
+        } catch (err) {
+          // Salamander load failed (most likely 404 — samples not
+          // deployed yet, or wrong VITE_SAMPLES_BASE_URL). Fall back
+          // to the bundled SplendidGrandPiano so the app keeps
+          // working, and revert the requested model so the toggle
+          // reflects reality.
+          if (targetModel !== 'splendid') {
+            console.warn(
+              '[audio] HQ piano load failed — falling back to SplendidGrandPiano:',
+              err,
+            )
+            this.pendingModel = 'splendid'
+            loadedModel = 'splendid'
+            next = await createPiano(undefined, onProgress, {
+              model: 'splendid',
+            })
+          } else {
+            throw err
+          }
+        }
+        // Swap atomically — release old voices and tear down the prior
+        // graph *after* the new sampler is ready so there's no audible
+        // silence gap during a hot model switch.
+        const old = this.piano
+        this.piano = next
+        this.currentModel = loadedModel
+        if (old) {
+          old.stopAll()
+          old.dispose()
+        }
         this.piano.setVolume(this.effectiveSamplerVolume())
         this.piano.setReverbSize(this.reverbSize)
         this.piano.setReverbDecayTime(this.reverbDecayTime)
@@ -229,7 +275,36 @@ export class AudioEngine {
     return this.initPromise
   }
 
+  /**
+   * Request a model change. If the sampler hasn't been initialised yet
+   * the new model just becomes the target for the next `init()` call.
+   * If a sampler is already loaded under a different model, the next
+   * `init(...)` call will hot-swap — callers should drive that path
+   * from a user gesture so the load progress can be surfaced.
+   */
+  setPianoModel(model: PianoModel): void {
+    this.pendingModel = model
+  }
+
+  /** The model the next `init()` call will load (or has loaded). */
+  getPianoModel(): PianoModel {
+    return this.pendingModel
+  }
+
+  /** True when the active sampler matches `pendingModel`. UI uses this
+   *  to show "reload required" affordances after a setting flip. */
+  isModelSynced(): boolean {
+    return this.piano !== null && this.currentModel === this.pendingModel
+  }
+
   isReady(): boolean {
+    return this.piano !== null && this.currentModel === this.pendingModel
+  }
+
+  /** True if a sampler has been loaded at all (regardless of whether
+   *  it matches the requested model). Used by the HQ-Piano toggle to
+   *  decide whether to eagerly trigger a hot-swap. */
+  hasInstrument(): boolean {
     return this.piano !== null
   }
 

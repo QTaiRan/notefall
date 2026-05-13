@@ -1,0 +1,14 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://notefall.app",
+      "https://www.notefall.app",
+      "http://localhost:5173",
+      "http://localhost:4173"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range", "if-none-match", "if-modified-since"],
+    "ExposeHeaders": ["content-length", "content-range", "etag", "last-modified"],
+    "MaxAgeSeconds": 3600
+  }
+]

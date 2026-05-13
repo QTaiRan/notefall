@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "fetch-salamander": "bash scripts/fetch-salamander.sh",
+    "prepare-salamander": "node scripts/prepare-salamander.mjs",
+    "upload-r2": "bash scripts/upload-r2.sh"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",

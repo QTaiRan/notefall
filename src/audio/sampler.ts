@@ -4,10 +4,16 @@ import {
   Scheduler,
   pianoToSmplrJson,
   audioBufferToWav,
+  type SmplrJson,
   type StopFn,
   type Storage,
   type StorageResponse,
 } from 'smplr'
+import {
+  buildSalamanderDescriptor,
+  SALAMANDER_SAMPLE_COUNT,
+} from './salamanderDescriptor'
+import { createSampleStorage } from './sampleCache'
 
 /**
  * Sample location for smplr's `SplendidGrandPiano` preset (Yamaha CFX,
@@ -22,6 +28,38 @@ import {
  */
 const SPLENDID_GRAND_PIANO_BASE_URL =
   'https://smpldsnds.github.io/sfzinstruments-splendid-grand-piano/samples'
+
+/**
+ * Salamander Grand Piano V3 sample base URL. Resolves in this order:
+ *   1. `VITE_SAMPLES_BASE_URL` env (set at build time per environment)
+ *   2. `/samples/salamander-v3-close` (dev convention — drop OGGs into
+ *      `public/samples/salamander-v3-close/`)
+ *
+ * Override via env when shipping to R2 / a CDN; the dev fallback lets
+ * the feature work locally without touching deployment config.
+ */
+const SALAMANDER_BASE_URL =
+  (import.meta.env.VITE_SAMPLES_BASE_URL as string | undefined)?.replace(/\/$/, '') ??
+  '/samples/salamander-v3-close'
+
+/**
+ * Sample-model identifier. Maps to a sampler-construction strategy in
+ * `createPiano`. Persisted via `Settings.pianoModel` so a re-opened
+ * project loads the same instrument.
+ */
+export type PianoModel = 'splendid' | 'salamander'
+
+/** Estimated sample-file count per model — used by the UI for the
+ *  initial-download progress bar denominator. */
+export function expectedSampleCount(model: PianoModel): number {
+  // SplendidGrandPiano publishes ~48 files (12 keys × 4 vel layers).
+  // The exact denominator doesn't matter for UX — smplr reports the
+  // real total once loading begins; this is just for early-init
+  // sizing before the first onLoadProgress fires.
+  if (model === 'salamander') return SALAMANDER_SAMPLE_COUNT
+  return 48
+}
+
 import * as Tone from 'tone'
 
 export type LoadProgress = { loaded: number; total: number }
@@ -197,6 +235,14 @@ export type CreatePianoOptions = {
    * The realtime engine leaves this undefined and gets the default.
    */
   scheduler?: Scheduler
+  /**
+   * Sample-model selector. `'splendid'` keeps the legacy ~60 MB
+   * SplendidGrandPiano set (4 vel layers). `'salamander'` loads the
+   * Salamander Grand Piano V3 close-mic set (~77 MB OGG, 16 vel
+   * layers, 30 sampled roots) — see `salamanderDescriptor.ts` for
+   * the descriptor and `sampleCache.ts` for the persistence layer.
+   */
+  model?: PianoModel
 }
 
 export async function createPiano(
@@ -277,25 +323,35 @@ export async function createPiano(
   // BaseAudioContext APIs (AudioBufferSourceNode, GainNode). The cast lets
   // us share createPiano between the realtime engine and the offline
   // exporter without duplicating the effect-chain wiring.
-  // SplendidGrandPiano's typed config narrows away `scheduler` (it's only
-  // surfaced on the underlying SmplrOptions), but the runtime forwards
-  // any extra options to the inner Smplr instance — verified against
-  // smplr/dist/index.js. Cast to slip the override past the narrower
-  // typed surface. `as unknown as` keeps TS from reasoning about the
-  // intermediate shape.
-  // Same JSON config that `SplendidGrandPiano` would synthesise — we
-  // replicate it here so we can construct the inner Smplr ourselves and
-  // pass through `scheduler` (which the wrapper drops). The Smplr class
-  // is typed against `AudioContext`; the cast is safe because Smplr only
-  // calls BaseAudioContext APIs internally.
-  const json = pianoToSmplrJson({
-    baseUrl: SPLENDID_GRAND_PIANO_BASE_URL,
-    detune: 0,
-    decayTime: 0.5,
-  })
+  //
+  // Model-specific construction:
+  // - 'splendid' uses smplr's bundled pianoToSmplrJson helper +
+  //   FadeInStorage (the 4-vel-layer set has non-zero first samples
+  //   that click without a tiny fade).
+  // - 'salamander' uses our handwritten descriptor (16 vel layers, 30
+  //   sampled roots) + persistent Cache Storage so a fresh user only
+  //   waits for the ~500 MB download once, ever.
+  const model: PianoModel = options?.model ?? 'splendid'
+  let json: SmplrJson
+  let storage: Storage
+  if (model === 'salamander') {
+    json = buildSalamanderDescriptor(SALAMANDER_BASE_URL)
+    // No FadeInStorage — Salamander samples are pro-recorded with a
+    // zero-amplitude head, so the click problem the splendid set has
+    // doesn't apply. Skipping the decode→fade→re-encode round-trip
+    // also saves ~500 MB of CPU on first load.
+    storage = createSampleStorage()
+  } else {
+    json = pianoToSmplrJson({
+      baseUrl: SPLENDID_GRAND_PIANO_BASE_URL,
+      detune: 0,
+      decayTime: 0.5,
+    })
+    storage = new FadeInStorage(context)
+  }
   const piano = new Smplr(context as AudioContext, json, {
     destination: masterGain,
-    storage: new FadeInStorage(context),
+    storage,
     velocity: 100,
     scheduler: options?.scheduler,
     onLoadProgress: (p) => onProgress?.({ loaded: p.loaded, total: p.total }),
