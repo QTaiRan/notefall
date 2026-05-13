@@ -117,7 +117,7 @@ const openExternal = (url: string) => {
 
 /**
  * Trigger the OS file picker programmatically. Used by the File menu's
- * "Import Audio…" item — `react-aria-components`' `FileTrigger`
+ * "Open Audio…" item — `react-aria-components`' `FileTrigger`
  * expects to wrap a Button and doesn't nest cleanly inside a MenuItem,
  * so we drop down to a vanilla input element and resolve with the
  * chosen file. Resolves with `null` when the user dismisses the dialog
@@ -702,11 +702,11 @@ export function Toolbar() {
               <Separator className="my-1 h-px bg-neutral-800" />
               <MenuItem
                 onAction={() => void onImportAudio()}
-                textValue="Import Audio"
+                textValue="Open Audio"
                 isDisabled={!song}
                 className={menuItemClass}
               >
-                <span>Import Audio…</span>
+                <span>Open Audio…</span>
               </MenuItem>
               <Separator className="my-1 h-px bg-neutral-800" />
               <MenuItem
@@ -922,7 +922,7 @@ export function Toolbar() {
                     No recordings yet. Press the Record button to capture your input.
                   </div>
                 ) : (
-                  <div className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+                  <div className="scroll-thin flex max-h-80 flex-col gap-1 overflow-y-auto">
                     {rec.recordings.map((r) => {
                       const isActive = r.id === activeRecordingId
                       const isPlayingThis = isActive && transport === 'playing'

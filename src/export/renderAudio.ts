@@ -162,6 +162,19 @@ export async function renderSongAudio(
     sampleRate,
   })
 
+  // Mirror the realtime engine's master × midi × enabled stacking so
+  // an export sounds the same as live playback. midiEnabled = false
+  // produces a silent sampler track (the user audio still mixes,
+  // matching the user's intent of "synced accompaniment, no synth").
+  const samplerGain = settings.midiEnabled
+    ? settings.volume * settings.midiVolume
+    : 0
+  // When the sampler track is muted (volume = 0) we skip loading the
+  // ~60 MB sample set AND scheduling notes entirely. The render
+  // collapses to "userAudio mix + silence" — orders of magnitude
+  // faster, and audibly identical to the muted render.
+  const renderSampler = samplerGain > 0
+
   // Bring the piano up against the offline context. Reuses the
   // realtime-engine's effect-chain wiring (master → 6-band EQ → split →
   // dry / pre-delay → reverb → wet) verbatim — same setters, same IR
@@ -178,48 +191,49 @@ export async function renderSongAudio(
   // synchronously, scheduling each AudioBufferSourceNode at the
   // correct absolute time via `source.start(time)` — sample-accurate
   // because Web Audio honours the absolute time even on offline ctx.
-  onProgress?.({ phase: 'loading', loaded: 0, total: 1 })
-  // Race against the abort signal so Cancel is responsive even during
-  // the ~60 MB sample fetch — without this, `await createPiano` blocks
-  // for the entire load before the next signal check fires.
-  const piano = await raceWithAbort(
-    createPiano(
-      ctx,
-      (p) => {
-        onProgress?.({ phase: 'loading', loaded: p.loaded, total: p.total })
-      },
-      {
-        scheduler: new Scheduler(ctx, { lookaheadMs: Number.POSITIVE_INFINITY }),
-      },
-    ),
-    signal,
-  )
+  let piano: Awaited<ReturnType<typeof createPiano>> | null = null
+  if (renderSampler) {
+    onProgress?.({ phase: 'loading', loaded: 0, total: 1 })
+    // Race against the abort signal so Cancel is responsive even during
+    // the ~60 MB sample fetch — without this, `await createPiano` blocks
+    // for the entire load before the next signal check fires.
+    piano = await raceWithAbort(
+      createPiano(
+        ctx,
+        (p) => {
+          onProgress?.({ phase: 'loading', loaded: p.loaded, total: p.total })
+        },
+        {
+          scheduler: new Scheduler(ctx, { lookaheadMs: Number.POSITIVE_INFINITY }),
+        },
+      ),
+      signal,
+    )
 
-  // Apply settings BEFORE scheduling any notes so the render pass sees
-  // them at currentTime=0. setTargetAtTime ramps complete in well under
-  // a millisecond at the given time constants, so notes scheduled at
-  // t=LOOKAHEAD already inherit the final values.
-  // Mirror the realtime engine's master × midi × enabled stacking so
-  // an export sounds the same as live playback. midiEnabled = false
-  // produces a silent sampler track (the user audio still mixes,
-  // matching the user's intent of "synced accompaniment, no synth").
-  const samplerGain = settings.midiEnabled
-    ? settings.volume * settings.midiVolume
-    : 0
-  piano.setVolume(samplerGain)
-  piano.setReverbDry(settings.reverbDry)
-  piano.setReverbWet(settings.reverbEnabled ? settings.reverbWet : 0)
-  piano.setReverbSize(settings.reverbSize)
-  piano.setReverbDecayTime(settings.reverbDecayTime)
-  piano.setReverbDecay(settings.reverbDecay)
-  piano.setReverbPreDelay(settings.reverbPreDelay)
-  piano.setReverbDamping(settings.reverbDamping)
-  piano.setReverbHiCut(settings.reverbHiCut)
-  piano.setReverbLowCut(settings.reverbLowCut)
-  piano.setReleaseTime(settings.releaseTime)
-  piano.setDetune(settings.samplerDetune)
-  for (let i = 0; i < settings.eqBands.length; i++) {
-    piano.setEqBand(i, settings.eqBands[i])
+    // Apply settings BEFORE scheduling any notes so the render pass sees
+    // them at currentTime=0. setTargetAtTime ramps complete in well under
+    // a millisecond at the given time constants, so notes scheduled at
+    // t=LOOKAHEAD already inherit the final values.
+    piano.setVolume(samplerGain)
+    piano.setReverbDry(settings.reverbDry)
+    piano.setReverbWet(settings.reverbEnabled ? settings.reverbWet : 0)
+    piano.setReverbSize(settings.reverbSize)
+    piano.setReverbDecayTime(settings.reverbDecayTime)
+    piano.setReverbDecay(settings.reverbDecay)
+    piano.setReverbPreDelay(settings.reverbPreDelay)
+    piano.setReverbDamping(settings.reverbDamping)
+    piano.setReverbHiCut(settings.reverbHiCut)
+    piano.setReverbLowCut(settings.reverbLowCut)
+    piano.setReleaseTime(settings.releaseTime)
+    piano.setDetune(settings.samplerDetune)
+    for (let i = 0; i < settings.eqBands.length; i++) {
+      piano.setEqBand(i, settings.eqBands[i])
+    }
+  } else {
+    // Emit a synthetic "loaded" pulse so progress UI doesn't sit on
+    // 0/1 — the modal's audio-fraction calculation expects to see
+    // the loading sub-phase complete.
+    onProgress?.({ phase: 'loading', loaded: 1, total: 1 })
   }
 
   // Pedal handling. Mirror the engine: when settings.pedalEnabled is off,
@@ -227,9 +241,10 @@ export async function renderSongAudio(
   // natural offTime). Pedal events are stored in MIDI-time, so the
   // ranges are still in MIDI-time and get shifted at the per-note
   // comparison site below.
-  const pedalRanges = settings.pedalEnabled
-    ? buildPedalRanges(song.pedals, totalDuration - midiOffset)
-    : []
+  const pedalRanges =
+    renderSampler && settings.pedalEnabled
+      ? buildPedalRanges(song.pedals, totalDuration - midiOffset)
+      : []
 
   // Schedule the user-provided accompaniment alongside the piano. Goes
   // through its own GainNode so the mix volume is independent of the
@@ -251,39 +266,41 @@ export async function renderSongAudio(
     src.start(startTime, audioTrimStart, audioTrimEnd - audioTrimStart)
   }
 
-  for (const n of song.notes) {
-    // Trim filter — match the engine's tick semantics so a rendered
-    // export sounds the same as live playback under the same trim.
-    if (n.time < midiTrimStart) continue
-    if (n.time >= midiTrimEnd) continue
-    const playedMidi = n.midi + settings.transpose
-    if (playedMidi < 0 || playedMidi > 127) continue
+  if (piano) {
+    for (const n of song.notes) {
+      // Trim filter — match the engine's tick semantics so a rendered
+      // export sounds the same as live playback under the same trim.
+      if (n.time < midiTrimStart) continue
+      if (n.time >= midiTrimEnd) continue
+      const playedMidi = n.midi + settings.transpose
+      if (playedMidi < 0 || playedMidi > 127) continue
 
-    const shaped = shapeVelocity(
-      n.velocity,
-      settings.velocityGamma,
-      settings.velocityFloor,
-      settings.velocityCap,
-    )
-    // n.time is MIDI-time; map through the speed curve and shift by
-    // `midiOffset` to land on the export timeline. Without
-    // automation `midiToTimeline` is the identity, so this collapses
-    // to the linear `n.time + midiOffset` of before.
-    const onTime = midiOffset + midiToTimeline(speedMap, n.time) + LOOKAHEAD
-    // Clamp the natural note-off to the trim end (MIDI-time), then
-    // optionally extend via pedal sustain (still MIDI-time), and
-    // finally map to timeline-time.
-    const naturalOff = Math.min(n.time + n.duration, midiTrimEnd)
-    const range = findRangeContaining(pedalRanges, naturalOff)
-    const offMidi = Math.min(range ? range.end : naturalOff, midiTrimEnd)
-    const actualOff = midiOffset + midiToTimeline(speedMap, offMidi)
+      const shaped = shapeVelocity(
+        n.velocity,
+        settings.velocityGamma,
+        settings.velocityFloor,
+        settings.velocityCap,
+      )
+      // n.time is MIDI-time; map through the speed curve and shift by
+      // `midiOffset` to land on the export timeline. Without
+      // automation `midiToTimeline` is the identity, so this collapses
+      // to the linear `n.time + midiOffset` of before.
+      const onTime = midiOffset + midiToTimeline(speedMap, n.time) + LOOKAHEAD
+      // Clamp the natural note-off to the trim end (MIDI-time), then
+      // optionally extend via pedal sustain (still MIDI-time), and
+      // finally map to timeline-time.
+      const naturalOff = Math.min(n.time + n.duration, midiTrimEnd)
+      const range = findRangeContaining(pedalRanges, naturalOff)
+      const offMidi = Math.min(range ? range.end : naturalOff, midiTrimEnd)
+      const actualOff = midiOffset + midiToTimeline(speedMap, offMidi)
 
-    const stopFn = piano.start(playedMidi, shaped, onTime, `s${n.id}`)
-    stopFn(actualOff + STOP_BUFFER)
+      const stopFn = piano.start(playedMidi, shaped, onTime, `s${n.id}`)
+      stopFn(actualOff + STOP_BUFFER)
+    }
   }
 
   if (signal?.aborted) {
-    piano.dispose()
+    piano?.dispose()
     throw new AudioRenderAborted()
   }
 
@@ -318,7 +335,7 @@ export async function renderSongAudio(
     // seconds after Cancel, leaving the page unresponsive even
     // through a reload (the browser's reload waits for the running
     // task to yield).
-    piano.dispose()
+    piano?.dispose()
     throw e
   } finally {
     window.clearInterval(pollHandle)
@@ -328,7 +345,7 @@ export async function renderSongAudio(
   // Belt-and-suspenders: if abort fired in the narrow window between
   // raceWithAbort resolving and now, still dispose + bail.
   if (signal?.aborted) {
-    piano.dispose()
+    piano?.dispose()
     throw new AudioRenderAborted()
   }
 
@@ -337,7 +354,7 @@ export async function renderSongAudio(
   // Free the smplr-internal AudioNodes once rendering is complete. The
   // OfflineAudioContext itself is single-use and will be GC'd once we
   // return.
-  piano.dispose()
+  piano?.dispose()
 
   return buffer
 }

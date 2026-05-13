@@ -181,29 +181,6 @@ function SliderContextMenu({
           <button type="button" onClick={handlePaste} className={itemClass}>
             <span>Paste</span>
           </button>
-          <Separator />
-          <button
-            type="button"
-            onClick={() => {
-              onChange(min)
-              onClose()
-            }}
-            className={itemClass}
-          >
-            <span>Set to Min</span>
-            <span className={hintClass}>{min}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onChange(max)
-              onClose()
-            }}
-            className={itemClass}
-          >
-            <span>Set to Max</span>
-            <span className={hintClass}>{max}</span>
-          </button>
           {defaultValue !== undefined && (
             <>
               <Separator />
