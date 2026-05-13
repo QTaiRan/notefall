@@ -122,9 +122,20 @@ export async function renderSongAudio(
   sampleRate: number,
   onProgress?: (p: AudioRenderProgress) => void,
   signal?: AbortSignal,
+  userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null,
 ): Promise<AudioBuffer> {
   if (signal?.aborted) throw new AudioRenderAborted()
-  const totalDuration = song.duration + TAIL_SECONDS
+  // Effective end is the later of the MIDI end and (when present) the
+  // user-provided accompaniment's tail, so the render captures the
+  // whole sync window even when the audio extends past the song. The
+  // MIDI is shifted by `midiOffsetSec` so its end on the export
+  // timeline is `song.duration + midiOffsetSec`.
+  const midiOffset = settings.midiOffsetSec
+  const audioEnd = userAudio
+    ? userAudio.offsetSec + userAudio.buffer.duration
+    : 0
+  const songEnd = Math.max(song.duration + midiOffset, audioEnd)
+  const totalDuration = songEnd + TAIL_SECONDS
   const length = Math.max(1, Math.ceil(totalDuration * sampleRate))
 
   const ctx = new OfflineAudioContext({
@@ -170,7 +181,14 @@ export async function renderSongAudio(
   // them at currentTime=0. setTargetAtTime ramps complete in well under
   // a millisecond at the given time constants, so notes scheduled at
   // t=LOOKAHEAD already inherit the final values.
-  piano.setVolume(settings.volume)
+  // Mirror the realtime engine's master × midi × enabled stacking so
+  // an export sounds the same as live playback. midiEnabled = false
+  // produces a silent sampler track (the user audio still mixes,
+  // matching the user's intent of "synced accompaniment, no synth").
+  const samplerGain = settings.midiEnabled
+    ? settings.volume * settings.midiVolume
+    : 0
+  piano.setVolume(samplerGain)
   piano.setReverbDry(settings.reverbDry)
   piano.setReverbWet(settings.reverbEnabled ? settings.reverbWet : 0)
   piano.setReverbSize(settings.reverbSize)
@@ -188,10 +206,28 @@ export async function renderSongAudio(
 
   // Pedal handling. Mirror the engine: when settings.pedalEnabled is off,
   // ignore the song's pedal track entirely (notes release at their
-  // natural offTime).
+  // natural offTime). Pedal events are stored in MIDI-time, so the
+  // ranges are still in MIDI-time and get shifted at the per-note
+  // comparison site below.
   const pedalRanges = settings.pedalEnabled
-    ? buildPedalRanges(song.pedals, totalDuration)
+    ? buildPedalRanges(song.pedals, totalDuration - midiOffset)
     : []
+
+  // Schedule the user-provided accompaniment alongside the piano. Goes
+  // through its own GainNode so the mix volume is independent of the
+  // sampler's. Negative offsets aren't supported in the MVP, so the
+  // start time is always ≥ 0; if the offset overshoots the rendered
+  // window the source simply never fires.
+  if (userAudio && userAudio.offsetSec < totalDuration) {
+    const src = ctx.createBufferSource()
+    src.buffer = userAudio.buffer
+    const gain = ctx.createGain()
+    // Master × per-track stacking so the export tracks live playback.
+    gain.gain.value = settings.volume * userAudio.volume
+    src.connect(gain)
+    gain.connect(ctx.destination)
+    src.start(Math.max(0, userAudio.offsetSec))
+  }
 
   for (const n of song.notes) {
     const playedMidi = n.midi + settings.transpose
@@ -203,10 +239,12 @@ export async function renderSongAudio(
       settings.velocityFloor,
       settings.velocityCap,
     )
-    const onTime = n.time + LOOKAHEAD
+    // n.time is MIDI-time; shift to timeline-time by the configured
+    // MIDI offset so the export matches the live render.
+    const onTime = n.time + midiOffset + LOOKAHEAD
     const naturalOff = n.time + n.duration
     const range = findRangeContaining(pedalRanges, naturalOff)
-    const actualOff = range ? range.end : naturalOff
+    const actualOff = (range ? range.end : naturalOff) + midiOffset
 
     const stopFn = piano.start(playedMidi, shaped, onTime, `s${n.id}`)
     stopFn(actualOff + STOP_BUFFER)

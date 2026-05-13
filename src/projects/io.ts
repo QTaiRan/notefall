@@ -48,9 +48,38 @@ function extFromImageMime(mime: string): string {
   }
 }
 
+/** MIME → conventional file extension for user audio. Keep in sync with
+ * `userAudio.ts`'s `guessAudioMimeFromName`. */
+function extFromAudioMime(mime: string): string {
+  switch (mime) {
+    case 'audio/mpeg':
+    case 'audio/mp3':
+      return '.mp3'
+    case 'audio/wav':
+    case 'audio/x-wav':
+    case 'audio/wave':
+      return '.wav'
+    case 'audio/ogg':
+      return '.ogg'
+    case 'audio/aac':
+    case 'audio/mp4':
+      return '.m4a'
+    case 'audio/flac':
+    case 'audio/x-flac':
+      return '.flac'
+    case 'audio/webm':
+      return '.webm'
+    default:
+      return '.bin'
+  }
+}
+
 export function pack(project: Project): Blob {
   const customTextureRef = project.customTexture
     ? `note-texture${extFromImageMime(project.customTexture.mime)}`
+    : null
+  const userAudioRef = project.userAudio
+    ? `user-audio${extFromAudioMime(project.userAudio.mime)}`
     : null
   const manifest: ProjectManifest = {
     appVersion: __APP_VERSION__,
@@ -67,6 +96,14 @@ export function pack(project: Project): Blob {
             fileName: project.customTexture.fileName,
           }
         : null,
+    userAudio:
+      project.userAudio && userAudioRef
+        ? {
+            ref: userAudioRef,
+            mime: project.userAudio.mime,
+            fileName: project.userAudio.fileName,
+          }
+        : null,
   }
   const files: Zippable = {
     'manifest.json': strToU8(JSON.stringify(manifest, null, 2)),
@@ -76,6 +113,9 @@ export function pack(project: Project): Blob {
   }
   if (project.customTexture && customTextureRef) {
     files[`assets/${customTextureRef}`] = new Uint8Array(project.customTexture.bytes)
+  }
+  if (project.userAudio && userAudioRef) {
+    files[`assets/${userAudioRef}`] = new Uint8Array(project.userAudio.bytes)
   }
   const zipped = zipSync(files)
   // Copy into a fresh ArrayBuffer so Blob's typing is satisfied regardless
@@ -141,6 +181,21 @@ export async function unpack(buf: ArrayBuffer): Promise<Project> {
     // user can re-pick an image via the Inspector.
   }
 
+  let userAudio: Project['userAudio'] = null
+  if (manifest.userAudio) {
+    const audioBytes = files[`assets/${manifest.userAudio.ref}`]
+    if (audioBytes) {
+      userAudio = {
+        bytes: detach(audioBytes),
+        mime: manifest.userAudio.mime,
+        fileName: manifest.userAudio.fileName,
+      }
+    }
+    // Same lenient policy as customTexture — a missing audio asset
+    // doesn't fail the whole project, the user can re-import via the
+    // timeline.
+  }
+
   return {
     name: manifest.name,
     createdAt: manifest.createdAt,
@@ -148,6 +203,7 @@ export async function unpack(buf: ArrayBuffer): Promise<Project> {
     settings: manifest.settings,
     songMidi,
     customTexture,
+    userAudio,
   }
 }
 

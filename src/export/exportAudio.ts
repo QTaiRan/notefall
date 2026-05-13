@@ -41,6 +41,7 @@ export async function exportSongToWav(
     fileName?: string
     onProgress?: (p: AudioRenderProgress) => void
     signal?: AbortSignal
+    userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null
   },
 ): Promise<AudioExportResult> {
   try {
@@ -50,6 +51,7 @@ export async function exportSongToWav(
       options?.sampleRate ?? DEFAULT_SAMPLE_RATE,
       options?.onProgress,
       options?.signal,
+      options?.userAudio ?? null,
     )
     if (options?.signal?.aborted) return { kind: 'cancelled' }
     const blob = audioBufferToWav(buffer)

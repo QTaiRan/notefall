@@ -91,6 +91,8 @@ export type Mp4ExportOptions = {
   videoBitrateKbps: number
   /** `null` to produce a silent MP4 (no audio track). */
   audio: AudioTrackConfig
+  /** Optional accompaniment buffer mixed into the audio track. */
+  userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null
   fileName?: string
   signal?: AbortSignal
   onProgress?: (p: VideoRenderProgress) => void
@@ -109,6 +111,7 @@ export async function exportSongToMp4(
     fps: options.fps,
     videoBitrateKbps: options.videoBitrateKbps,
     audio: options.audio,
+    userAudio: options.userAudio ?? null,
     signal: options.signal,
     onProgress: options.onProgress,
   }

@@ -63,6 +63,13 @@ export type VideoRenderOptions = {
   videoBitrateKbps: number
   /** `null` to omit the audio track entirely. */
   audio: AudioTrackConfig
+  /**
+   * Optional user-provided accompaniment buffer to mix alongside the
+   * sampled piano. Routed through `renderSongAudio` only — the video
+   * pass doesn't see the audio buffer directly. Ignored when
+   * `audio === null` (no audio track wanted).
+   */
+  userAudio?: { buffer: AudioBuffer; offsetSec: number; volume: number } | null
   signal?: AbortSignal
   onProgress?: (p: VideoRenderProgress) => void
 }
@@ -169,7 +176,7 @@ export async function renderSongVideo(
       'Video export requires a browser with WebCodecs (Chrome / Edge / Safari 16.4+).',
     )
   }
-  const { width, height, fps, videoBitrateKbps, audio, signal, onProgress } = options
+  const { width, height, fps, videoBitrateKbps, audio, userAudio, signal, onProgress } = options
   if (signal?.aborted) throw new VideoRenderAborted()
 
   const r3f = getR3FState()
@@ -287,6 +294,7 @@ export async function renderSongVideo(
             }
           },
           signal,
+          userAudio ?? null,
         )
       : null
     // Attach a no-op rejection handler so an early abort doesn't
@@ -312,7 +320,19 @@ export async function renderSongVideo(
       avc: { format: 'avc' },
     })
 
-    const totalDuration = song.duration + TAIL_SECONDS
+    // Effective end-of-timeline mirrors the audio render: when the
+    // user-provided accompaniment extends past the MIDI we render
+    // additional frames so the final visual still matches the audio
+    // tail (otherwise the video would freeze on its last MIDI frame
+    // while the audio kept playing).
+    const audioEnd = userAudio
+      ? userAudio.offsetSec + userAudio.buffer.duration
+      : 0
+    // Mirror renderAudio: MIDI is shifted by `settings.midiOffsetSec`
+    // on the export timeline so the rendered video extends past the
+    // delayed song end.
+    const totalDuration =
+      Math.max(song.duration + settings.midiOffsetSec, audioEnd) + TAIL_SECONDS
     const totalFrames = Math.max(1, Math.ceil(totalDuration * fps))
     const usPerFrame = Math.round(1_000_000 / fps)
     const keyframeInterval = Math.max(1, Math.round(KEYFRAME_INTERVAL_SECONDS * fps))

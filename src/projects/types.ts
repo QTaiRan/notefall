@@ -65,6 +65,14 @@ export type ProjectManifest = {
    * older build that pre-dates this field) simply omit it.
    */
   customTexture?: AssetRef | null
+  /**
+   * User-provided accompaniment audio (WAV / MP3 / etc.) the user
+   * wants to sync against the MIDI visualization. The sync offset
+   * and volume that pair with this asset live inside `settings`
+   * (`userAudioOffsetSec`, `userAudioVolume`) so they ride the
+   * normal settings persistence path.
+   */
+  userAudio?: AssetRef | null
 }
 
 /**
@@ -81,6 +89,8 @@ export type Project = {
   songMidi: ArrayBuffer | null
   /** Bytes of the user's custom note-texture image. null when not in use. */
   customTexture: { bytes: ArrayBuffer; mime: string; fileName: string } | null
+  /** Bytes of the user-provided accompaniment audio. null when not in use. */
+  userAudio: { bytes: ArrayBuffer; mime: string; fileName: string } | null
 }
 
 /**

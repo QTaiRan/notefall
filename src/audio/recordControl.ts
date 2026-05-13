@@ -42,10 +42,12 @@ function restorePreRecordSnapshot(): void {
   store.setSong(song)
   audioEngine.loadSong(song)
   store.setTransport('stopped')
-  // setSong always flips dirty=true; restore the prior clean state if
-  // the song was a saved (clean) project before recording started so
-  // the user's File save indicator stays accurate.
-  if (wasClean) store.markClean()
+  // setSong now rebases the dirty hash so a fresh load reads as
+  // clean. If the prior session was already dirty (unsaved edits
+  // before the user pressed Record), restore that bit so the
+  // unsaved indicator stays accurate; clean sessions are already
+  // in the right state.
+  if (!wasClean) store.markDirty()
 }
 
 export function isCountingIn(): boolean {

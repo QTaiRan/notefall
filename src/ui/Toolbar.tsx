@@ -20,6 +20,7 @@ import { useMidiInput } from '../audio/useMidiInput'
 import { useRecorder } from '../audio/useRecorder'
 import { parseMidi } from '../midi/parse'
 import {
+  importUserAudio,
   loadDemoProject,
   newProject,
   openProject,
@@ -30,6 +31,7 @@ import {
 import { hasFileSystemAccess } from '../projects/io'
 import { clearAllRecent, getRecent, subscribeRecent } from '../projects/recent'
 import { DEMOS, loadDemoManifestNames } from '../demos'
+import { useUserAudio } from '../audio/userAudio'
 import { exportSongToWav } from '../export/exportAudio'
 import { playExportCompleteChime } from '../audio/exportChime'
 import {
@@ -111,6 +113,29 @@ const openExternal = (url: string) => {
   // back to the app — standard hygiene for any externally-controlled
   // URL even though our destinations are hard-coded.
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+/**
+ * Trigger the OS file picker programmatically. Used by the File menu's
+ * "Import Audio…" item — `react-aria-components`' `FileTrigger`
+ * expects to wrap a Button and doesn't nest cleanly inside a MenuItem,
+ * so we drop down to a vanilla input element and resolve with the
+ * chosen file. Resolves with `null` when the user dismisses the dialog
+ * (only detectable in Chrome 113+; on Safari/Firefox the promise stays
+ * pending if the user cancels — acceptable since the caller treats
+ * "no file" the same as "no-op").
+ */
+function pickFile(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = accept
+    input.onchange = () => {
+      const file = input.files?.[0]
+      resolve(file ?? null)
+    }
+    input.click()
+  })
 }
 
 // Shared className strings for File menu items. Centralised so the three
@@ -313,6 +338,11 @@ export function Toolbar() {
         if (!buf) return
         const parsed = await parseMidi(buf, r.name)
         setSong(parsed)
+        // setSong now treats a song load as a fresh baseline (clean).
+        // A recording is unsaved work though — flip dirty so the user
+        // gets the beforeunload prompt if they try to close without
+        // saving the take.
+        useStore.getState().markDirty()
         audioEngine.loadSong(parsed)
         setTransport('stopped')
         setActiveRecordingId(r.id)
@@ -349,6 +379,16 @@ export function Toolbar() {
   const onSaveProjectAs = async () => {
     const result = await saveProjectAs()
     if (result.kind === 'error') reportError('Could not save project', result.message)
+  }
+  const onImportAudio = async () => {
+    const file = await pickFile(
+      'audio/*,.mp3,.wav,.ogg,.oga,.m4a,.aac,.flac,.webm',
+    )
+    if (!file) return
+    const result = await importUserAudio(file)
+    if (result.kind === 'error') {
+      reportError(result.title ?? 'Could not load audio', result.message)
+    }
   }
 
   // Open the unified export-settings dialog. The dialog itself
@@ -440,10 +480,23 @@ export function Toolbar() {
     try {
       const fileName = buildExportFileName(values)
 
+      // Snapshot the user-provided accompaniment (if any) at export
+      // start so the offline render mixes it alongside the piano.
+      const ua = useUserAudio.getState()
+      const userAudioForExport =
+        ua.buffer
+          ? {
+              buffer: ua.buffer,
+              offsetSec: settings.userAudioOffsetSec,
+              volume: settings.userAudioVolume,
+            }
+          : null
+
       if (isAudioOnly) {
         const result = await exportSongToWav(song, settings, {
           fileName,
           signal: abort.signal,
+          userAudio: userAudioForExport,
           onProgress: (p) => {
             if (p.phase === 'loading') {
               const fraction = p.total > 0 ? p.loaded / p.total : 0
@@ -479,6 +532,7 @@ export function Toolbar() {
           fps: values.fps,
           videoBitrateKbps,
           audio: includeAudio ? DEFAULT_AUDIO_CONFIG : null,
+          userAudio: includeAudio ? userAudioForExport : null,
           fileName,
           signal: abort.signal,
           onProgress: (p) => {
@@ -642,6 +696,15 @@ export function Toolbar() {
               >
                 <span>Save As…</span>
                 <span className={menuShortcutClass}>{SHORTCUT_SAVE_AS}</span>
+              </MenuItem>
+              <Separator className="my-1 h-px bg-neutral-800" />
+              <MenuItem
+                onAction={() => void onImportAudio()}
+                textValue="Import Audio"
+                isDisabled={!song}
+                className={menuItemClass}
+              >
+                <span>Import Audio…</span>
               </MenuItem>
               <Separator className="my-1 h-px bg-neutral-800" />
               <MenuItem

@@ -3,13 +3,15 @@ import { DropZone } from 'react-aria-components'
 import { Toolbar } from './Toolbar'
 import { Inspector } from './Inspector'
 import { Viewport } from './Viewport'
+import { TimelineEditor } from './TimelineEditor'
 import { ConfirmModal } from './ConfirmModal'
 import { LoadingOverlay } from './LoadingOverlay'
 import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { midiInput } from '../audio/midiInput'
+import { isAudioName, useUserAudio } from '../audio/userAudio'
 import { parseMidi } from '../midi/parse'
-import { openProjectFromFile } from '../projects/actions'
+import { importUserAudio, openProjectFromFile } from '../projects/actions'
 import { PROJECT_FILE_EXTENSION } from '../projects/types'
 import { showAlert } from './confirm'
 import { useGlobalShortcuts } from './useGlobalShortcuts'
@@ -34,6 +36,12 @@ export function Layout() {
   useEffect(() => {
     audioEngine.setVolume(settings.volume)
   }, [settings.volume])
+  useEffect(() => {
+    audioEngine.setMidiVolume(settings.midiVolume)
+  }, [settings.midiVolume])
+  useEffect(() => {
+    audioEngine.setMidiEnabled(settings.midiEnabled)
+  }, [settings.midiEnabled])
   useEffect(() => {
     audioEngine.setRate(settings.playbackRate)
   }, [settings.playbackRate])
@@ -99,6 +107,26 @@ export function Layout() {
     audioEngine.setLoop(loop)
   }, [loop])
 
+  // ── Sync user-provided audio buffer + offset + volume into the engine ──
+  // The buffer is a heavy decoded AudioBuffer kept outside the main
+  // store; subscribing here (not via a `useStore` selector that returns
+  // an object) lets us push it through to the engine without forcing
+  // every Layout re-render to re-set it. Offset / volume are normal
+  // settings.
+  const userAudioBuffer = useUserAudio((s) => s.buffer)
+  useEffect(() => {
+    audioEngine.setUserAudio(userAudioBuffer)
+  }, [userAudioBuffer])
+  useEffect(() => {
+    audioEngine.setUserAudioOffset(settings.userAudioOffsetSec)
+  }, [settings.userAudioOffsetSec])
+  useEffect(() => {
+    audioEngine.setUserAudioVolume(settings.userAudioVolume)
+  }, [settings.userAudioVolume])
+  useEffect(() => {
+    audioEngine.setMidiOffset(settings.midiOffsetSec)
+  }, [settings.midiOffsetSec])
+
   // sync transport state if engine auto-stopped at end-of-song
   useEffect(() => {
     if (transport !== 'playing') return
@@ -162,12 +190,24 @@ export function Layout() {
           }
           return
         }
+        if (isAudioName(fileItem.name)) {
+          const file = await fileItem.getFile()
+          const result = await importUserAudio(file)
+          if (result.kind === 'error') {
+            void showAlert({
+              title: result.title ?? 'Could not load audio',
+              message: result.message,
+              tone: 'error',
+            })
+          }
+          return
+        }
         // Unsupported extension — surface a clear message rather than
         // silently ignoring the drop. Users were left wondering whether
         // the drop registered at all.
         void showAlert({
           title: 'Unsupported file type',
-          message: `"${fileItem.name}" is not a supported format. Drop a .nfz project or a .mid / .midi file.`,
+          message: `"${fileItem.name}" is not a supported format. Drop a .nfz project, .mid / .midi, or .mp3 / .wav audio file.`,
           tone: 'error',
         })
       }}
@@ -175,8 +215,15 @@ export function Layout() {
       {({ isDropTarget }) => (
         <>
           <Toolbar />
+          {/* Viewport + TimelineEditor stack in a left column so the
+              timeline editor sits under the canvas only. The Inspector
+              remains a tall right column from Toolbar to bottom — the
+              editor never extends under it. */}
           <div className="flex flex-1 overflow-hidden">
-            <Viewport />
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <Viewport />
+              <TimelineEditor />
+            </div>
             <Inspector />
           </div>
           <LoadingOverlay />
@@ -190,7 +237,7 @@ export function Layout() {
               className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-sky-500/10 backdrop-blur-sm"
             >
               <div className="rounded-md border border-sky-500/40 bg-black/55 px-5 py-3 text-sm font-medium text-sky-100 shadow-lg backdrop-blur-md">
-                Drop to load (.mid / .midi / .nfz)
+                Drop to load (.mid / .midi / .nfz / .mp3 / .wav)
               </div>
             </div>
           )}

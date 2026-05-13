@@ -2,6 +2,7 @@ import { audioEngine } from '../audio/engine'
 import { parseMidi } from '../midi/parse'
 import { serializeMidi } from '../midi/serialize'
 import { useCustomTexture } from '../notes/customTexture'
+import { useUserAudio } from '../audio/userAudio'
 import { useStore } from '../store'
 import { showConfirm } from '../ui/confirm'
 import {
@@ -73,6 +74,7 @@ function suggestedFilename(): string {
 function buildProjectFromState(name: string): Project {
   const s = useStore.getState()
   const tex = useCustomTexture.getState()
+  const audio = useUserAudio.getState()
   const now = Date.now()
   return {
     // User-edited project name takes precedence over the on-disk
@@ -90,6 +92,14 @@ function buildProjectFromState(name: string): Project {
     customTexture:
       tex.fileBytes && tex.fileMime && tex.fileName
         ? { bytes: tex.fileBytes, mime: tex.fileMime, fileName: tex.fileName }
+        : null,
+    userAudio:
+      audio.fileBytes && audio.fileMime && audio.fileName
+        ? {
+            bytes: audio.fileBytes,
+            mime: audio.fileMime,
+            fileName: audio.fileName,
+          }
         : null,
   }
 }
@@ -180,6 +190,18 @@ async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef | null): Promis
       .setFromBytes(project.customTexture.bytes, project.customTexture.mime, project.customTexture.fileName)
   } else {
     useCustomTexture.getState().clearFromLoad()
+  }
+
+  // Same pattern for the user-provided accompaniment audio. The decode
+  // is async (non-trivial for MP3s); we fire-and-forget so the rest of
+  // the project loads immediately. The Layout-level effect that syncs
+  // the AudioBuffer into the engine picks it up once decoding finishes.
+  if (project.userAudio) {
+    void useUserAudio
+      .getState()
+      .setFromBytes(project.userAudio.bytes, project.userAudio.mime, project.userAudio.fileName)
+  } else {
+    useUserAudio.getState().clearFromLoad()
   }
 
   // Move-to-top in the recents list. No-op on browsers without FSA
@@ -380,5 +402,42 @@ export async function newProject(): Promise<ActionResult> {
   // Drop any image carried over from the previous session — a fresh
   // project shouldn't inherit the previous look's texture.
   useCustomTexture.getState().clearFromLoad()
+  // Same for accompaniment audio — a fresh project starts with no
+  // user audio attached.
+  useUserAudio.getState().clearFromLoad()
+  return { kind: 'ok' }
+}
+
+// ───────── Import audio ─────────
+
+/**
+ * Apply a user-provided accompaniment audio file to the current
+ * session. Unlike Open Project / Open MIDI this does NOT replace the
+ * loaded song — it attaches alongside the existing MIDI so the user
+ * can sync the two via the timeline. Marks the project dirty.
+ */
+export async function importUserAudio(file: File): Promise<ActionResult> {
+  // Audio is an *accompaniment* to a MIDI track — there's no point
+  // loading it standalone (there's nothing to sync against, and the
+  // timeline editor only exposes the audio lane while a song is
+  // loaded). Refuse early with a clear message instead of decoding
+  // a buffer that would never play.
+  if (!useStore.getState().song) {
+    return {
+      kind: 'error',
+      title: 'Load a MIDI file first',
+      message:
+        'Audio can only be loaded as accompaniment for a MIDI track. Open or record a MIDI file before importing audio.',
+    }
+  }
+  try {
+    await useUserAudio.getState().setFromFile(file)
+  } catch (e) {
+    return {
+      kind: 'error',
+      title: 'Could not load audio',
+      message: `"${file.name}" could not be decoded.\n\n${describeError(e)}`,
+    }
+  }
   return { kind: 'ok' }
 }

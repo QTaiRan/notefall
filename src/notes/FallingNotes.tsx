@@ -588,7 +588,10 @@ export function FallingNotes() {
     const mesh = meshRef.current
     if (!mesh) return
 
-    const t = audioEngine.currentSongTime()
+    // Falling-note placement compares against `n.time` (MIDI-time),
+    // so use the engine's MIDI-time playhead. Otherwise a non-zero
+    // `midiOffsetSec` would desync the visual notes from the audio.
+    const t = audioEngine.currentMidiTime()
     const hitY = noteHitYWorld(settings.keyboardY)
     const isDown = settings.fallDirection === 'down'
     const fall = settings.fallDurationSec
@@ -1097,7 +1100,7 @@ export function FallingNotes() {
     if (!state.song) return
     const note = state.song.notes.find((n) => n.id === noteId)
     if (!note) return
-    const t = audioEngine.currentSongTime()
+    const t = audioEngine.currentMidiTime()
     const b = noteVisualBounds(note, t, state.settings)
     if (!b) {
       hoveredEdgeRef.current = null
@@ -1184,7 +1187,7 @@ export function FallingNotes() {
         // so the death FX can puff out from the spot the note actually
         // occupied (querying after the delete would find nothing).
         if (targetNote) {
-          const t = audioEngine.currentSongTime()
+          const t = audioEngine.currentMidiTime()
           const b = noteVisualBounds(targetNote, t, state.settings)
           if (b) {
             noteDeathFx.emit({
@@ -1210,7 +1213,7 @@ export function FallingNotes() {
     // Alt+click splits the note at the click position. The split time uses
     // the click's world Y so the cut lands exactly where the user pointed.
     if (native.altKey) {
-      const splitTime = clickYToTime(e.point.y, audioEngine.currentSongTime(), state.settings)
+      const splitTime = clickYToTime(e.point.y, audioEngine.currentMidiTime(), state.settings)
       const result = splitNote(state.song, noteId, splitTime)
       if (result) {
         state.applySongEdit(result.song)

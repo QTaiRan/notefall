@@ -83,7 +83,12 @@ export class AudioEngine {
 
   private rate = 1
   private pedalEnabled = true
-  private volume = 0.5
+  // Master gain — multiplies both sampler and user-audio output.
+  private masterVolume = 0.5
+  // MIDI sampler-only gain. Applied as `master × midi × (enabled?1:0)`
+  // before reaching `piano.setVolume`.
+  private midiVolume = 1.0
+  private midiEnabled = true
   private loop = false
   private reverbEnabled = true
   private reverbDry = 1.0
@@ -160,13 +165,30 @@ export class AudioEngine {
   // each kicking off their own ~60 MB sample download.
   private initPromise: Promise<void> | null = null
 
+  // ── User-provided accompaniment audio (WAV / MP3 / etc.) ──
+  // The decoded buffer + sync offset + volume; the buffer is also used by
+  // the offline export pipeline. Realtime playback is wired through a
+  // dedicated GainNode so volume changes don't restart the source.
+  private userAudioBuffer: AudioBuffer | null = null
+  private userAudioOffsetSec = 0
+  private userAudioVolume = 1
+  // Sync offset for the MIDI track. Shifts the entire song forward in
+  // timeline-time so the user can drag the MIDI clip relative to the
+  // accompaniment audio. Notes still compare against MIDI-time
+  // internally (`n.time` is unchanged); the offset is applied only at
+  // the timeline-time ↔ MIDI-time boundary in `tick()`, `seek()`, and
+  // `recomputeIndices()`.
+  private midiOffsetSec = 0
+  private userAudioGain: GainNode | null = null
+  private userAudioSource: AudioBufferSourceNode | null = null
+
   async init(onProgress?: (p: LoadProgress) => void): Promise<void> {
     if (this.piano) return
     if (this.initPromise) return this.initPromise
     this.initPromise = (async () => {
       try {
         this.piano = await createPiano(undefined, onProgress)
-        this.piano.setVolume(this.volume)
+        this.piano.setVolume(this.effectiveSamplerVolume())
         this.piano.setReverbSize(this.reverbSize)
         this.piano.setReverbDecayTime(this.reverbDecayTime)
         this.piano.setReverbDecay(this.reverbDecay)
@@ -190,9 +212,49 @@ export class AudioEngine {
     return this.piano !== null
   }
 
+  /**
+   * Master volume — multiplies both the MIDI sampler and the user
+   * accompaniment. Equivalent to a "main fader" the user can pull
+   * down to silence the whole mix without losing per-source levels.
+   */
   setVolume(value: number): void {
-    this.volume = value
-    this.piano?.setVolume(value)
+    this.masterVolume = value
+    this.applyVolumes()
+  }
+
+  /** MIDI-only volume. Stacks with master before reaching the sampler. */
+  setMidiVolume(value: number): void {
+    this.midiVolume = Math.max(0, value)
+    this.applyVolumes()
+  }
+
+  /**
+   * Mute / unmute the MIDI sampler without touching its volume value
+   * — toggling back keeps the previously-set midi gain intact. The
+   * visual layer (falling notes, key glow, particles) continues to
+   * fire either way; only the sampler audio is gated.
+   */
+  setMidiEnabled(enabled: boolean): void {
+    this.midiEnabled = enabled
+    this.applyVolumes()
+  }
+
+  private effectiveSamplerVolume(): number {
+    return this.midiEnabled ? this.masterVolume * this.midiVolume : 0
+  }
+
+  /**
+   * Recompute and push down the per-source effective gains. Cheap
+   * (just a few multiplies + property writes) so we run it on every
+   * volume / mute change instead of caching.
+   */
+  private applyVolumes(): void {
+    this.piano?.setVolume(this.effectiveSamplerVolume())
+    if (this.userAudioGain) {
+      const ctx = this.userAudioGain.context
+      const target = this.masterVolume * this.userAudioVolume
+      this.userAudioGain.gain.setTargetAtTime(target, ctx.currentTime, 0.01)
+    }
   }
 
   setReverbEnabled(enabled: boolean): void {
@@ -295,6 +357,136 @@ export class AudioEngine {
     this.rate = Math.max(0.25, Math.min(4, rate))
     this.startedAt = now()
     this.offsetAtStart = t
+    // Rate change must rebuild the user-audio source — `playbackRate` is
+    // a constructor-time-stable AudioParam on AudioBufferSourceNode but
+    // we restart anyway so the in-flight render stays sample-aligned
+    // with the new rate from the current playhead. Cheap (just creates
+    // a new source pointing at the same buffer).
+    if (this.playing) this.restartUserAudioFromCurrent()
+  }
+
+  // ─────────── User audio (accompaniment track) ───────────
+
+  /**
+   * Attach (or detach with `null`) a decoded accompaniment buffer. The
+   * buffer was decoded against a separate `AudioContext` in
+   * `userAudio.ts` — `AudioBuffer` is portable across contexts so we
+   * can schedule it against Tone's rawContext without a re-decode.
+   * Restarts any in-flight playback so the new buffer becomes audible
+   * from the current playhead.
+   */
+  setUserAudio(buffer: AudioBuffer | null): void {
+    if (this.userAudioBuffer === buffer) return
+    this.userAudioBuffer = buffer
+    this.stopUserAudioSource()
+    if (this.playing) this.startUserAudioFromCurrent()
+  }
+
+  /** Sync offset in seconds — audio's t=0 corresponds to this song time. */
+  setUserAudioOffset(seconds: number): void {
+    if (this.userAudioOffsetSec === seconds) return
+    this.userAudioOffsetSec = seconds
+    if (this.playing) this.restartUserAudioFromCurrent()
+  }
+
+  /**
+   * Sync offset in seconds for the MIDI track — the song's t=0 plays
+   * at this many seconds into the timeline. Mirror semantics of
+   * `setUserAudioOffset`: timeline-time stays the canonical clock,
+   * the MIDI is shifted relative to it.
+   */
+  setMidiOffset(seconds: number): void {
+    if (this.midiOffsetSec === seconds) return
+    this.midiOffsetSec = seconds
+    // Re-walk indices so the next tick's `n.time <= midiSongTime`
+    // comparison aligns to the new offset. Without this, dragging the
+    // clip during pause would emit stale notes when play resumes.
+    if (this.song) this.recomputeIndices(this.currentSongTime())
+  }
+
+  setUserAudioVolume(linear: number): void {
+    this.userAudioVolume = Math.max(0, linear)
+    // Stacks with masterVolume — `applyVolumes` does the multiply and
+    // the smooth setTargetAtTime ramp.
+    this.applyVolumes()
+  }
+
+  /**
+   * End time of the user audio in song-time coordinates. 0 when no
+   * buffer is loaded. Used by the UI to decide the timeline's right
+   * edge (= max(song.duration, userAudioEnd)) and by `tick()` to
+   * extend the auto-stop window past the audio's tail.
+   */
+  userAudioEndSec(): number {
+    if (!this.userAudioBuffer) return 0
+    return this.userAudioOffsetSec + this.userAudioBuffer.duration
+  }
+
+  private ensureUserAudioGain(): GainNode | null {
+    if (this.userAudioGain) return this.userAudioGain
+    // Tone's raw AudioContext is the only running context once the user
+    // has triggered Tone.start(); reuse it so the user audio mixes
+    // alongside the sampler. Before Tone is started there's nothing
+    // playing yet — bail out and let the next `play()` call retry.
+    const ctx = Tone.getContext().rawContext as AudioContext
+    if (!ctx) return null
+    const gain = ctx.createGain()
+    gain.gain.value = this.masterVolume * this.userAudioVolume
+    gain.connect(ctx.destination)
+    this.userAudioGain = gain
+    return gain
+  }
+
+  private stopUserAudioSource(): void {
+    if (!this.userAudioSource) return
+    try {
+      this.userAudioSource.stop()
+    } catch {
+      /* already stopped — ignore */
+    }
+    this.userAudioSource.disconnect()
+    this.userAudioSource = null
+  }
+
+  /**
+   * Schedule the user audio source so that `currentSongTime()` already
+   * reflects the playback position. Handles three regimes:
+   *   - audio hasn't started yet (relPos < 0): delay source.start by |relPos|
+   *   - audio is in-flight (0 ≤ relPos < duration): start now, seeking into the buffer
+   *   - audio is past its end (relPos ≥ duration): nothing to play
+   */
+  private startUserAudioFromCurrent(): void {
+    if (!this.userAudioBuffer) return
+    const gain = this.ensureUserAudioGain()
+    if (!gain) return
+    const ctx = gain.context as AudioContext
+    const songTime = this.currentSongTime()
+    const relPos = songTime - this.userAudioOffsetSec
+    const duration = this.userAudioBuffer.duration
+    if (relPos >= duration) return
+
+    const src = ctx.createBufferSource()
+    src.buffer = this.userAudioBuffer
+    // Match the song's playback rate so the accompaniment stays in
+    // sync at non-1× speeds. Pitch will shift — that's expected for
+    // a generic playbackRate slider; users who care about pitch can
+    // export at 1× or use a future rubberband-style stretcher.
+    src.playbackRate.value = this.rate
+    src.connect(gain)
+    if (relPos < 0) {
+      // Audio hasn't begun yet. Delay start by |relPos|, scaled by
+      // rate so a 1.5× tempo proportionally shortens the wait.
+      const delay = -relPos / this.rate
+      src.start(ctx.currentTime + delay, 0)
+    } else {
+      src.start(ctx.currentTime, relPos)
+    }
+    this.userAudioSource = src
+  }
+
+  private restartUserAudioFromCurrent(): void {
+    this.stopUserAudioSource()
+    this.startUserAudioFromCurrent()
   }
 
   setPedalEnabled(enabled: boolean): void {
@@ -321,6 +513,7 @@ export class AudioEngine {
 
   loadSong(song: ParsedSong): void {
     this.releaseAll()
+    this.stopUserAudioSource()
     this.song = song
     this.noteIdx = 0
     this.pedalIdx = 0
@@ -375,6 +568,7 @@ export class AudioEngine {
    */
   unloadSong(): void {
     this.releaseAll()
+    this.stopUserAudioSource()
     this.song = null
     this.noteIdx = 0
     this.pedalIdx = 0
@@ -392,6 +586,7 @@ export class AudioEngine {
     this.startedAt = now()
     this.playing = true
     this.startBackgroundTicker()
+    this.startUserAudioFromCurrent()
   }
 
   pause(): void {
@@ -407,6 +602,7 @@ export class AudioEngine {
     // structure changes underneath them).
     this.releaseAllSounding()
     this.stopBackgroundTicker()
+    this.stopUserAudioSource()
   }
 
   stop(): void {
@@ -417,12 +613,19 @@ export class AudioEngine {
     this.pedalDown = false
     this.releaseAll()
     this.stopBackgroundTicker()
+    this.stopUserAudioSource()
   }
 
   seek(t: number): void {
     const wasPlaying = this.playing
-    const dur = this.song?.duration ?? 0
+    // Timeline-time clamp: extend by the MIDI offset so seeking to the
+    // very end of a clip that's been dragged forward still works.
+    const dur = (this.song?.duration ?? 0) + this.midiOffsetSec
     const clamped = Math.max(0, Math.min(dur, t))
+    // MIDI-time playhead — what notes are sounding at this timeline
+    // position. Negative values (timeline cursor before the MIDI
+    // begins) collapse to "no notes sounding".
+    const midiClamped = clamped - this.midiOffsetSec
 
     // Diff-based release/retrigger so notes that span the new playback
     // position stay sounding (and stay represented in the visual layer's
@@ -435,8 +638,8 @@ export class AudioEngine {
     const newActiveIds = new Set<number>()
     if (this.song) {
       for (const n of this.song.notes) {
-        if (n.time > clamped) break
-        if (n.time + n.duration > clamped) newActiveIds.add(n.id)
+        if (n.time > midiClamped) break
+        if (n.time + n.duration > midiClamped) newActiveIds.add(n.id)
       }
     }
 
@@ -478,7 +681,7 @@ export class AudioEngine {
     // would be sounding at this moment in the song.
     if (this.song && this.piano) {
       for (const n of this.song.notes) {
-        if (n.time > clamped) break
+        if (n.time > midiClamped) break
         if (!newActiveIds.has(n.id)) continue
         if (this.active.has(n.id)) continue
         const playedMidi = n.midi + this.transpose
@@ -494,6 +697,11 @@ export class AudioEngine {
     this.startedAt = now()
     this.recomputeIndices(clamped)
     this.playing = wasPlaying
+
+    // Restart the accompaniment source at the new position so it
+    // tracks the seek instead of continuing from the old playhead.
+    this.stopUserAudioSource()
+    if (wasPlaying) this.startUserAudioFromCurrent()
   }
 
   isPlaying(): boolean {
@@ -504,6 +712,19 @@ export class AudioEngine {
     if (!this.playing) return this.offsetAtStart
     const wall = now()
     return this.offsetAtStart + (wall - this.startedAt) * this.rate
+  }
+
+  /**
+   * MIDI-time playhead — `currentSongTime` shifted back by the user's
+   * MIDI offset. Visual code that compares against `n.time` (which is
+   * stored in MIDI-time) should read THIS so falling notes / hit tests /
+   * click-to-time stay aligned when the user has dragged the MIDI
+   * clip on the timeline editor. UI clocks (transport readout, seek
+   * progress) should keep using `currentSongTime` since they
+   * represent absolute timeline position.
+   */
+  currentMidiTime(): number {
+    return this.currentSongTime() - this.midiOffsetSec
   }
 
   isPedalDown(): boolean {
@@ -670,15 +891,25 @@ export class AudioEngine {
     this.piano?.stopAll()
   }
 
+  /** Walks the song's note + pedal arrays to bring the scheduling
+   *  cursors (`noteIdx` / `pedalIdx`) up to the current playhead, so
+   *  the next `tick()` resumes from the right point.
+   *
+   *  `songTime` is timeline-time (the same coordinate space as
+   *  `currentSongTime()`). Internally we shift it back to MIDI-time
+   *  via `midiOffsetSec` so `n.time` and `pedal.time` (still stored in
+   *  MIDI-time) compare correctly. Negative MIDI-times collapse to 0
+   *  — the cursor then sits at the start of the song. */
   private recomputeIndices(songTime: number): void {
+    const midiSongTime = songTime - this.midiOffsetSec
     if (!this.song) return
     let ni = 0
-    while (ni < this.song.notes.length && this.song.notes[ni].time <= songTime) ni++
+    while (ni < this.song.notes.length && this.song.notes[ni].time <= midiSongTime) ni++
     this.noteIdx = ni
 
     let pi = 0
     let pedalDown = false
-    while (pi < this.song.pedals.length && this.song.pedals[pi].time <= songTime) {
+    while (pi < this.song.pedals.length && this.song.pedals[pi].time <= midiSongTime) {
       pedalDown = this.song.pedals[pi].value >= 0.5
       pi++
     }
@@ -706,9 +937,12 @@ export class AudioEngine {
       }
     }
     const songTime = this.currentSongTime()
+    // Notes + pedals are stored in MIDI-time; shift the timeline-time
+    // cursor back so all the unchanged comparisons below stay valid.
+    const midiSongTime = songTime - this.midiOffsetSec
 
     // process pedal events
-    while (this.pedalIdx < this.song.pedals.length && this.song.pedals[this.pedalIdx].time <= songTime) {
+    while (this.pedalIdx < this.song.pedals.length && this.song.pedals[this.pedalIdx].time <= midiSongTime) {
       const ev = this.song.pedals[this.pedalIdx]
       const wasDown = this.pedalDown
       this.pedalDown = ev.value >= 0.5
@@ -725,7 +959,7 @@ export class AudioEngine {
     const LOOKAHEAD = 0.015
     const audioBase =
       !this.silent && this.piano ? this.piano.context.currentTime + LOOKAHEAD : 0
-    while (this.noteIdx < this.song.notes.length && this.song.notes[this.noteIdx].time <= songTime) {
+    while (this.noteIdx < this.song.notes.length && this.song.notes[this.noteIdx].time <= midiSongTime) {
       const n = this.song.notes[this.noteIdx]
       this.noteIdx++
       // Apply transpose to the played pitch. Out-of-range notes after
@@ -735,7 +969,7 @@ export class AudioEngine {
       if (playedMidi < 0 || playedMidi > 127) continue
       // Notes that are slightly overdue still align to the same lookahead floor,
       // notes scheduled close to "on time" land precisely.
-      const offset = Math.max(0, (n.time - songTime) / this.rate)
+      const offset = Math.max(0, (n.time - midiSongTime) / this.rate)
       // Unique stopId per note prevents cross-talk when the same pitch repeats
       // close enough that voices overlap in smplr's voice manager.
       const shaped = this.shapeVelocity(n.velocity)
@@ -751,7 +985,9 @@ export class AudioEngine {
     const stopTime =
       !this.silent && this.piano ? this.piano.context.currentTime + STOP_BUFFER : 0
     for (const a of this.active.values()) {
-      if (a.endTime <= songTime) {
+      // a.endTime is stored in MIDI-time (`n.time + n.duration`), so
+      // compare against the MIDI-time cursor.
+      if (a.endTime <= midiSongTime) {
         if (!this.silent && this.pedalEnabled && this.pedalDown) {
           this.pedalHeld.push({ midi: a.midi, stop: a.stop, source: 'song' })
         } else {
@@ -767,8 +1003,20 @@ export class AudioEngine {
     // (export) mode skips this — the exporter is the authority on when
     // the timeline ends, and an auto-stop here would terminate a render
     // mid-frame.
+    //
+    // User audio extends the effective timeline: if the accompaniment
+    // ends after the MIDI it must finish playing before we auto-stop,
+    // so we take max(song.duration, userAudioEnd) as the end point.
     if (!this.silent) {
-      const endThreshold = this.song.duration + (this.loop ? 0 : SONG_TAIL_SECONDS)
+      const audioEnd = this.userAudioEndSec()
+      // MIDI now starts at `midiOffsetSec` on the timeline, so its end
+      // in timeline-time is `songDuration + midiOffsetSec`. Audio end
+      // is already in timeline-time (`userAudioOffsetSec + dur`).
+      const effectiveEnd = Math.max(
+        this.song.duration + this.midiOffsetSec,
+        audioEnd,
+      )
+      const endThreshold = effectiveEnd + (this.loop ? 0 : SONG_TAIL_SECONDS)
       if (songTime >= endThreshold && this.active.size === 0 && this.pedalHeld.length === 0) {
         if (this.loop) {
           this.seek(0)
@@ -803,6 +1051,7 @@ export class AudioEngine {
     if (this.savedExportState) return
     this.savedExportState = { rate: this.rate }
     this.releaseAll()
+    this.stopUserAudioSource()
     this.stopBackgroundTicker()
     this.silent = true
     this.playing = true

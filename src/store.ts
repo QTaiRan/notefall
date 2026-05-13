@@ -185,9 +185,21 @@ export type Settings = {
   keyGlowIntensity: number
   keyGlowDecay: number
   // Audio
-  // Linear gain on the master output. 0 = silent, 1 = unity, >1 = boost.
-  // Linear (not dB) so the slider's bottom is true mute.
+  // Linear gain on the **master** output — multiplies BOTH the sampler
+  // (MIDI playback) and the user-provided accompaniment. 0 = silent,
+  // 1 = unity, >1 = boost. Linear (not dB) so the slider's bottom is
+  // true mute. The transport bar's Volume slider edits this.
   volume: number
+  // Linear gain on the MIDI sampler, multiplied with `volume` to form
+  // the effective sampler level. Lets the user duck the synthesised
+  // piano against an imported accompaniment without touching master.
+  midiVolume: number
+  // When false, the MIDI sampler is silenced (effective gain = 0)
+  // while the timeline + falling notes + key glow continue to play.
+  // Auto-flipped to false on a user-gesture audio import so the
+  // visualization can sync against the user's own recording without
+  // doubling up on a synthesized piano.
+  midiEnabled: boolean
   playbackRate: number
   pedalEnabled: boolean
   // Master on/off for the reverb. When off, the wet path output is silenced
@@ -237,6 +249,33 @@ export type Settings = {
   // played pitch. Screen-keyboard / PC-keyboard touches are NOT shifted
   // (the user is clicking on visible keys directly).
   transpose: number
+  // === User audio sync ====================================================
+  // Position (in song time, seconds) at which the user-provided
+  // accompaniment track (WAV / MP3 / etc., managed via `useUserAudio`)
+  // should start playing. 0 means "starts at the same moment the MIDI
+  // does"; positive values delay the audio by that many seconds.
+  // Negative offsets (audio before MIDI t=0) are intentionally not
+  // supported yet — they require drawing the timeline below t=0, which
+  // adds enough viewport / scroll complexity to defer until requested.
+  userAudioOffsetSec: number
+  // Linear gain on the user audio output (post-decode). 1 = unity.
+  userAudioVolume: number
+  // Sync offset for the MIDI track in seconds — the song's t=0 plays
+  // at this many seconds into the timeline. Lets the user drag the
+  // MIDI clip along the timeline like the audio clip. Negative values
+  // are not supported yet for the same viewport reason as the audio
+  // offset.
+  midiOffsetSec: number
+  // Whether the bottom TimelineEditor section is expanded. Persisted
+  // so a user who collapses it to reclaim vertical canvas space gets
+  // their layout back on reload.
+  timelineEditorOpen: boolean
+  // When true and the user has zoomed in, the timeline auto-pans so
+  // the playhead stays centred during playback. Auto-disables when
+  // the user manually pans / zooms (minimap drag, edge resize, wheel
+  // pan or zoom) — those gestures clearly imply "show me something
+  // other than the playhead".
+  followPlayhead: boolean
 }
 
 export const defaultSettings: Settings = {
@@ -328,6 +367,8 @@ export const defaultSettings: Settings = {
   keyGlowIntensity: 1.5,
   keyGlowDecay: 0.05,
   volume: 0.8,
+  midiVolume: 1.0,
+  midiEnabled: true,
   playbackRate: 1.0,
   pedalEnabled: true,
   reverbEnabled: true,
@@ -347,6 +388,11 @@ export const defaultSettings: Settings = {
   velocityFloor: 0,
   velocityCap: 1,
   transpose: 0,
+  userAudioOffsetSec: 0,
+  userAudioVolume: 1.0,
+  midiOffsetSec: 0,
+  timelineEditorOpen: true,
+  followPlayhead: true,
 }
 
 /**
@@ -436,6 +482,51 @@ const endSettingsEdit = (): void => {
 const dropSettingsBaseline = (): void => {
   pendingSettingsBaseline = null
   pendingSettingsDepth = 0
+}
+
+// ─── Content fingerprint (for the dirty flag) ───────────────────────
+// "Dirty" is derived from whether the current song + settings differ
+// from the last-saved snapshot. Tracking it by content (not by
+// per-mutation flags) means an edit + undo / add + delete cycle that
+// nets to the original state correctly reads as clean again — which
+// is what users intuitively expect.
+//
+// Settings whose values describe the playback session rather than the
+// document (volume, playbackRate) are excluded — they don't get
+// persisted to .nfz anyway, so toggling them shouldn't show "unsaved".
+function hashSong(song: ParsedSong | null): string {
+  if (!song) return ''
+  let acc = ''
+  for (const n of song.notes) {
+    acc += `${n.id},${n.midi},${n.time.toFixed(6)},${n.duration.toFixed(6)},${n.velocity.toFixed(4)};`
+  }
+  acc += '|'
+  for (const p of song.pedals) {
+    acc += `${p.time.toFixed(6)},${p.value.toFixed(4)};`
+  }
+  return acc
+}
+function hashSettings(settings: Settings): string {
+  // Snapshot all keys — settings that don't belong in the document
+  // fingerprint (volume, playbackRate) are still included for now;
+  // they happen to be stable across the dirty-relevant flows, and
+  // listing exclusions risks drift as new settings are added.
+  return JSON.stringify(settings)
+}
+function computeContentHash(s: {
+  song: ParsedSong | null
+  settings: Settings
+}): string {
+  return hashSong(s.song) + '|' + hashSettings(s.settings)
+}
+function dirtyFor(s: {
+  song: ParsedSong | null
+  settings: Settings
+  savedContentHash: string
+  externalDirty: boolean
+}): boolean {
+  if (s.externalDirty) return true
+  return computeContentHash(s) !== s.savedContentHash
 }
 
 export type TransportState = 'stopped' | 'playing' | 'paused'
@@ -582,6 +673,16 @@ type AppState = {
   // True when in-memory state has changed since the last Save / Open / New.
   // Drives the beforeunload prompt and a "*" indicator next to the filename.
   dirty: boolean
+  // Snapshot of the project content at the last save / load. The dirty
+  // flag is computed by comparing the current content hash against
+  // this baseline, so edits that net to the original state (add +
+  // delete, undo a change, reset a setting) read as clean.
+  savedContentHash: string
+  // Flips true when external state (custom texture / user audio /
+  // anything outside this store) has changed since the last save.
+  // The content hash doesn't cover those, so they need a separate
+  // signal. Cleared on save / load.
+  externalDirty: boolean
   markClean: () => void
   // Manual dirty trigger — for state held outside this store that still
   // belongs to the project (e.g. `useCustomTexture`'s loaded image).
@@ -622,7 +723,22 @@ export const useStore = create<AppState>((set) => ({
     // principle but we wipe them too to keep the "this session" model
     // intuitive. Drop any pending settings baseline for the same reason.
     dropSettingsBaseline()
-    set({ song, editHistory: [], editFuture: [], selection: new Set(), dirty: true })
+    set((state) => ({
+      song,
+      editHistory: [],
+      editFuture: [],
+      selection: new Set(),
+      // The freshly loaded MIDI becomes the new dirty baseline:
+      // anything from this point reads as dirty, and an edit-then-
+      // revert (add + delete, undo, etc.) returns to clean. Loading
+      // a file should not itself read as "unsaved changes" — there
+      // are no changes yet. The action layer is responsible for
+      // gating MIDI load behind a discard-unsaved confirm so we
+      // don't accidentally clobber prior work here.
+      savedContentHash: computeContentHash({ song, settings: state.settings }),
+      externalDirty: false,
+      dirty: false,
+    }))
   },
 
   transport: 'stopped',
@@ -703,7 +819,12 @@ export const useStore = create<AppState>((set) => ({
         song: computed,
         editHistory: history,
         editFuture: [],
-        dirty: true,
+        dirty: dirtyFor({
+          song: computed,
+          settings: state.settings,
+          savedContentHash: state.savedContentHash,
+          externalDirty: state.externalDirty,
+        }),
       }
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
@@ -716,7 +837,20 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       if (!state.song) return state
       audioEngine.updateSong(s)
-      const patch: Partial<AppState> = { song: s, dirty: true }
+      // Per-frame setter — drags fire this many times. Recompute the
+      // dirty hash so a drag that ends back at the original note
+      // positions cleans up correctly (the commit at gesture end goes
+      // through `applySongEdit` and recomputes too, but `setSongPreview`
+      // also stands alone for some flows).
+      const patch: Partial<AppState> = {
+        song: s,
+        dirty: dirtyFor({
+          song: s,
+          settings: state.settings,
+          savedContentHash: state.savedContentHash,
+          externalDirty: state.externalDirty,
+        }),
+      }
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
         const note = s.notes.find((n) => n.id === id)
@@ -782,7 +916,12 @@ export const useStore = create<AppState>((set) => ({
           editHistory: history,
           editFuture: future,
           selection: trimmed,
-          dirty: true,
+          dirty: dirtyFor({
+            song: entry.before,
+            settings: state.settings,
+            savedContentHash: state.savedContentHash,
+            externalDirty: state.externalDirty,
+          }),
         }
       }
       if (entry.kind === 'projectName') {
@@ -804,7 +943,12 @@ export const useStore = create<AppState>((set) => ({
           settings: entry.before,
           editHistory: history,
           editFuture: future,
-          dirty: true,
+          dirty: dirtyFor({
+            song: state.song,
+            settings: entry.before,
+            savedContentHash: state.savedContentHash,
+            externalDirty: state.externalDirty,
+          }),
         }
       }
       // 'customTexture' is handled by the early-return block above; this
@@ -860,7 +1004,12 @@ export const useStore = create<AppState>((set) => ({
           editHistory: history,
           editFuture: future,
           selection: trimmed,
-          dirty: true,
+          dirty: dirtyFor({
+            song: entry.before,
+            settings: state.settings,
+            savedContentHash: state.savedContentHash,
+            externalDirty: state.externalDirty,
+          }),
         }
       }
       if (entry.kind === 'projectName') {
@@ -882,7 +1031,12 @@ export const useStore = create<AppState>((set) => ({
           settings: entry.before,
           editHistory: history,
           editFuture: future,
-          dirty: true,
+          dirty: dirtyFor({
+            song: state.song,
+            settings: entry.before,
+            savedContentHash: state.savedContentHash,
+            externalDirty: state.externalDirty,
+          }),
         }
       }
       // 'customTexture' handled in the early-return block above.
@@ -910,21 +1064,40 @@ export const useStore = create<AppState>((set) => ({
   // an undoable atomic change should wrap themselves in begin → update →
   // end, or use the helpers in controls.tsx.
   updateSettings: (patch) =>
-    set((state) => ({ settings: { ...state.settings, ...patch }, dirty: true })),
+    set((state) => {
+      const settings = { ...state.settings, ...patch }
+      return {
+        settings,
+        dirty: dirtyFor({
+          song: state.song,
+          settings,
+          savedContentHash: state.savedContentHash,
+          externalDirty: state.externalDirty,
+        }),
+      }
+    }),
   // Preserve transport-bar controlled settings (volume, playback speed) so
   // the user's listening setup isn't lost when they reset the visual /
   // audio Inspector. The Reset button lives in the Inspector and is
   // expected to only affect what the Inspector shows.
   resetSettings: () => {
     beginSettingsEdit()
-    set((state) => ({
-      settings: {
+    set((state) => {
+      const settings = {
         ...defaultSettings,
         volume: state.settings.volume,
         playbackRate: state.settings.playbackRate,
-      },
-      dirty: true,
-    }))
+      }
+      return {
+        settings,
+        dirty: dirtyFor({
+          song: state.song,
+          settings,
+          savedContentHash: state.savedContentHash,
+          externalDirty: state.externalDirty,
+        }),
+      }
+    })
     endSettingsEdit()
   },
   beginSettingsEdit: () => beginSettingsEdit(),
@@ -940,8 +1113,21 @@ export const useStore = create<AppState>((set) => ({
   setCurrentFile: (currentFile) => set({ currentFile }),
 
   dirty: false,
-  markClean: () => set({ dirty: false }),
-  markDirty: () => set({ dirty: true }),
+  // Initial saved hash matches the initial empty state so a freshly
+  // opened app reads as clean (no song, default settings = empty
+  // project that doesn't need saving).
+  savedContentHash: computeContentHash({ song: null, settings: defaultSettings }),
+  externalDirty: false,
+  markClean: () =>
+    set((state) => ({
+      dirty: false,
+      externalDirty: false,
+      savedContentHash: computeContentHash(state),
+    })),
+  // External-state change (audio buffer load, custom texture import,
+  // etc.). Sets the external-dirty bit so subsequent content-hash
+  // recomputations don't accidentally clear dirty.
+  markDirty: () => set({ dirty: true, externalDirty: true }),
 
   projectName: '',
   // Renaming doesn't flip the dirty flag — the project name is metadata
@@ -971,6 +1157,14 @@ export const useStore = create<AppState>((set) => ({
       currentFile: ref,
       projectName,
       dirty: false,
+      externalDirty: false,
+      // Re-baseline the dirty fingerprint to the freshly-loaded state
+      // so subsequent edits read as dirty from THIS point, and any
+      // edit-then-revert cycle returns the project to clean.
+      savedContentHash: computeContentHash({
+        song: nextSong,
+        settings: nextSettings,
+      }),
       editHistory: [],
       editFuture: [],
       selection: new Set(),
@@ -987,6 +1181,11 @@ export const useStore = create<AppState>((set) => ({
       currentFile: null,
       projectName: '',
       dirty: false,
+      externalDirty: false,
+      savedContentHash: computeContentHash({
+        song: null,
+        settings: defaultSettings,
+      }),
       editHistory: [],
       editFuture: [],
       selection: new Set(),

@@ -26,6 +26,7 @@ import { showAlert } from './confirm'
  *                           react-aria button has focus.
  *   Cmd/Ctrl + Shift + S  — Save As (always opens the picker / triggers a
  *                           download depending on browser support).
+ *   Cmd/Ctrl + B          — toggle the bottom Timeline editor panel.
  *
  * Edit-mode shortcuts (song loaded AND not playing):
  *   Escape                  — clear selection (or close the context menu
@@ -121,6 +122,23 @@ export function useGlobalShortcuts(): void {
           })
         }
       })
+    }
+
+    // Capture-phase Cmd/Ctrl+B — toggle the bottom TimelineEditor
+    // section. Modelled after VSCode's "toggle bottom panel" (Cmd+J in
+    // some editors, Cmd+B for sidebar) — we picked Cmd+B since the
+    // sidebar concept is closest to what this panel does. Capture
+    // phase so it wins against the browser's default (bookmark bar
+    // toggle).
+    const onToggleTimelineEditorCapture = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyB') return
+      if (e.altKey || e.shiftKey) return
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (isEditable(e.target)) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const s = useStore.getState()
+      s.updateSettings({ timelineEditorOpen: !s.settings.timelineEditorOpen })
     }
 
     // Capture-phase Cmd/Ctrl+O — overrides the browser's "Open File"
@@ -253,12 +271,14 @@ export function useGlobalShortcuts(): void {
     window.addEventListener('keydown', onSpaceCapture, true)
     window.addEventListener('keydown', onSaveCapture, true)
     window.addEventListener('keydown', onOpenCapture, true)
+    window.addEventListener('keydown', onToggleTimelineEditorCapture, true)
     window.addEventListener('keydown', onKey)
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => {
       window.removeEventListener('keydown', onSpaceCapture, true)
       window.removeEventListener('keydown', onSaveCapture, true)
       window.removeEventListener('keydown', onOpenCapture, true)
+      window.removeEventListener('keydown', onToggleTimelineEditorCapture, true)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('beforeunload', onBeforeUnload)
     }

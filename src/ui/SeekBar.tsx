@@ -5,12 +5,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import {
-  Button,
-  Slider,
-  SliderTrack,
-  SliderThumb,
-} from "react-aria-components";
+import { Button } from "react-aria-components";
 import { useStore } from "../store";
 import { audioEngine } from "../audio/engine";
 import { pauseSong, playSong } from "../audio/playback";
@@ -220,26 +215,7 @@ export function SeekBar({
     }
   };
 
-  const [dragValue, setDragValue] = useState<number | null>(null);
   const duration = song?.duration ?? 0;
-  const value = dragValue ?? Math.min(currentTime, duration);
-
-  const onSliderChange = (v: number | number[]) => {
-    const t = typeof v === "number" ? v : v[0];
-    setDragValue(t);
-    // Live-seek on every drag tick so the falling notes (which read from
-    // the engine's currentSongTime each frame) move in sync with the
-    // thumb. seek() is cheap — just resets time offsets and recomputes
-    // the song-event cursor.
-    audioEngine.seek(t);
-    useStore.getState().setCurrentTime(t);
-  };
-  const onSliderEnd = (v: number | number[]) => {
-    const t = typeof v === "number" ? v : v[0];
-    audioEngine.seek(t);
-    useStore.getState().setCurrentTime(t);
-    setDragValue(null);
-  };
 
   const onRewind = () => {
     audioEngine.seek(0);
@@ -258,14 +234,55 @@ export function SeekBar({
     useStore.getState().setCurrentTime(t);
   };
 
+  // ── Simple click/drag seek across the full song. The detailed
+  // timeline editor (ruler + lanes) lives in `<TimelineEditor />`
+  // below the viewport; this strip is the "watching" scrub surface
+  // that hides together with the rest of the transport overlay
+  // when the cursor leaves the canvas.
+  const seekDraggingRef = useRef(false);
+  const seekFromX = (clientX: number, el: HTMLElement) => {
+    if (!song) return;
+    const r = el.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    const t = fraction * duration;
+    audioEngine.seek(t);
+    useStore.getState().setCurrentTime(t);
+  };
+  const onSeekPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!song) return;
+    if (e.button !== 0) return;
+    seekDraggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    seekFromX(e.clientX, e.currentTarget);
+  };
+  const onSeekPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!seekDraggingRef.current) return;
+    seekFromX(e.clientX, e.currentTarget);
+  };
+  const onSeekPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!seekDraggingRef.current) return;
+    seekDraggingRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* capture may already be released — ignore */
+    }
+  };
+
   // Root + the time/grid/button row are pointer-events-none so empty padding
   // around the controls falls through to the play-toggle area on the canvas.
   // Each interactive widget (Button, Slider) re-enables pointer-events-auto.
+  // The multi-lane Timeline used to live below this row but has been
+  // promoted to its own `<TimelineEditor />` section outside the canvas
+  // — see `Layout.tsx`. Only transport controls remain inside the
+  // viewport overlay now.
   return (
     <div className="pointer-events-none px-4 pt-3 pb-4">
-      <div className="relative mb-3 flex items-center">
+      <div className="relative flex items-center">
+        {/* Big-font, at-a-glance time readout on the left of the
+            transport row. */}
         <span className="font-mono text-sm tabular-nums text-neutral-300">
-          {fmt(value)} / {fmt(duration)}
+          {fmt(currentTime)} / {fmt(duration)}
         </span>
 
         {/* Absolute-centered transport group: always at the geometric
@@ -381,44 +398,33 @@ export function SeekBar({
         </div>
       </div>
 
-      <Slider
-        value={value}
-        minValue={0}
-        maxValue={Math.max(0.001, duration)}
-        step={0.01}
-        onChange={onSliderChange}
-        onChangeEnd={onSliderEnd}
-        isDisabled={!song}
-        className="pointer-events-auto w-full"
+      {/* Simple full-song progress slider, shown alongside the
+          transport buttons. Hides together with the surrounding
+          gradient when the cursor leaves the canvas. The detailed
+          editor (ruler / MIDI / audio lanes) is in TimelineEditor. */}
+      <div
+        onPointerDown={onSeekPointerDown}
+        onPointerMove={onSeekPointerMove}
+        onPointerUp={onSeekPointerUp}
+        onPointerCancel={onSeekPointerUp}
+        className={
+          song
+            ? "group pointer-events-auto relative mt-3 flex h-3 cursor-pointer items-center"
+            : "relative mt-3 flex h-3 items-center"
+        }
+        style={{ touchAction: "none" }}
+        role={song ? "slider" : undefined}
+        aria-label="Seek"
       >
-        {/* h-5 wrapper expands the pointer hit area so hover is easy to land
-            on; the visible bar stays thin and is centered inside it. */}
-        <SliderTrack className="relative flex h-5 w-full cursor-pointer items-center">
-          {({ state, isHovered }) => {
-            const expanded = isHovered || state.isThumbDragging(0);
-            return (
-              <>
-                <div
-                  className={`relative w-full overflow-hidden rounded-full transition-all duration-150 ${
-                    expanded
-                      ? "h-3 bg-neutral-500/80"
-                      : "h-1.5 bg-neutral-700/70"
-                  }`}
-                >
-                  <div
-                    className={`h-full transition-colors duration-150 ${
-                      expanded ? "bg-sky-400" : "bg-sky-500/80"
-                    }`}
-                    style={{ width: `${state.getThumbPercent(0) * 100}%` }}
-                  />
-                </div>
-                {/* Required by react-aria for keyboard / a11y, but visually hidden. */}
-                <SliderThumb className="sr-only" />
-              </>
-            );
-          }}
-        </SliderTrack>
-      </Slider>
+        <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-neutral-700/70 transition-all duration-150 group-hover:h-3 group-hover:bg-neutral-500/80">
+          <div
+            className="h-full bg-sky-500/80 transition-colors duration-150 group-hover:bg-sky-400"
+            style={{
+              width: duration > 0 ? `${(currentTime / duration) * 100}%` : "0%",
+            }}
+          />
+        </div>
+      </div>
     </div>
   );
 }

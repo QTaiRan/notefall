@@ -136,7 +136,7 @@ export function EditTools() {
   const tryDeleteAt = (world: THREE.Vector3): boolean => {
     const cur = useStore.getState()
     if (!cur.song) return false
-    const t = audioEngine.currentSongTime()
+    const t = audioEngine.currentMidiTime()
     for (const n of cur.song.notes) {
       const b = noteVisualBounds(n, t, cur.settings)
       if (!b) continue
@@ -266,7 +266,7 @@ export function EditTools() {
       const newSel = new Set<number>(initialSelection)
       const cur = useStore.getState()
       if (cur.song) {
-        const t = audioEngine.currentSongTime()
+        const t = audioEngine.currentMidiTime()
         for (const n of cur.song.notes) {
           const b = noteVisualBounds(n, t, cur.settings)
           if (!b) continue
@@ -328,7 +328,7 @@ export function EditTools() {
       useStore.getState().setSong(baseSong)
     }
 
-    const t = audioEngine.currentSongTime()
+    const t = audioEngine.currentMidiTime()
     const time = clickYToTime(startWorld.y, t, settings)
     const midi = clickXToMidi(startWorld.x, settings.transpose)
 

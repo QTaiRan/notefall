@@ -1,0 +1,1451 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Slider, SliderThumb, SliderTrack } from 'react-aria-components'
+import { useStore } from '../store'
+import { audioEngine } from '../audio/engine'
+import { useUserAudio, type UserAudioPeaks } from '../audio/userAudio'
+import { useCurrentTime } from '../audio/useCurrentTime'
+import type { NoteEvent } from '../midi/types'
+import {
+  CloseIcon,
+  EllipsisVerticalIcon,
+  VolumeHighIcon,
+  VolumeLowIcon,
+  VolumeMuteIcon,
+} from './icons'
+
+/**
+ * Multi-row timeline that replaces the legacy single-slider seek bar.
+ *
+ * Three rows on a shared x-axis covering `[0, max(song.duration, audioEnd)]`:
+ *
+ *   1. **Seek bar** — a thin clickable progress strip; the primary
+ *      scrubbing surface. Visually distinct from the lanes below so
+ *      it reads as the "ruler", not part of any track.
+ *   2. **MIDI lane** — piano-roll preview. Each note is drawn as a
+ *      short horizontal segment at its pitch height, mirroring DAWs
+ *      like Ableton's clip preview. Read-only in this MVP, but still
+ *      accepts click-to-seek as a convenience.
+ *   3. **Audio lane** — the user-provided accompaniment waveform.
+ *      The whole strip is draggable horizontally; releasing commits
+ *      the new `userAudioOffsetSec` as one undo entry. Hidden when no
+ *      accompaniment is loaded.
+ *
+ * A single absolutely-positioned vertical playhead spans all rows so
+ * the eye can follow time across them. Negative offsets are
+ * intentionally not supported in this MVP.
+ */
+
+// Tiny full-song minimap row at the very top of the editor. Click
+// or drag pans the visible window; does NOT seek (seek lives on the
+// ruler + the canvas-overlay progress slider). Keeps the user
+// oriented in long songs while zoomed in for fine work.
+const MINIMAP_HEIGHT = 10
+// Time ruler — fine-grained scrub surface that maps to the visible
+// window. The full-song progress slider lives in the transport
+// overlay (SeekBar.tsx) and is no longer part of this row stack.
+const RULER_HEIGHT = 18
+const LANE_HEIGHT_MIDI = 56
+const LANE_HEIGHT_AUDIO = 48
+// Vertical gap between rows.
+const ROW_GAP = 4
+
+/**
+ * Pre-computed peaks → canvas. Repaints whenever peaks, dimensions,
+ * or the visible time window change. The min/max bucket array is
+ * downsampled at draw time: each pixel column reduces the buckets
+ * inside it to a single min/max pair so the waveform reads correctly
+ * at any width.
+ */
+function WaveformCanvas({
+  peaks,
+  width,
+  height,
+  pxPerSec,
+  /** Where in the buffer to start drawing — lets us window the
+   *  rendering to just the visible portion when zoomed in. */
+  startInBufferSec,
+  color,
+}: {
+  peaks: UserAudioPeaks
+  width: number
+  height: number
+  pxPerSec: number
+  startInBufferSec: number
+  color: string
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(width * dpr))
+    canvas.height = Math.max(1, Math.floor(height * dpr))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+    ctx.clearRect(0, 0, width, height)
+    if (width <= 0 || pxPerSec <= 0) return
+
+    ctx.fillStyle = color
+    const mid = height / 2
+    const halfH = height / 2 - 1
+    const bucketsPerPx = 1 / (peaks.bucketDurationSec * pxPerSec)
+    // Bucket index at canvas x = 0.
+    const startBucketF = Math.max(0, startInBufferSec) / peaks.bucketDurationSec
+    for (let x = 0; x < width; x++) {
+      const startBucket = Math.floor(startBucketF + x * bucketsPerPx)
+      const endBucket = Math.min(
+        peaks.bucketCount,
+        Math.ceil(startBucketF + (x + 1) * bucketsPerPx),
+      )
+      if (startBucket >= peaks.bucketCount) break
+      if (endBucket <= 0) continue
+      let mn = 0
+      let mx = 0
+      for (let b = Math.max(0, startBucket); b < endBucket; b++) {
+        const lo = peaks.buckets[b * 2]
+        const hi = peaks.buckets[b * 2 + 1]
+        if (lo < mn) mn = lo
+        if (hi > mx) mx = hi
+      }
+      const top = mid - mx * halfH
+      const bot = mid - mn * halfH
+      ctx.fillRect(x, top, 1, Math.max(1, bot - top))
+    }
+  }, [peaks, width, height, pxPerSec, startInBufferSec, color])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width, height, display: 'block' }}
+      aria-hidden
+    />
+  )
+}
+
+/**
+ * Piano-roll preview of the loaded MIDI. Each note becomes a short
+ * horizontal segment whose y is its pitch and whose width is its
+ * duration. The pitch axis is auto-fit to the song's actual range
+ * with a small pad — using a fixed 88-key range would leave most
+ * songs (which use 30–60 semitones) looking like a thin band.
+ *
+ * Repaints only on dimensions / song / color change. Intermediate
+ * scrubs don't trigger a repaint — the playhead overlay is drawn by
+ * a separate React element, not on the canvas.
+ */
+function MidiPreviewCanvas({
+  notes,
+  width,
+  height,
+  pxPerSec,
+  /** Time at canvas x = 0. Lets the same canvas render any visible
+   *  window without reallocating; consumers update this on zoom/pan. */
+  startTimeSec,
+  color,
+}: {
+  notes: NoteEvent[]
+  width: number
+  height: number
+  pxPerSec: number
+  startTimeSec: number
+  color: string
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(width * dpr))
+    canvas.height = Math.max(1, Math.floor(height * dpr))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+    ctx.clearRect(0, 0, width, height)
+    if (notes.length === 0 || width <= 0 || pxPerSec <= 0) return
+
+    // Pitch range: song's actual span plus a small padding above /
+    // below so the notes don't kiss the lane edges. Computed over
+    // ALL notes (not just visible) so panning/zooming doesn't shift
+    // the y-axis around — that would feel disorienting.
+    let minMidi = 127
+    let maxMidi = 0
+    for (const n of notes) {
+      if (n.midi < minMidi) minMidi = n.midi
+      if (n.midi > maxMidi) maxMidi = n.midi
+    }
+    const PAD = 1
+    minMidi = Math.max(0, minMidi - PAD)
+    maxMidi = Math.min(127, maxMidi + PAD)
+    const pitchSpan = Math.max(1, maxMidi - minMidi)
+    const rowHeight = Math.max(1.5, height / (pitchSpan + 1))
+    const noteThickness = Math.max(1.5, rowHeight * 0.85)
+
+    // Visible time window in song coordinates.
+    const endTimeSec = startTimeSec + width / pxPerSec
+    ctx.fillStyle = color
+    for (const n of notes) {
+      const noteEnd = n.time + n.duration
+      if (noteEnd < startTimeSec) continue
+      if (n.time > endTimeSec) continue
+      const x = (n.time - startTimeSec) * pxPerSec
+      const w = Math.max(1, n.duration * pxPerSec)
+      const yCenter =
+        ((maxMidi - n.midi) / pitchSpan) * (height - rowHeight) + rowHeight / 2
+      const y = yCenter - noteThickness / 2
+      // Per-note alpha follows velocity so dynamics show up in the
+      // preview — Ableton's clip preview does the same. Min alpha
+      // 0.35 keeps soft notes legible.
+      ctx.globalAlpha = 0.35 + 0.65 * Math.max(0, Math.min(1, n.velocity))
+      ctx.fillRect(x, y, w, noteThickness)
+    }
+    ctx.globalAlpha = 1
+  }, [notes, width, height, pxPerSec, startTimeSec, color])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width, height, display: 'block' }}
+      aria-hidden
+    />
+  )
+}
+
+/**
+ * Time ruler — tick marks + labels mapped to the visible window so
+ * clicking lands on precise sub-second positions even when the seek
+ * bar above (full-song scale) is too coarse. Tick interval auto-
+ * scales with zoom: aim for ~10 major divisions across the view.
+ */
+function pickTickInterval(viewDuration: number): number {
+  // Round-number candidates spanning hundreds of milliseconds to
+  // minutes. We pick the smallest one ≥ viewDuration/10 so a typical
+  // view shows 10–20 major divisions — dense enough for targeting,
+  // sparse enough that labels don't collide.
+  const candidates = [
+    0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300,
+  ]
+  const target = viewDuration / 10
+  for (const c of candidates) if (c >= target) return c
+  return candidates[candidates.length - 1]
+}
+
+function formatRulerLabel(t: number, major: number): string {
+  if (major < 0.1) return `${t.toFixed(2)}s`
+  if (major < 1) return `${t.toFixed(1)}s`
+  // mm:ss for ≥1s steps.
+  const m = Math.floor(t / 60)
+  const s = Math.floor(t % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function RulerCanvas({
+  width,
+  height,
+  startTimeSec,
+  pxPerSec,
+}: {
+  width: number
+  height: number
+  startTimeSec: number
+  pxPerSec: number
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(width * dpr))
+    canvas.height = Math.max(1, Math.floor(height * dpr))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+    ctx.clearRect(0, 0, width, height)
+    if (width <= 0 || pxPerSec <= 0) return
+
+    const viewDur = width / pxPerSec
+    const major = pickTickInterval(viewDur)
+    const minor = major / 5
+    const endTime = startTimeSec + viewDur
+
+    // Minor ticks first (drawn under majors).
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'
+    const firstMinor = Math.ceil(startTimeSec / minor) * minor
+    for (let t = firstMinor; t <= endTime + 1e-6; t += minor) {
+      const x = Math.round((t - startTimeSec) * pxPerSec)
+      ctx.fillRect(x, height - 4, 1, 4)
+    }
+    // Major ticks + labels.
+    ctx.fillStyle = 'rgba(255,255,255,0.55)'
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace'
+    ctx.textBaseline = 'top'
+    const firstMajor = Math.ceil(startTimeSec / major) * major
+    for (let t = firstMajor; t <= endTime + 1e-6; t += major) {
+      const x = Math.round((t - startTimeSec) * pxPerSec)
+      ctx.fillRect(x, height - 8, 1, 8)
+      ctx.fillText(formatRulerLabel(t, major), x + 3, 1)
+    }
+  }, [width, height, startTimeSec, pxPerSec])
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width, height, display: 'block' }}
+      aria-hidden
+    />
+  )
+}
+
+// Linear gain → dB string. -∞ for 0.
+function formatDb(volume: number): string {
+  if (volume <= 0.001) return '−∞ dB'
+  const db = 20 * Math.log10(volume)
+  return `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`
+}
+
+/**
+ * Right-click panel for MIDI / Audio lane controls. Replaces the
+ * legacy left-rail headers — the lanes themselves identify their
+ * track via waveform / piano-roll, so the labels and always-visible
+ * sliders were redundant. Adjustable here:
+ *   - mute / unmute
+ *   - volume slider (0..1.5) with a unity (0 dB) tick mark and dB
+ *     numeric readout
+ *   - reset to unity (0 dB)
+ *   - remove audio (audio lane only)
+ *
+ * Dismissed on outside pointerdown, Escape, or selecting an action.
+ */
+function LaneContextMenu({
+  target,
+  position,
+  onClose,
+}: {
+  target: 'midi' | 'audio'
+  position: { x: number; y: number }
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  // Clamp the menu's actual position to the viewport so right-clicks
+  // near the edges still reveal the full panel. Measured after mount
+  // (size depends on content) and re-applied on window resize.
+  const [pos, setPos] = useState<{ x: number; y: number }>(position)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const clamp = () => {
+      const rect = el.getBoundingClientRect()
+      const margin = 8
+      const maxX = window.innerWidth - rect.width - margin
+      const maxY = window.innerHeight - rect.height - margin
+      setPos({
+        x: Math.max(margin, Math.min(maxX, position.x)),
+        y: Math.max(margin, Math.min(maxY, position.y)),
+      })
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [position])
+  const midiEnabled = useStore((s) => s.settings.midiEnabled)
+  const midiVolume = useStore((s) => s.settings.midiVolume)
+  const audioVolume = useStore((s) => s.settings.userAudioVolume)
+  const audioFileName = useUserAudio((s) => s.fileName)
+  const clearAudio = useUserAudio((s) => s.clear)
+  const updateSettings = useStore((s) => s.updateSettings)
+  const beginEdit = useStore((s) => s.beginSettingsEdit)
+  const endEdit = useStore((s) => s.endSettingsEdit)
+
+  // Audio mute toggle ducks volume to 0 and restores the last non-zero
+  // level on toggle back — same pattern as the legacy header.
+  const lastNonZeroAudioRef = useRef(audioVolume > 0.001 ? audioVolume : 1.0)
+  useEffect(() => {
+    if (audioVolume > 0.001) lastNonZeroAudioRef.current = audioVolume
+  }, [audioVolume])
+
+  // Click-outside / Esc to dismiss. Capture phase so a click on
+  // another lane's hover button (which would open a different menu)
+  // closes this one first.
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current) return
+      if (!ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('pointerdown', onDown, { capture: true })
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, { capture: true })
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  const isMidi = target === 'midi'
+  const enabled = isMidi ? midiEnabled : audioVolume > 0.001
+  const volume = isMidi ? midiVolume : audioVolume
+  const titleText = isMidi ? 'MIDI' : (audioFileName ?? 'Audio')
+
+  const onToggleMute = () => {
+    beginEdit()
+    if (isMidi) {
+      updateSettings({ midiEnabled: !midiEnabled })
+    } else {
+      updateSettings({
+        userAudioVolume: audioVolume > 0.001 ? 0 : lastNonZeroAudioRef.current,
+      })
+    }
+    endEdit()
+  }
+  const onVolumeChange = (v: number) => {
+    beginEdit()
+    if (isMidi) updateSettings({ midiVolume: v })
+    else updateSettings({ userAudioVolume: v })
+  }
+  const onVolumeCommit = () => endEdit()
+  const onReset = () => {
+    beginEdit()
+    if (isMidi) updateSettings({ midiVolume: 1.0, midiEnabled: true })
+    else updateSettings({ userAudioVolume: 1.0 })
+    endEdit()
+  }
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      className="fixed z-50 w-60 rounded-md border border-white/10 bg-neutral-900/95 p-1.5 text-xs text-neutral-200 shadow-xl backdrop-blur-md"
+      style={{ left: pos.x, top: pos.y }}
+      // Stop the surrounding lane / seek bar from receiving the
+      // pointerdown that targets the menu (would otherwise start a
+      // drag underneath us).
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div
+        className="mb-1 truncate px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500"
+        title={titleText}
+      >
+        {titleText}
+      </div>
+      <button
+        type="button"
+        onClick={onToggleMute}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-neutral-700/60"
+      >
+        {enabled ? (
+          volume <= 0.4 ? (
+            <VolumeLowIcon className="h-3 w-3" />
+          ) : (
+            <VolumeHighIcon className="h-3 w-3" />
+          )
+        ) : (
+          <VolumeMuteIcon className="h-3 w-3" />
+        )}
+        <span>{enabled ? 'Mute' : 'Unmute'}</span>
+      </button>
+      <div className="px-2 py-1.5">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-neutral-400">Volume</span>
+          <span className="font-mono text-[11px] text-neutral-300">
+            {formatDb(volume)}
+          </span>
+        </div>
+        <Slider
+          value={volume}
+          minValue={0}
+          maxValue={1.5}
+          step={0.01}
+          onChange={(v) => onVolumeChange(typeof v === 'number' ? v : v[0])}
+          onChangeEnd={onVolumeCommit}
+          aria-label="Volume"
+        >
+          <SliderTrack className="relative flex h-3 w-full cursor-pointer items-center">
+            {({ state }) => (
+              <>
+                <div className="relative h-1 w-full overflow-visible rounded-full bg-neutral-700">
+                  <div
+                    className={
+                      enabled
+                        ? 'h-full rounded-full bg-sky-500/80'
+                        : 'h-full rounded-full bg-neutral-500/60'
+                    }
+                    style={{ width: `${state.getThumbPercent(0) * 100}%` }}
+                  />
+                  {/* Unity (0 dB / 1.0) tick — the gain level the user
+                      most often wants to land back at. */}
+                  <div
+                    aria-hidden
+                    className="absolute -top-0.5 h-2 w-px bg-white/50"
+                    style={{ left: `${(1 / 1.5) * 100}%` }}
+                  />
+                </div>
+                <SliderThumb className="sr-only" />
+              </>
+            )}
+          </SliderTrack>
+        </Slider>
+      </div>
+      <button
+        type="button"
+        onClick={onReset}
+        className="flex w-full items-center rounded px-2 py-1.5 text-left text-neutral-300 hover:bg-neutral-700/60"
+      >
+        Reset to 0 dB
+      </button>
+      {!isMidi && audioFileName && (
+        <button
+          type="button"
+          onClick={() => {
+            clearAudio()
+            onClose()
+          }}
+          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-rose-300 hover:bg-rose-900/30"
+        >
+          <CloseIcon className="h-2.5 w-2.5" /> Remove audio
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Small mute affordance pinned to the lane's left edge. Hidden by
+ * default (lanes self-identify visually); fades in on hover or stays
+ * visible while muted so the user can tell at a glance which track
+ * is silent. Click toggles mute; right-click opens the full menu.
+ */
+/**
+ * Speaker icon + horizontal volume meter pinned to the lane's top-
+ * left. The speaker is always visible (mute toggle on click); on
+ * hover the meter expands to the right, letting the user drag the
+ * volume without opening the context menu. Right-click still opens
+ * the full menu (the same one the kebab affordance opens) so power
+ * options like Reset / Remove aren't lost.
+ */
+function LaneVolumeAffordance({
+  muted,
+  volume,
+  onToggleMute,
+  onVolumeChange,
+  onContextMenu,
+  onOpenMenu,
+}: {
+  muted: boolean
+  volume: number
+  onToggleMute: () => void
+  onVolumeChange: (v: number) => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onOpenMenu: (e: React.MouseEvent) => void
+}) {
+  const [hovered, setHovered] = useState(false)
+  const METER_WIDTH = 80
+  return (
+    <div className="absolute left-1.5 top-1.5 z-10 flex items-center">
+      {/* Hover-scoped sub-row: only the speaker + meter participate
+          in the hover-expand gesture. The kebab sits OUTSIDE this
+          wrapper so hovering it doesn't open the meter. */}
+      <div
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+        className="flex items-center"
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleMute()
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onContextMenu={onContextMenu}
+          aria-label={muted ? 'Unmute' : 'Mute'}
+          title={muted ? 'Unmute' : 'Mute'}
+          className="flex h-5 w-5 items-center justify-center rounded bg-neutral-900/85 text-neutral-200 ring-1 ring-white/10 hover:bg-neutral-700"
+        >
+          {muted ? (
+            <VolumeMuteIcon className="h-3 w-3" />
+          ) : volume <= 0.4 ? (
+            <VolumeLowIcon className="h-3 w-3" />
+          ) : (
+            <VolumeHighIcon className="h-3 w-3" />
+          )}
+        </button>
+        {/* Slide-out meter. width + opacity transition; the Slider
+            stays mounted so drags initiated on the track keep
+            running even if the cursor briefly crosses the
+            collapsing bound. */}
+        <div
+          className="ml-1 overflow-hidden rounded bg-neutral-900/85 ring-1 ring-white/10 transition-[width,opacity] duration-150"
+          style={{
+            width: hovered ? METER_WIDTH : 0,
+            opacity: hovered ? 1 : 0,
+          }}
+        >
+          <div
+            className="flex h-5 items-center px-2"
+            style={{ width: METER_WIDTH }}
+          >
+            <Slider
+              className="w-full"
+              value={volume}
+              minValue={0}
+              maxValue={1.5}
+              step={0.01}
+              onChange={(v) =>
+                onVolumeChange(typeof v === 'number' ? v : v[0])
+              }
+              aria-label="Volume"
+            >
+              <SliderTrack
+                className="relative flex h-3 w-full cursor-pointer items-center"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                {({ state }) => (
+                  <>
+                    <div className="relative h-1 w-full overflow-hidden rounded-full bg-neutral-700">
+                      <div
+                        className={
+                          muted
+                            ? 'h-full bg-neutral-500/60'
+                            : 'h-full bg-sky-500/80'
+                        }
+                        style={{
+                          width: `${state.getThumbPercent(0) * 100}%`,
+                        }}
+                      />
+                    </div>
+                    <SliderThumb className="sr-only" />
+                  </>
+                )}
+              </SliderTrack>
+            </Slider>
+          </div>
+        </div>
+      </div>
+      {/* Kebab — context menu opener. Outside the hover-scoped row
+          so its hover doesn't expand the meter. Sits inside the
+          outer flex so it shifts right alongside the meter when the
+          user is mid-volume-edit, never being covered by the
+          expanding pill. */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenMenu(e)
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        aria-label="Lane options"
+        title="Lane options"
+        className="ml-1 flex h-5 w-5 items-center justify-center rounded bg-neutral-900/85 text-neutral-300 ring-1 ring-white/10 hover:bg-neutral-700 hover:text-neutral-100"
+      >
+        <EllipsisVerticalIcon className="h-3 w-3" />
+      </button>
+    </div>
+  )
+}
+
+// Zoom limits. 1 = fit-to-width; the upper bound is generous enough
+// to land at ~10 px / 100 ms for a 4-minute song in a 1000 px-wide
+// timeline (still useful for sub-second sync work without making the
+// canvases unreasonably wide).
+const MIN_ZOOM = 1
+const MAX_ZOOM = 100
+// Wheel deltaY → zoom factor exponent. Tuned so a single mouse wheel
+// notch (~100 px) gives ~1.25× zoom, and a trackpad pinch-equivalent
+// reaches the visible range in a fluent gesture.
+const ZOOM_PER_DELTA = 0.002
+
+export function Timeline() {
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [areaWidth, setAreaWidth] = useState(0)
+
+  const song = useStore((s) => s.song)
+  const transport = useStore((s) => s.transport)
+  const noteColor = useStore((s) => s.settings.noteColor)
+  const peaks = useUserAudio((s) => s.peaks)
+  const audioFileName = useUserAudio((s) => s.fileName)
+  const audioLoading = useUserAudio((s) => s.loading)
+  const audioError = useUserAudio((s) => s.error)
+  const offsetSec = useStore((s) => s.settings.userAudioOffsetSec)
+  const updateSettings = useStore((s) => s.updateSettings)
+  const beginEdit = useStore((s) => s.beginSettingsEdit)
+  const endEdit = useStore((s) => s.endSettingsEdit)
+  const currentTime = useCurrentTime()
+  const midiEnabled = useStore((s) => s.settings.midiEnabled)
+  const midiVolume = useStore((s) => s.settings.midiVolume)
+  const audioVolume = useStore((s) => s.settings.userAudioVolume)
+  const midiMuted = !midiEnabled || midiVolume <= 0.001
+  const audioMuted = audioVolume <= 0.001
+  const lastNonZeroAudioRef = useRef(audioVolume > 0.001 ? audioVolume : 1.0)
+  useEffect(() => {
+    if (audioVolume > 0.001) lastNonZeroAudioRef.current = audioVolume
+  }, [audioVolume])
+
+  // ── Right-click menu ──
+  // Single shared menu state so opening one closes the other.
+  // Position is in viewport coords (the menu uses `position: fixed`).
+  const [menu, setMenu] = useState<{
+    target: 'midi' | 'audio'
+    x: number
+    y: number
+  } | null>(null)
+  const openMenuAt = (
+    target: 'midi' | 'audio',
+    e: React.MouseEvent,
+  ) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ target, x: e.clientX, y: e.clientY })
+  }
+  const closeMenu = () => setMenu(null)
+
+  // ── Zoom + pan state ──
+  // `zoom` is a multiplier on the fit-to-width pxPerSec; `scrollSec`
+  // is the song time at the timeline area's left edge. Together they
+  // determine the visible window without re-fitting on song changes.
+  const [zoom, setZoom] = useState(1)
+  const [scrollSec, setScrollSec] = useState(0)
+
+  const songDuration = song?.duration ?? 0
+  const audioDuration = peaks?.totalDurationSec ?? 0
+  const midiOffsetSec = useStore((s) => s.settings.midiOffsetSec)
+  const audioEnd = audioDuration > 0 ? offsetSec + audioDuration : 0
+  const midiEnd = songDuration > 0 ? songDuration + midiOffsetSec : 0
+  const totalDuration = Math.max(0.001, midiEnd, audioEnd)
+
+  const showAudioLane =
+    !!audioFileName || !!audioLoading || !!audioError || !!peaks
+
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      setAreaWidth(el.clientWidth)
+    })
+    ro.observe(el)
+    setAreaWidth(el.clientWidth)
+    return () => ro.disconnect()
+  }, [])
+
+  // Effective scale + visible window. `pxPerSec` is what every drawing
+  // calculation reads — applying zoom here lets the rest of the layout
+  // stay zoom-agnostic. `scrollSec` is clamped so the right edge can't
+  // scroll past the song (the "extra empty space" UX is unhelpful for
+  // a fixed-duration timeline).
+  // Anchor the visual scale to the tracks' NATURAL durations (no
+  // offsets). That way dragging an offset slides the clip along the
+  // timeline without rescaling — the MIDI's pixel width stays the
+  // same when the user shifts the audio (and vice versa). The full
+  // timeline (`totalDuration`, which includes offsets) is still used
+  // for scroll extents below, so the user can pan to see clips that
+  // have been pushed past the original end.
+  const baseDuration = Math.max(0.001, songDuration, audioDuration)
+  const fitPxPerSec = areaWidth / baseDuration
+  const pxPerSec = fitPxPerSec * zoom
+  const viewDuration = areaWidth > 0 ? areaWidth / pxPerSec : totalDuration
+  const maxScroll = Math.max(0, totalDuration - viewDuration)
+  const clampedScroll = Math.max(0, Math.min(maxScroll, scrollSec))
+  // Snap state when the clamp differs by more than a frame's worth —
+  // happens when zooming out past the current scroll, or when the
+  // song shrinks underneath us. Avoids drifting state.
+  useEffect(() => {
+    if (Math.abs(clampedScroll - scrollSec) > 0.001) setScrollSec(clampedScroll)
+  }, [clampedScroll, scrollSec])
+
+  // Snap zoom back to 1 (and scroll to 0) whenever the song becomes
+  // null — a fresh / empty session shouldn't keep the prior zoom.
+  useEffect(() => {
+    if (!song) {
+      setZoom(1)
+      setScrollSec(0)
+    }
+  }, [song])
+
+  const playheadInView = currentTime - clampedScroll
+  const playheadVisible =
+    playheadInView >= 0 && playheadInView <= viewDuration
+  const playheadX = playheadInView * pxPerSec
+
+  // ── Auto-follow during playback ──
+  // Opt-in via `settings.followPlayhead`. When on, the timeline
+  // glides continuously under a stationary playhead — the playhead
+  // is anchored at the centre of the visible window and the scroll
+  // is recomputed every frame to match. Near the song's edges the
+  // scroll clamps and the playhead drifts off-centre naturally
+  // (no fake snap-back). Off by default so manual minimap edits
+  // aren't hijacked.
+  const followPlayhead = useStore((s) => s.settings.followPlayhead)
+  // Suspend follow while the pointer is over the minimap. Without
+  // this, the visible-window indicator (and the handles attached to
+  // its edges) glides under the cursor as the playhead advances —
+  // which reads as "hovering changes the zoom" because the handle
+  // appears to move out from under the cursor. Toggle state itself
+  // is preserved; follow resumes the moment the pointer leaves.
+  const [minimapHovered, setMinimapHovered] = useState(false)
+  useEffect(() => {
+    if (!followPlayhead) return
+    if (minimapHovered) return
+    if (transport !== 'playing') return
+    if (zoom <= 1.001) return
+    const target = currentTime - viewDuration * 0.5
+    const next = Math.max(0, Math.min(maxScroll, target))
+    setScrollSec(next)
+  }, [followPlayhead, minimapHovered, currentTime, transport, zoom, viewDuration, maxScroll])
+
+  // ── Wheel: zoom (default) / pan (shift or horizontal delta) ──
+  // Refs mirror state so we can attach the wheel listener once with
+  // `passive: false` (required for preventDefault) instead of re-
+  // binding on every change.
+  const stateRef = useRef({
+    zoom,
+    scrollSec: clampedScroll,
+    pxPerSec,
+    fitPxPerSec,
+    totalDuration,
+    areaWidth,
+    viewDuration,
+    maxScroll,
+    songLoaded: !!song,
+  })
+  stateRef.current = {
+    zoom,
+    scrollSec: clampedScroll,
+    pxPerSec,
+    fitPxPerSec,
+    totalDuration,
+    areaWidth,
+    viewDuration,
+    maxScroll,
+    songLoaded: !!song,
+  }
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      const s = stateRef.current
+      if (!s.songLoaded || s.areaWidth <= 0) return
+      // preventDefault stops the canvas-area wheel-to-seek listener
+      // (Viewport.tsx) from firing under the timeline AND blocks the
+      // browser's default page scroll. stopPropagation is belt-and-
+      // braces for nested listeners.
+      e.preventDefault()
+      e.stopPropagation()
+      const rect = el.getBoundingClientRect()
+      const cursorX = e.clientX - rect.left
+      // Treat horizontal trackpad gestures and shift+wheel as pan.
+      // Most mice produce only deltaY; pure-vertical wheel = zoom.
+      const dominantHorizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+      const wantsPan = e.shiftKey || dominantHorizontal
+      if (wantsPan) {
+        const dx = dominantHorizontal ? e.deltaX : e.deltaY
+        const dt = dx / s.pxPerSec
+        const next = Math.max(0, Math.min(s.maxScroll, s.scrollSec + dt))
+        setScrollSec(next)
+        return
+      }
+      // Zoom centered on the cursor's current time so the time under
+      // the cursor stays put across the gesture — natural fine-detail
+      // workflow.
+      const cursorTime = s.scrollSec + cursorX / s.pxPerSec
+      const factor = Math.exp(-e.deltaY * ZOOM_PER_DELTA)
+      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, s.zoom * factor))
+      setZoom(newZoom)
+      const newPxPerSec = s.fitPxPerSec * newZoom
+      const newViewDuration = s.areaWidth / newPxPerSec
+      const newMaxScroll = Math.max(0, s.totalDuration - newViewDuration)
+      const newScroll = cursorTime - cursorX / newPxPerSec
+      setScrollSec(Math.max(0, Math.min(newMaxScroll, newScroll)))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // ── Seek interactions ──
+  // Both surfaces (seek bar + MIDI lane) ultimately produce the same
+  // (cursor x → song time) mapping, so a click at the same screen x
+  // on either surface lands on the same time.
+  //
+  // The seek bar spans the full song while the MIDI lane spans only
+  // the visible window. We bridge that asymmetry by *auto-panning*
+  // the visible window when the seek bar is clicked: the new scroll
+  // is set so the cursor's seek-bar fraction matches the cursor's
+  // visible-window fraction (`scroll = fraction × maxScroll`). After
+  // that adjustment, the playhead lands at the same x in both
+  // surfaces — clicking the seek bar at 50% drops the playhead at
+  // 50% of the seek bar AND 50% of the MIDI lane, on the same time.
+  // The MIDI lane handler is unchanged: it already uses the visible-
+  // window mapping, which is correct for clicks that land inside the
+  // current view (no pan needed).
+  const seekFraction = (clientX: number, el: HTMLElement) => {
+    const r = el.getBoundingClientRect()
+    return (clientX - r.left) / r.width
+  }
+  const seekToTime = (t: number) => {
+    // Clamp at the timeline's right edge — which now includes the MIDI
+    // offset and any audio tail past the MIDI — so users can scrub
+    // through the entire visible window.
+    const clamped = Math.max(0, Math.min(totalDuration, t))
+    audioEngine.seek(clamped)
+    useStore.getState().setCurrentTime(clamped)
+  }
+  const seekVisibleWindow = (clientX: number, el: HTMLElement) => {
+    seekToTime(clampedScroll + seekFraction(clientX, el) * viewDuration)
+  }
+  const seekDraggingRef = useRef<boolean>(false)
+  const rulerHandlers = {
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!song) return
+      // Right-click is reserved for the lane context menu; ignore so
+      // we don't grab pointer capture and trigger an unwanted seek.
+      if (e.button !== 0) return
+      seekDraggingRef.current = true
+      e.currentTarget.setPointerCapture(e.pointerId)
+      seekVisibleWindow(e.clientX, e.currentTarget)
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!seekDraggingRef.current) return
+      seekVisibleWindow(e.clientX, e.currentTarget)
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!seekDraggingRef.current) return
+      seekDraggingRef.current = false
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      } catch {
+        /* capture may already be released — ignore */
+      }
+    },
+  }
+
+  // ── Audio clip drag (positive offset only in this MVP) ──
+  const audioDragRef = useRef<{
+    startX: number
+    startOffset: number
+    captured: boolean
+  } | null>(null)
+  const onAudioPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!peaks) return
+    if (e.button !== 0) return
+    audioDragRef.current = {
+      startX: e.clientX,
+      startOffset: offsetSec,
+      captured: false,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+    audioDragRef.current.captured = true
+    beginEdit()
+  }
+  const onAudioPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = audioDragRef.current
+    if (!drag || !peaks) return
+    const dx = e.clientX - drag.startX
+    const dt = pxPerSec > 0 ? dx / pxPerSec : 0
+    const next = Math.max(0, drag.startOffset + dt)
+    if (next !== offsetSec) updateSettings({ userAudioOffsetSec: next })
+  }
+  const onAudioPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = audioDragRef.current
+    if (!drag) return
+    if (drag.captured) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      } catch {
+        /* capture may already be released — ignore */
+      }
+    }
+    audioDragRef.current = null
+    endEdit()
+  }
+
+  // Disable follow on intentional minimap interactions (pan drag,
+  // edge resize). Wheel zoom + wheel pan deliberately don't disable
+  // — zoom-around-cursor with follow on still produces a sensible
+  // "zoom around the playhead" feel because follow re-centers on the
+  // next frame, and pan is a transient gesture that the user can
+  // toggle Follow off explicitly if they want it to stick.
+  const disableFollowIfOn = () => {
+    const s = useStore.getState()
+    if (s.settings.followPlayhead) {
+      s.updateSettings({ followPlayhead: false })
+    }
+  }
+
+  // ── Minimap pan (full-song overview → visible window position) ──
+  // Clicking jumps the visible window so its centre lines up with the
+  // click; subsequent drag pans continuously. NEVER seeks — the
+  // playhead stays where it is so a glance at the minimap doesn't
+  // accidentally interrupt playback. The thin playhead line drawn
+  // inside is purely an orientation aid.
+  const minimapDragRef = useRef<{ startX: number; startScroll: number } | null>(
+    null,
+  )
+  const onMinimapPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!song) return
+    if (e.button !== 0) return
+    if (areaWidth <= 0 || maxScroll <= 0) return
+    disableFollowIfOn()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const fraction = (e.clientX - rect.left) / rect.width
+    const target = fraction * totalDuration - viewDuration / 2
+    const clampedTarget = Math.max(0, Math.min(maxScroll, target))
+    setScrollSec(clampedTarget)
+    minimapDragRef.current = {
+      startX: e.clientX,
+      startScroll: clampedTarget,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onMinimapPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = minimapDragRef.current
+    if (!drag) return
+    const dx = e.clientX - drag.startX
+    const dt = (dx / areaWidth) * totalDuration
+    const next = Math.max(0, Math.min(maxScroll, drag.startScroll + dt))
+    setScrollSec(next)
+  }
+  const onMinimapPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!minimapDragRef.current) return
+    minimapDragRef.current = null
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+  }
+
+  // ── Minimap edge resize (drag the visible-window edges → zoom) ──
+  // Dragging the left edge moves the window's start (right edge fixed):
+  // dragging right zooms in, left zooms out. The right edge is the
+  // mirror. Lets the user reframe the view directly on the overview
+  // bar without going through wheel-zoom + pan.
+  const minimapResizeRef = useRef<{
+    side: 'left' | 'right'
+    startX: number
+    startScroll: number
+    startView: number
+  } | null>(null)
+  const onMinimapEdgePointerDown =
+    (side: 'left' | 'right') =>
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!song || e.button !== 0) return
+      if (areaWidth <= 0 || totalDuration <= 0) return
+      e.stopPropagation()
+      disableFollowIfOn()
+      minimapResizeRef.current = {
+        side,
+        startX: e.clientX,
+        startScroll: clampedScroll,
+        startView: viewDuration,
+      }
+      e.currentTarget.setPointerCapture(e.pointerId)
+    }
+  const onMinimapEdgePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = minimapResizeRef.current
+    if (!drag || areaWidth <= 0 || totalDuration <= 0) return
+    e.stopPropagation()
+    const dx = e.clientX - drag.startX
+    // Map minimap-x delta (in px) to song-time delta. The minimap
+    // covers `[0, totalDuration]` across `areaWidth` px.
+    const dt = (dx / areaWidth) * totalDuration
+    // Min view = the smallest window any zoom level allows.
+    const minView = totalDuration / MAX_ZOOM
+    if (drag.side === 'left') {
+      const end = drag.startScroll + drag.startView
+      let newStart = drag.startScroll + dt
+      newStart = Math.max(0, Math.min(end - minView, newStart))
+      const newView = end - newStart
+      setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, totalDuration / newView)))
+      setScrollSec(newStart)
+    } else {
+      const start = drag.startScroll
+      let newEnd = start + drag.startView + dt
+      newEnd = Math.max(start + minView, Math.min(totalDuration, newEnd))
+      const newView = newEnd - start
+      setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, totalDuration / newView)))
+      setScrollSec(start)
+    }
+  }
+  const onMinimapEdgePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!minimapResizeRef.current) return
+    e.stopPropagation()
+    minimapResizeRef.current = null
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+  }
+
+  // ── MIDI clip drag (positive offset only, like audio) ──
+  const midiDragRef = useRef<{
+    startX: number
+    startOffset: number
+  } | null>(null)
+  const onMidiPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!song) return
+    if (e.button !== 0) return
+    e.stopPropagation()
+    midiDragRef.current = {
+      startX: e.clientX,
+      startOffset: midiOffsetSec,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+    beginEdit()
+  }
+  const onMidiPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = midiDragRef.current
+    if (!drag || !song) return
+    const dx = e.clientX - drag.startX
+    const dt = pxPerSec > 0 ? dx / pxPerSec : 0
+    const next = Math.max(0, drag.startOffset + dt)
+    if (next !== midiOffsetSec) updateSettings({ midiOffsetSec: next })
+  }
+  const onMidiPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!midiDragRef.current) return
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* capture may already be released — ignore */
+    }
+    midiDragRef.current = null
+    endEdit()
+  }
+
+  // Visible-window clip rectangles. Shared windowing math: only the
+  // portion of each clip overlapping the visible window gets drawn,
+  // keeping canvas memory bounded at high zoom levels (without this, a
+  // 4-minute clip at 50× zoom would allocate a 200 000-px-wide canvas).
+  const audioClipStart = offsetSec
+  const audioClipEnd = offsetSec + audioDuration
+  const audioVisStart = Math.max(clampedScroll, audioClipStart)
+  const audioVisEnd = Math.min(clampedScroll + viewDuration, audioClipEnd)
+  const audioClipLeft = (audioVisStart - clampedScroll) * pxPerSec
+  const audioClipWidth = Math.max(0, (audioVisEnd - audioVisStart) * pxPerSec)
+  const audioStartInBuffer = Math.max(0, audioVisStart - audioClipStart)
+
+  const midiClipStart = midiOffsetSec
+  const midiClipEnd = midiOffsetSec + songDuration
+  const midiVisStart = Math.max(clampedScroll, midiClipStart)
+  const midiVisEnd = Math.min(clampedScroll + viewDuration, midiClipEnd)
+  const midiClipLeft = (midiVisStart - clampedScroll) * pxPerSec
+  const midiClipWidth = Math.max(0, (midiVisEnd - midiVisStart) * pxPerSec)
+  // Notes are stored in MIDI-time; the canvas's "time at x=0" is the
+  // visible-window start expressed in MIDI-time so existing positioning
+  // math `(n.time - startTimeSec) * pxPerSec` lands on screen-x.
+  const midiStartInSong = Math.max(0, midiVisStart - midiClipStart)
+  const totalRowHeight =
+    MINIMAP_HEIGHT +
+    ROW_GAP +
+    RULER_HEIGHT +
+    ROW_GAP +
+    LANE_HEIGHT_MIDI +
+    (showAudioLane ? ROW_GAP + LANE_HEIGHT_AUDIO : 0)
+
+  const onToggleMidiMute = () => {
+    beginEdit()
+    updateSettings({ midiEnabled: !midiEnabled })
+    endEdit()
+  }
+  const onToggleAudioMute = () => {
+    beginEdit()
+    updateSettings({
+      userAudioVolume: audioMuted ? lastNonZeroAudioRef.current : 0,
+    })
+    endEdit()
+  }
+
+  return (
+    <div className="relative w-full select-none">
+      {/* Timeline area — three stacked rows, single playhead overlay.
+          The legacy left-rail headers are gone; lane controls live in
+          a right-click context menu and lanes self-identify via their
+          waveform / piano-roll content. */}
+      <div className="relative min-w-0 flex-1" ref={wrapRef}>
+        <div
+          className="flex flex-col"
+          style={{ height: totalRowHeight, gap: ROW_GAP }}
+        >
+          {/* Time ruler — maps to the visible window for sub-second
+              targeting. The full-song progress slider lives in the
+              transport overlay (see SeekBar.tsx); this ruler is the
+              fine-grained editing scrub surface and stays visible at
+              all times alongside the lanes. Click + drag scrubs.
+              Double-click resets zoom + scroll. */}
+          <div
+            onPointerDown={rulerHandlers.onPointerDown}
+            onPointerMove={rulerHandlers.onPointerMove}
+            onPointerUp={rulerHandlers.onPointerUp}
+            onPointerCancel={rulerHandlers.onPointerUp}
+            onDoubleClick={() => {
+              setZoom(1)
+              setScrollSec(0)
+            }}
+            style={{ height: RULER_HEIGHT, touchAction: 'none' }}
+            className={
+              song
+                ? 'relative cursor-pointer overflow-hidden rounded bg-neutral-950'
+                : 'relative overflow-hidden rounded bg-neutral-950'
+            }
+            aria-label="Ruler — click to seek within view"
+            title={song ? 'Drag to seek · double-click to fit' : undefined}
+          >
+            {song && areaWidth > 0 && (
+              <RulerCanvas
+                width={areaWidth}
+                height={RULER_HEIGHT}
+                startTimeSec={clampedScroll}
+                pxPerSec={pxPerSec}
+              />
+            )}
+            {/* Fit / reset-zoom affordance — visible when zoomed in
+                so the user has a one-click way back to the overview.
+                Double-clicking the ruler does the same, but that's
+                undiscoverable. Pinned to the right edge so the ruler
+                labels on the left don't compete with it. */}
+            {song && zoom > 1.001 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setZoom(1)
+                  setScrollSec(0)
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                aria-label="Reset zoom"
+                title="Reset zoom"
+                className="absolute right-1 top-1/2 z-10 flex h-4 -translate-y-1/2 items-center rounded bg-neutral-800/90 px-1.5 font-mono text-[9px] font-medium text-neutral-300 outline-none hover:bg-neutral-700 hover:text-neutral-100"
+              >
+                1×
+              </button>
+            )}
+          </div>
+
+          {/* MIDI lane — piano-roll preview as a draggable clip,
+              mirroring the audio lane's interaction model. Click-to-
+              seek belongs to the seek bar above; the lane itself is
+              drag-only so the gesture is unambiguous. Right-click
+              opens the lane context menu (mute / volume / reset). */}
+          <div
+            onContextMenu={(e) => openMenuAt('midi', e)}
+            style={{ height: LANE_HEIGHT_MIDI }}
+            className="group relative overflow-hidden rounded bg-neutral-900/40"
+          >
+            {song && areaWidth > 0 && midiClipWidth > 0 && (
+              <div
+                onPointerDown={onMidiPointerDown}
+                onPointerMove={onMidiPointerMove}
+                onPointerUp={onMidiPointerUp}
+                onPointerCancel={onMidiPointerUp}
+                className="absolute top-0 cursor-grab rounded active:cursor-grabbing"
+                style={{
+                  left: midiClipLeft,
+                  width: midiClipWidth,
+                  height: LANE_HEIGHT_MIDI,
+                  touchAction: 'none',
+                  background:
+                    midiOffsetSec > 0
+                      ? 'rgba(255,255,255,0.03)'
+                      : 'transparent',
+                }}
+                title={`Drag to sync — offset ${midiOffsetSec.toFixed(2)}s`}
+              >
+                <MidiPreviewCanvas
+                  notes={song.notes}
+                  width={midiClipWidth}
+                  height={LANE_HEIGHT_MIDI}
+                  pxPerSec={pxPerSec}
+                  startTimeSec={midiStartInSong}
+                  color={noteColor}
+                />
+              </div>
+            )}
+            {song && (
+              <LaneVolumeAffordance
+                muted={midiMuted}
+                volume={midiVolume}
+                onToggleMute={onToggleMidiMute}
+                onVolumeChange={(v) => updateSettings({ midiVolume: v })}
+                onContextMenu={(e) => openMenuAt('midi', e)}
+                onOpenMenu={(e) => openMenuAt('midi', e)}
+              />
+            )}
+          </div>
+
+          {/* Audio lane — waveform clip the user can drag. Right-click
+              opens the lane context menu. */}
+          {showAudioLane && (
+            <div
+              onContextMenu={(e) => openMenuAt('audio', e)}
+              className="group relative overflow-hidden rounded bg-neutral-900/40"
+              style={{ height: LANE_HEIGHT_AUDIO }}
+            >
+              {peaks && areaWidth > 0 && audioClipWidth > 0 && (
+                <div
+                  onPointerDown={onAudioPointerDown}
+                  onPointerMove={onAudioPointerMove}
+                  onPointerUp={onAudioPointerUp}
+                  onPointerCancel={onAudioPointerUp}
+                  className={`absolute top-0 cursor-grab rounded bg-sky-500/15 transition-opacity active:cursor-grabbing ${
+                    audioMuted ? 'opacity-30 grayscale' : ''
+                  }`}
+                  style={{
+                    left: audioClipLeft,
+                    width: audioClipWidth,
+                    height: LANE_HEIGHT_AUDIO,
+                    touchAction: 'none',
+                  }}
+                  title={`Drag to sync — offset ${offsetSec.toFixed(2)}s`}
+                >
+                  <WaveformCanvas
+                    peaks={peaks}
+                    width={audioClipWidth}
+                    height={LANE_HEIGHT_AUDIO}
+                    pxPerSec={pxPerSec}
+                    startInBufferSec={audioStartInBuffer}
+                    color="rgba(125, 211, 252, 0.85)"
+                  />
+                </div>
+              )}
+              {/* Filename overlay — pinned top-right so the mute
+                  affordance at top-left isn't crowded. Faded; click-
+                  through so the underlying drag still works. */}
+              {audioFileName && !audioLoading && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute right-2 top-1 max-w-[60%] truncate text-[10px] font-medium text-sky-100/70"
+                  title={audioFileName}
+                >
+                  {audioFileName}
+                </div>
+              )}
+              {audioLoading && (
+                <div className="flex h-full items-center justify-center text-[10px] text-neutral-400">
+                  Decoding…
+                </div>
+              )}
+              {audioError && !audioLoading && (
+                <div className="flex h-full items-center justify-center px-2 text-center text-[10px] text-rose-300">
+                  {audioError}
+                </div>
+              )}
+              {peaks && (
+                <LaneVolumeAffordance
+                  muted={audioMuted}
+                  volume={audioVolume}
+                  onToggleMute={onToggleAudioMute}
+                  onVolumeChange={(v) =>
+                    updateSettings({ userAudioVolume: v })
+                  }
+                  onContextMenu={(e) => openMenuAt('audio', e)}
+                  onOpenMenu={(e) => openMenuAt('audio', e)}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Minimap — full-song overview, pan-only. Sits below the
+              lanes so the playhead in the timeline (visible-window
+              scale) doesn't visually compete with the minimap's
+              full-song scale. The minimap carries its own playhead
+              line internally for orientation. Disabled (no cursor
+              change) at 1× zoom since the visible window already
+              equals the full song. */}
+          <div
+            onPointerDown={onMinimapPointerDown}
+            onPointerMove={onMinimapPointerMove}
+            onPointerUp={onMinimapPointerUp}
+            onPointerCancel={onMinimapPointerUp}
+            onPointerEnter={() => setMinimapHovered(true)}
+            onPointerLeave={() => setMinimapHovered(false)}
+            style={{ height: MINIMAP_HEIGHT, touchAction: 'none' }}
+            className={
+              song && maxScroll > 0
+                ? 'relative cursor-grab rounded bg-neutral-950 active:cursor-grabbing'
+                : 'relative rounded bg-neutral-950'
+            }
+            aria-label="Minimap — drag to pan"
+            title={
+              song
+                ? maxScroll > 0
+                  ? 'Drag to pan visible range'
+                  : 'Zoom in to enable panning'
+                : undefined
+            }
+          >
+            {song && areaWidth > 0 && totalDuration > 0 && (
+              <>
+                <div
+                  className="absolute inset-y-0 bg-neutral-700/70"
+                  style={{
+                    left: `${(clampedScroll / totalDuration) * 100}%`,
+                    width: `${(viewDuration / totalDuration) * 100}%`,
+                  }}
+                >
+                  {/* Round resize handles centred on each edge of
+                      the visible-window box. Half of each circle
+                      sticks out into the dark area so they remain
+                      grabbable when the window itself is narrow at
+                      high zoom. The minimap container is overflow-
+                      visible so the circles aren't clipped at the
+                      track ends. stopPropagation in their handlers
+                      prevents the surrounding minimap from also
+                      starting a pan. */}
+                  <div
+                    aria-label="Resize visible range from left"
+                    onPointerDown={onMinimapEdgePointerDown('left')}
+                    onPointerMove={onMinimapEdgePointerMove}
+                    onPointerUp={onMinimapEdgePointerUp}
+                    onPointerCancel={onMinimapEdgePointerUp}
+                    className="absolute top-1/2 z-10 h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full bg-neutral-400 shadow-sm hover:bg-neutral-200"
+                    style={{ left: 0, touchAction: 'none' }}
+                  />
+                  <div
+                    aria-label="Resize visible range from right"
+                    onPointerDown={onMinimapEdgePointerDown('right')}
+                    onPointerMove={onMinimapEdgePointerMove}
+                    onPointerUp={onMinimapEdgePointerUp}
+                    onPointerCancel={onMinimapEdgePointerUp}
+                    className="absolute top-1/2 z-10 h-3 w-3 -translate-y-1/2 translate-x-1/2 cursor-ew-resize rounded-full bg-neutral-400 shadow-sm hover:bg-neutral-200"
+                    style={{ right: 0, touchAction: 'none' }}
+                  />
+                </div>
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 w-px bg-neutral-300"
+                  style={{
+                    left: `${(currentTime / totalDuration) * 100}%`,
+                  }}
+                />
+              </>
+            )}
+          </div>
+        </div>
+        {/* Main playhead — spans the ruler + lanes only. Stops short
+            of the minimap because the minimap uses full-song scale
+            (different x mapping); a continuous line from there would
+            visually break. Hidden when the playhead is outside the
+            visible window so it doesn't pin to an edge while the user
+            has scrolled away. */}
+        {song && playheadVisible && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute w-px bg-sky-300 shadow-[0_0_4px_rgba(125,211,252,0.7)]"
+            style={{
+              left: playheadX,
+              top: 0,
+              height:
+                totalRowHeight - (MINIMAP_HEIGHT + ROW_GAP),
+            }}
+          />
+        )}
+      </div>
+      {menu && (
+        <LaneContextMenu
+          target={menu.target}
+          position={{ x: menu.x, y: menu.y }}
+          onClose={closeMenu}
+        />
+      )}
+    </div>
+  )
+}
