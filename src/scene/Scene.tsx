@@ -16,19 +16,32 @@ import { pauseSong, playSong, togglePlayback } from '../audio/playback'
 import { EditTools } from './EditTools'
 import { CameraControls } from './CameraControls'
 
+// On-screen preview tick rate when the user opts into the lighter
+// 30 fps mode. The rendered MP4 export drives its own fps regardless
+// (via `frameloop="never"` + explicit `advance()`), so this only
+// affects the live preview — exports stay smooth either way.
+const PREVIEW_FRAME_INTERVAL_MS = 1000 / 30
+
 export function Scene() {
   const s = useStore((st) => st.settings)
+  const highFps = useStore((st) => st.settings.previewHighFps)
+  // Recorder state kept here just for prop drilling into SceneContents
+  // (edit-mode gating).
+  const [recState, setRecState] = useState(recorder.getState())
+  useEffect(() => recorder.addListener(() => setRecState(recorder.getState())), [])
   return (
     <Canvas
       dpr={[1, 2]}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
       camera={{ position: s.cameraPos, fov: s.cameraFov, near: 0.1, far: 100 }}
+      frameloop={highFps ? 'always' : 'demand'}
       onCreated={({ camera }) => {
         camera.lookAt(...s.cameraLookAt)
       }}
     >
       <color attach="background" args={[s.backgroundColor]} />
-      <SceneContents />
+      <SceneContents recState={recState} />
+      {!highFps && <ThrottledTicker intervalMs={PREVIEW_FRAME_INTERVAL_MS} />}
       {s.bloomEnabled && (
         <EffectComposer>
           <Bloom
@@ -44,14 +57,24 @@ export function Scene() {
   )
 }
 
-function SceneContents() {
+/**
+ * Beats `invalidate()` at a fixed cadence so `frameloop="demand"` still
+ * advances per-frame animations (glow decay, custom-texture pan, FX
+ * fade-outs) while the user is editing. Pointer events invalidate
+ * automatically on top of this, so hover / drag stays responsive.
+ */
+function ThrottledTicker({ intervalMs }: { intervalMs: number }) {
+  const invalidate = useThree((s) => s.invalidate)
+  useEffect(() => {
+    const id = window.setInterval(() => invalidate(), intervalMs)
+    return () => window.clearInterval(id)
+  }, [intervalMs, invalidate])
+  return null
+}
+
+function SceneContents({ recState }: { recState: 'idle' | 'recording' }) {
   const s = useStore((st) => st.settings)
   const transport = useStore((st) => st.transport)
-  // Mirror the recorder singleton's state so we can suppress edit-mode
-  // mounting while a take is in progress — clicks during recording must
-  // not spawn notes on the (cleared) song.
-  const [recState, setRecState] = useState(recorder.getState())
-  useEffect(() => recorder.addListener(() => setRecState(recorder.getState())), [])
   // Edit mode = not currently playing or recording. Mounting EditTools
   // (instead of PlayToggleArea) flips the meaning of every empty-area
   // click — "toggle play" becomes "select / range / add note". Live

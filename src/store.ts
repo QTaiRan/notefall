@@ -320,6 +320,10 @@ export type Settings = {
   timelineMidiLaneRatio: number
   timelineSpeedLaneRatio: number
   timelineAudioLaneRatio: number
+  // Cap on the on-screen preview tick rate. The exported video drives
+  // its own fps regardless. false (default) → 30 fps preview, lighter
+  // on CPU; true → 60 fps preview for the smoothest fast-fall feel.
+  previewHighFps: boolean
   // When true and the user has zoomed in, the timeline auto-pans so
   // the playhead stays centred during playback. Auto-disables when
   // the user manually pans / zooms (minimap drag, edge resize, wheel
@@ -371,7 +375,7 @@ export const defaultSettings: Settings = {
   particleBrightness: 0.15,
   particleLifetime: 0.70,
   particleSpeed: 1.00,
-  particleCount: 8.00,
+  particleCount: 5.00,
   particleTurbulence: 0.50,
   turbulenceFrequency: 1.40,
   flowSpeed: 4.75,
@@ -453,6 +457,7 @@ export const defaultSettings: Settings = {
   timelineMidiLaneRatio: 1,
   timelineSpeedLaneRatio: 1,
   timelineAudioLaneRatio: 1,
+  previewHighFps: false,
   followPlayhead: true,
 }
 

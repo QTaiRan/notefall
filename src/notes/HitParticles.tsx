@@ -318,6 +318,21 @@ export function HitParticles() {
   }, [])
   const writeIdx = useRef(0)
   const lastFrame = useRef(now())
+  // Wall-clock moment of the latest-dying still-active particle. Used
+  // as a cheap "are any particles alive?" gate so the per-particle
+  // integration loop doesn't burn CPU at idle when every slot is dead.
+  // Updated at emission time; once `now()` advances past this, the
+  // next frame skips the integration pass entirely.
+  const maxDeathTime = useRef(0)
+  // Compacted index of alive particle slots. Replacing the naive
+  // O(MAX_PARTICLES) walk with O(aliveCount) is the difference between
+  // 32 768 iterations/frame (heavy CPU spike on a few held keys) and
+  // a couple thousand at most. `aliveFlags[slot]` is the parallel
+  // membership bitmap so the ring-buffer recycle path can detect "this
+  // slot is already in aliveIndices, don't double-add".
+  const aliveIndices = useMemo(() => new Int32Array(MAX_PARTICLES), [])
+  const aliveFlags = useMemo(() => new Uint8Array(MAX_PARTICLES), [])
+  const aliveCountRef = useRef(0)
   const colorVec = useMemo(() => new THREE.Color(), [])
   // Reused scratch buffers — avoid per-frame allocation in the hot loop.
   const curlScratch = useMemo<[number, number, number]>(() => [0, 0, 0], [])
@@ -434,10 +449,24 @@ export function HitParticles() {
     const smoothingAlpha = 1 - Math.exp(-dt / CURL_SMOOTHING_TAU)
 
     let positionDirty = false
-    for (let i = 0; i < MAX_PARTICLES; i++) {
+    // Skip the per-particle integration pass entirely when no particle
+    // is still alive. `maxDeathTime` is bumped at emit so any new key
+    // press or death-burst (handled after this block) will refresh it
+    // and the loop resumes next frame.
+    const anyAlive = nowSec < maxDeathTime.current && aliveCountRef.current > 0
+    let aliveCount = anyAlive ? aliveCountRef.current : 0
+    for (let k = 0; k < aliveCount; ) {
+      const i = aliveIndices[k]
       const birth = births[i]
       const age = nowSec - birth
-      if (age < 0 || age > lifetimes[i]) continue
+      if (age < 0 || age > lifetimes[i]) {
+        // Expired — swap-remove from the alive list. `aliveFlags`
+        // clears so the ring buffer can re-add this slot cleanly.
+        aliveFlags[i] = 0
+        aliveCount--
+        aliveIndices[k] = aliveIndices[aliveCount]
+        continue
+      }
 
       const i3 = i * 3
       let px = positions[i3 + 0]
@@ -541,7 +570,9 @@ export function HitParticles() {
       velocities[i3 + 1] = vy
       velocities[i3 + 2] = vz
       positionDirty = true
+      k++
     }
+    aliveCountRef.current = aliveCount
 
     let emissionDirty = false
 
@@ -571,6 +602,15 @@ export function HitParticles() {
 
       births[slot] = nowSec
       lifetimes[slot] = lifetimeSec
+      const deathAt = nowSec + lifetimeSec
+      if (deathAt > maxDeathTime.current) maxDeathTime.current = deathAt
+      // Add to the alive-index list (or leave alone if the ring buffer
+      // is recycling a slot whose previous particle was still alive —
+      // it's already in the list and we just overwrote its data).
+      if (aliveFlags[slot] === 0) {
+        aliveFlags[slot] = 1
+        aliveIndices[aliveCountRef.current++] = slot
+      }
       positions[i3 + 0] = ox
       positions[i3 + 1] = oy
       positions[i3 + 2] = oz

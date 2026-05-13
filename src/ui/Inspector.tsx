@@ -389,6 +389,7 @@ export function Inspector() {
 
         <SectionTitle>Scene</SectionTitle>
         <ColorRow label="Background" value={s.backgroundColor} onChange={(v) => update({ backgroundColor: v })} defaultValue={def.backgroundColor} />
+        <SwitchRow label="60 fps Preview" value={s.previewHighFps} onChange={(v) => update({ previewHighFps: v })} defaultValue={def.previewHighFps} />
 
         <SectionTitle>Keyboard</SectionTitle>
         <SliderRow label="Brightness" value={s.keyboardBrightness} min={0} max={2} step={0.01} onChange={(v) => update({ keyboardBrightness: v })} defaultValue={def.keyboardBrightness} />
