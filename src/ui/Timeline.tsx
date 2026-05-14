@@ -902,6 +902,14 @@ function SpeedAutomationLane({
   const onDotPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current
     if (!d) return
+    // If we re-enter the lane after the user released the button
+    // outside (where pointer capture sometimes fails to deliver the
+    // pointerup), buttons===0 — treat that as the missed release so
+    // the drag doesn't stay armed.
+    if ((e.buttons & 1) === 0) {
+      onDotPointerUp(e)
+      return
+    }
     const wrap = wrapRef.current
     if (!wrap) return
     e.stopPropagation()
@@ -988,7 +996,15 @@ function SpeedAutomationLane({
     }
     beginEdit()
     onPointsChange(merged)
-    endEdit()
+    // Arm a drag on the just-created point so the same gesture can
+    // both create and reposition without releasing the mouse button.
+    // endEdit fires on pointerup (via onDotPointerUp).
+    dragRef.current = {
+      index: newIdx,
+      snapshot: merged,
+      didMove: false,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
   }
 
   const visEnd = clampedScroll + viewDuration
@@ -1078,6 +1094,9 @@ function SpeedAutomationLane({
     <div
       ref={wrapRef}
       onPointerDown={onLanePointerDown}
+      onPointerMove={onDotPointerMove}
+      onPointerUp={onDotPointerUp}
+      onPointerCancel={onDotPointerUp}
       style={{ height: laneHeight, touchAction: 'none' }}
       className="relative overflow-hidden rounded bg-neutral-900/40"
       aria-label="MIDI speed automation"
@@ -1157,6 +1176,10 @@ function SpeedAutomationLane({
         const onMidPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
           const d = midDragRef.current
           if (!d) return
+          if ((e.buttons & 1) === 0) {
+            onMidPointerUp(e)
+            return
+          }
           e.stopPropagation()
           const wrap = wrapRef.current
           if (!wrap) return
@@ -1663,6 +1686,10 @@ export function Timeline() {
   const onAudioPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = audioDragRef.current
     if (!drag || !peaks) return
+    if ((e.buttons & 1) === 0) {
+      onAudioPointerUp(e)
+      return
+    }
     const dx = e.clientX - drag.startX
     const dt = pxPerSec > 0 ? dx / pxPerSec : 0
     // Same as the MIDI clip: trimmed head shouldn't pin the visible
@@ -1835,6 +1862,10 @@ export function Timeline() {
   const onMidiTrimPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = midiTrimDragRef.current
     if (!d || !song) return
+    if ((e.buttons & 1) === 0) {
+      onMidiTrimPointerUp(e)
+      return
+    }
     e.stopPropagation()
     // Pointer delta is timeline-pixels → timeline-seconds (and since
     // the timeline x-axis is natural MIDI-time, the delta IS the
@@ -1893,6 +1924,10 @@ export function Timeline() {
   const onAudioTrimPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = audioTrimDragRef.current
     if (!d || !peaks) return
+    if ((e.buttons & 1) === 0) {
+      onAudioTrimPointerUp(e)
+      return
+    }
     e.stopPropagation()
     const dt = pxPerSec > 0 ? (e.clientX - d.startX) / pxPerSec : 0
     if (d.side === 'left') {
@@ -1941,6 +1976,10 @@ export function Timeline() {
   const onMidiPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = midiDragRef.current
     if (!drag || !song) return
+    if ((e.buttons & 1) === 0) {
+      onMidiPointerUp(e)
+      return
+    }
     const dx = e.clientX - drag.startX
     const dt = pxPerSec > 0 ? dx / pxPerSec : 0
     // The clip's visible left edge sits at `offset + trimStart` on

@@ -450,7 +450,7 @@ export const defaultSettings: Settings = {
   reverbLowCut: 100,
   releaseTime: 0.45,
   samplerDetune: 0,
-  eqBands: [-6, -4, 0, 0, 0, 0],
+  eqBands: [-6, -2, 0, 0, 0, 0],
   velocityCurve: DEFAULT_VELOCITY_CURVE,
   velocityCompensation: 0.85,
   transpose: 0,
