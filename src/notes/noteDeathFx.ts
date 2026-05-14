@@ -29,6 +29,9 @@ export type DyingNote = {
   /** Visible width / length at the moment of deletion. */
   width: number
   length: number
+  /** Source track index (so the death puff inherits the note's
+   *  per-track tint). Undefined for notes that have no track tag. */
+  track?: number
 }
 
 /** How long the fading ghost is rendered (seconds). Linear ramp from 1

@@ -84,7 +84,11 @@ function buildProjectFromState(name: string): Project {
     createdAt: now,
     updatedAt: now,
     settings: s.settings,
-    songMidi: s.song ? serializeMidi(s.song) : null,
+    // `preserveTracks` so per-track names (and therefore per-track
+    // colours indexed by `NoteEvent.track`) survive the round-trip.
+    // The user-facing "Save Song as MIDI…" download still uses the
+    // single-track default — those are separate code paths.
+    songMidi: s.song ? serializeMidi(s.song, { preserveTracks: true }) : null,
     // Capture the custom texture even if `noteTexture !== 'custom'` —
     // the user may have switched presets temporarily and we don't want
     // to drop their image on save. The noteTexture setting is what

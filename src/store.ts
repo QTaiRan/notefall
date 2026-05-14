@@ -42,6 +42,10 @@ export type Settings = {
   fallDirection: FallDirection
   fallDurationSec: number // どのぐらいの時間をかけて鍵盤に到達するか
   noteColor: string
+  // Per-track colour overrides keyed by track index (as string for JSON
+  // round-trip safety). Unset / missing keys fall back to `noteColor`.
+  // Index matches `NoteEvent.track` / `ParsedSong.tracks[i]`.
+  trackColors: Record<string, string>
   noteEmissive: number
   noteOpacity: number
   noteCornerRadius: number
@@ -350,6 +354,7 @@ export const defaultSettings: Settings = {
   fallDirection: 'down',
   fallDurationSec: 2.5,
   noteColor: '#5ad7ff',
+  trackColors: {},
   noteEmissive: 1.0,
   noteOpacity: 1.0,
   noteCornerRadius: 0.05,
@@ -708,8 +713,12 @@ type AppState = {
   // editing it via velocity menu / drag-resize. Survives Escape and
   // note deletion so a user can deselect / delete and the next created
   // note still picks up the last-touched note's feel.
-  lastNoteParams: { duration: number; velocity: number }
-  setLastNoteParams: (p: { duration: number; velocity: number }) => void
+  // `track` carries forward so a new note inherits the track (and thus
+  // the per-track colour) of whichever note the user most recently
+  // touched. Lets users keep adding notes to the "right hand" track
+  // without per-note bookkeeping.
+  lastNoteParams: { duration: number; velocity: number; track: number }
+  setLastNoteParams: (p: { duration: number; velocity: number; track: number }) => void
 
   settings: Settings
   updateSettings: (patch: Partial<Settings>) => void
@@ -848,7 +857,7 @@ export const useStore = create<AppState>((set) => ({
         if (note) {
           return {
             selection: next,
-            lastNoteParams: { duration: note.duration, velocity: note.velocity },
+            lastNoteParams: { duration: note.duration, velocity: note.velocity, track: note.track },
           }
         }
       }
@@ -866,7 +875,7 @@ export const useStore = create<AppState>((set) => ({
         if (note) {
           return {
             selection: next,
-            lastNoteParams: { duration: note.duration, velocity: note.velocity },
+            lastNoteParams: { duration: note.duration, velocity: note.velocity, track: note.track },
           }
         }
       }
@@ -902,7 +911,7 @@ export const useStore = create<AppState>((set) => ({
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
         const note = computed.notes.find((n) => n.id === id)
-        if (note) patch.lastNoteParams = { duration: note.duration, velocity: note.velocity }
+        if (note) patch.lastNoteParams = { duration: note.duration, velocity: note.velocity, track: note.track }
       }
       return patch
     }),
@@ -927,7 +936,7 @@ export const useStore = create<AppState>((set) => ({
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
         const note = s.notes.find((n) => n.id === id)
-        if (note) patch.lastNoteParams = { duration: note.duration, velocity: note.velocity }
+        if (note) patch.lastNoteParams = { duration: note.duration, velocity: note.velocity, track: note.track }
       }
       return patch
     }),
@@ -1128,7 +1137,7 @@ export const useStore = create<AppState>((set) => ({
   // Defaults match the original NEW_NOTE_DURATION / NEW_NOTE_VELOCITY in
   // EditTools — mirror them here so the very first new note (before any
   // selection happened) still uses the same baseline feel.
-  lastNoteParams: { duration: 0.25, velocity: 0.7 },
+  lastNoteParams: { duration: 0.25, velocity: 0.7, track: 0 },
   setLastNoteParams: (lastNoteParams) => set({ lastNoteParams }),
 
   settings: defaultSettings,

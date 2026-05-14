@@ -82,18 +82,25 @@ const VERTEX_SHADER = /* glsl */ `
   // 1 → 0 over FADE_DURATION for the dying-note ghosts the renderer
   // appends after the live-note pass.
   attribute float instanceAlpha;
+  // Per-instance RGB tint. Resolved from settings.trackColors[note.track]
+  // with fallback to settings.noteColor — populated each frame on the
+  // CPU side. The fragment shader uses this in place of a uColor uniform
+  // so different tracks can show different colours simultaneously.
+  attribute vec3 instanceTint;
   varying vec2 vUv;
   varying vec2 vSize;
   varying vec2 vSeed;
   varying float vSelected;
   varying float vAlpha;
   varying float vWorldY;
+  varying vec3 vTint;
   void main() {
     vUv = uv;
     vSize = instanceSize;
     vSeed = instanceSeed;
     vSelected = instanceSelected;
     vAlpha = instanceAlpha;
+    vTint = instanceTint;
     vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
     vWorldY = worldPos.y;
     gl_Position = projectionMatrix * viewMatrix * worldPos;
@@ -117,7 +124,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   varying float vSelected;
   varying float vAlpha;
   varying float vWorldY;
-  uniform vec3 uColor;
+  varying vec3 vTint;
   uniform float uEmissive;
   uniform float uOpacity;
   uniform float uRadius;
@@ -270,7 +277,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     float edgeStrength = max(facet, facet2) * mix(0.15, 1.0, edgeHash);
     edgeStrength = max(edgeStrength, spark);
 
-    vec3 base = uColor * (facet * 1.4 + 0.12);
+    vec3 base = vTint * (facet * 1.4 + 0.12);
     // Sparkle flashes the facet toward pure white — the hallmark of a real
     // gem reflection.
     base = mix(base, vec3(1.0), spark * 0.9);
@@ -310,7 +317,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     sampled = clamp((sampled - 0.5) * uTextureContrast + 0.5, 0.0, 1.0);
     // When no image is bound yet, fall back to the tint color so the user
     // doesn't see a black rectangle while picking a file.
-    return mix(uColor, sampled * uColor, uHasCustomTexture);
+    return mix(vTint, sampled * vTint, uHasCustomTexture);
   }
 
   // 'liquid': domain-warped FBM (molten metal flow). Edge is composited in
@@ -327,7 +334,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     float pattern = fbm(uv + 4.0 * q + vec2(0.0, t * 0.6));
     // Push contrast — bright streaks become "highlights", dark areas darken.
     float lit = pow(clamp(pattern, 0.0, 1.0), max(0.1, uTextureContrast));
-    return uColor * (lit * 1.4 + 0.18);
+    return vTint * (lit * 1.4 + 0.18);
   }
 
   void main() {
@@ -354,7 +361,7 @@ const FRAGMENT_SHADER = /* glsl */ `
       fill = textureCustom(p, d);
     } else {
       // 'solid' — flat tint.
-      fill = uColor;
+      fill = vTint;
     }
     // Emissive boost feeds Bloom — applies only to the fill so edge stays
     // strictly user-controlled via its own Color + Intensity.
@@ -454,6 +461,10 @@ export function FallingNotes() {
 
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
+  // Scratch Color used to parse hex strings into linear RGB once per
+  // track per frame. Reused across all calls in the resolveTint cache
+  // so we don't allocate per note.
+  const tmpColor = useMemo(() => new THREE.Color(), [])
   const { camera, gl } = useThree()
 
   // per-instance world size attribute (width, length)
@@ -494,6 +505,16 @@ export function FallingNotes() {
     a.setUsage(THREE.DynamicDrawUsage)
     return a
   }, [alphaAttrData])
+  // Per-instance RGB tint. Resolved each frame from the note's track →
+  // settings.trackColors[trackIdx], with fallback to settings.noteColor.
+  // Live notes / dying ghosts (which have no track index) use the
+  // global noteColor as well.
+  const tints = useMemo(() => new Float32Array(MAX_INSTANCES * 3), [])
+  const tintAttr = useMemo(() => {
+    const a = new THREE.InstancedBufferAttribute(tints, 3)
+    a.setUsage(THREE.DynamicDrawUsage)
+    return a
+  }, [tints])
   // Maps the per-frame instance slot back to the song's note id. Click
   // handling reads from this; useFrame writes it.
   const instanceToNoteId = useRef<number[]>([])
@@ -501,7 +522,6 @@ export function FallingNotes() {
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        uColor: { value: new THREE.Color(settings.noteColor) },
         uEmissive: { value: settings.noteEmissive },
         uOpacity: { value: settings.noteOpacity },
         uRadius: { value: settings.noteCornerRadius },
@@ -531,7 +551,6 @@ export function FallingNotes() {
   }, [])
 
   useEffect(() => {
-    material.uniforms.uColor.value.set(settings.noteColor)
     material.uniforms.uEmissive.value = settings.noteEmissive
     material.uniforms.uOpacity.value = settings.noteOpacity
     material.uniforms.uRadius.value = settings.noteCornerRadius
@@ -549,7 +568,6 @@ export function FallingNotes() {
     material.uniforms.uEdgeIntensity.value = settings.edgeEnabled ? settings.noteEdgeIntensity : 0
   }, [
     material,
-    settings.noteColor,
     settings.noteEmissive,
     settings.noteOpacity,
     settings.noteCornerRadius,
@@ -575,6 +593,7 @@ export function FallingNotes() {
     mesh.geometry.setAttribute('instanceSeed', seedAttr)
     mesh.geometry.setAttribute('instanceSelected', selectedAttr)
     mesh.geometry.setAttribute('instanceAlpha', alphaAttr)
+    mesh.geometry.setAttribute('instanceTint', tintAttr)
     // Pin a large bounding sphere so raycasting never short-circuits.
     // Three.js's InstancedMesh.raycast() does an early-reject against the
     // mesh's bounding sphere, but auto-computes it ONCE (lazily, on first
@@ -590,8 +609,9 @@ export function FallingNotes() {
       mesh.geometry.deleteAttribute('instanceSeed')
       mesh.geometry.deleteAttribute('instanceSelected')
       mesh.geometry.deleteAttribute('instanceAlpha')
+      mesh.geometry.deleteAttribute('instanceTint')
     }
-  }, [sizeAttr, seedAttr, selectedAttr, alphaAttr])
+  }, [sizeAttr, seedAttr, selectedAttr, alphaAttr, tintAttr])
 
   useEffect(() => () => material.dispose(), [material])
 
@@ -673,6 +693,32 @@ export function FallingNotes() {
     // doesn't pay a Map lookup cost per song note (could be thousands).
     const selection = useStore.getState().selection
     const noteIds = instanceToNoteId.current
+
+    // Per-track tint cache, populated on demand. The cache resets every
+    // frame so changes to `noteColor` / `trackColors` apply immediately.
+    // For a song with N tracks (typically <5), this saves the per-note
+    // hex parse cost.
+    const trackColors = settings.trackColors
+    const defaultTintColor = tmpColor.set(settings.noteColor)
+    const defaultR = defaultTintColor.r
+    const defaultG = defaultTintColor.g
+    const defaultB = defaultTintColor.b
+    const trackTintCache = new Map<number, readonly [number, number, number]>()
+    const resolveTint = (trackIdx: number | undefined): readonly [number, number, number] => {
+      if (trackIdx == null) return [defaultR, defaultG, defaultB]
+      const cached = trackTintCache.get(trackIdx)
+      if (cached) return cached
+      const override = trackColors[String(trackIdx)]
+      if (!override) {
+        const v: [number, number, number] = [defaultR, defaultG, defaultB]
+        trackTintCache.set(trackIdx, v)
+        return v
+      }
+      tmpColor.set(override)
+      const v: [number, number, number] = [tmpColor.r, tmpColor.g, tmpColor.b]
+      trackTintCache.set(trackIdx, v)
+      return v
+    }
 
     let count = 0
     const notes = song?.notes ?? []
@@ -765,6 +811,11 @@ export function FallingNotes() {
       alphaAttrData[count] = 1
       noteIds[count] = n.id
 
+      const tint = resolveTint(n.track)
+      tints[count * 3] = tint[0]
+      tints[count * 3 + 1] = tint[1]
+      tints[count * 3 + 2] = tint[2]
+
       count++
       if (count >= MAX_INSTANCES) break
     }
@@ -814,6 +865,10 @@ export function FallingNotes() {
         selectedAttrData[count] = 0
         alphaAttrData[count] = 1
         noteIds[count] = -1
+        // Live notes have no track — fall back to noteColor.
+        tints[count * 3] = defaultR
+        tints[count * 3 + 1] = defaultG
+        tints[count * 3 + 2] = defaultB
 
         count++
         if (count >= MAX_INSTANCES) break
@@ -848,6 +903,13 @@ export function FallingNotes() {
       selectedAttrData[count] = 0
       alphaAttrData[count] = fadeAlpha
       noteIds[count] = -1 // not editable / not selectable
+      // Preserve the deleted note's track tint so the fade-out reads
+      // as "this exact note is dissolving" instead of flashing back
+      // to the global noteColor for its final 0.12s.
+      const ghostTint = resolveTint(d.track)
+      tints[count * 3] = ghostTint[0]
+      tints[count * 3 + 1] = ghostTint[1]
+      tints[count * 3 + 2] = ghostTint[2]
       count++
     }
 
@@ -857,6 +919,7 @@ export function FallingNotes() {
     seedAttr.needsUpdate = true
     selectedAttr.needsUpdate = true
     alphaAttr.needsUpdate = true
+    tintAttr.needsUpdate = true
   })
 
   // Project a screen-space pointer to the falling-note z plane (z = 0.1).
@@ -1252,6 +1315,7 @@ export function FallingNotes() {
               centerY: (b.yMin + b.yMax) / 2,
               width: b.xMax - b.xMin,
               length: b.yMax - b.yMin,
+              track: targetNote.track,
             })
           }
         }

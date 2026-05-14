@@ -479,13 +479,50 @@ type ColorRowProps = {
   onChange: (v: string) => void
   /** Double-clicking the label resets to this. */
   defaultValue?: string
+  /**
+   * Overrides the reset action. When provided, the label / reset
+   * button invokes this instead of `onChange(defaultValue)`. Useful
+   * for callers that want reset semantics richer than "just write
+   * the default value" — e.g. per-track colour rows that need to
+   * REMOVE their entry from the overrides map so subsequent theme
+   * changes propagate, not freeze a snapshot of the current default.
+   */
+  onReset?: () => void
+  /**
+   * Explicit modified-state override. Defaults to a hex-equality
+   * comparison against `defaultValue`. Callers that store state
+   * out-of-band (e.g. presence of a key in an overrides map) can
+   * pass this to drive the reset-chip visibility correctly even
+   * when `value` happens to equal `defaultValue`.
+   */
+  isModified?: boolean
 }
 
-export function ColorRow({ label, value, onChange, defaultValue }: ColorRowProps) {
+export function ColorRow({
+  label,
+  value,
+  onChange,
+  defaultValue,
+  onReset,
+  isModified: isModifiedOverride,
+}: ColorRowProps) {
   const reset =
-    defaultValue !== undefined
-      ? () => commitAtomic(() => onChange(defaultValue))
-      : undefined
+    onReset !== undefined
+      ? () => commitAtomic(onReset)
+      : defaultValue !== undefined
+        ? () => commitAtomic(() => onChange(defaultValue))
+        : undefined
+  // A "reset to default" button is rendered inline next to the swatch
+  // only when the value is considered modified — same affordance the
+  // SliderRow's context menu offers, but visible without right-click.
+  // Default detection is hex-equality against `defaultValue` (case-
+  // insensitive — ColorPicker may emit either case); callers with
+  // out-of-band override storage can pass `isModified` explicitly.
+  const isModified =
+    isModifiedOverride !== undefined
+      ? isModifiedOverride
+      : defaultValue !== undefined &&
+        value.toLowerCase() !== defaultValue.toLowerCase()
   return (
     <div className="flex items-center justify-between py-1 text-xs">
       <span
@@ -495,6 +532,32 @@ export function ColorRow({ label, value, onChange, defaultValue }: ColorRowProps
       >
         {label}
       </span>
+      <div className="flex items-center gap-1">
+        {reset && isModified && (
+          <button
+            type="button"
+            onClick={reset}
+            aria-label={`Reset ${label} to default`}
+            title="Reset to default"
+            className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 outline-none hover:bg-neutral-800 hover:text-neutral-200 focus-visible:ring-1 focus-visible:ring-sky-400"
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path
+                d="M3 8a5 5 0 1 0 1.5-3.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <path
+                d="M3 2.5V5h2.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
       <ColorPicker
         value={value}
         onChange={(color) => onChange(color.toString('hex'))}
@@ -543,6 +606,7 @@ export function ColorRow({ label, value, onChange, defaultValue }: ColorRowProps
           </Popover>
         </DialogTrigger>
       </ColorPicker>
+      </div>
     </div>
   )
 }

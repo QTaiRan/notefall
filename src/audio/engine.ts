@@ -70,7 +70,17 @@ export type LiveNote = {
 
 export type KeyEventListener = (
   event:
-    | { type: 'on'; midi: number; velocity: number; songTime: number }
+    | {
+        type: 'on'
+        midi: number
+        velocity: number
+        songTime: number
+        /** Source track index for song-driven notes; undefined for
+         *  live input (touch / MIDI device / PC keyboard) and previews.
+         *  Visual subsystems (particles, key glow) use this to resolve
+         *  the per-track colour from settings.trackColors. */
+        track?: number
+      }
     | { type: 'off'; midi: number; songTime: number },
 ) => void
 
@@ -809,7 +819,7 @@ export class AudioEngine {
         const stopFn = this.piano.start(playedMidi, shaped, audioBase, `s${n.id}`)
         const endTime = Math.min(n.time + n.duration, seekTrimEnd)
         this.active.set(n.id, { id: n.id, midi: playedMidi, endTime, stop: stopFn })
-        this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime: clamped })
+        this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime: clamped, track: n.track })
       }
     }
 
@@ -1169,7 +1179,7 @@ export class AudioEngine {
       // instead of sustaining indefinitely.
       const endTime = Math.min(n.time + n.duration, trimEnd)
       this.active.set(n.id, { id: n.id, midi: playedMidi, endTime, stop: stopFn })
-      this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime })
+      this.emit({ type: 'on', midi: playedMidi, velocity: shaped, songTime, track: n.track })
     }
 
     // process note offs (any active note whose end has passed)

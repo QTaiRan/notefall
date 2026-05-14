@@ -70,6 +70,7 @@ const EMPTY_SONG: ParsedSong = {
   duration: 0,
   notes: [],
   pedals: [],
+  tracks: [],
 }
 
 // CSS-standard "no/cancel" cursor — the OS-native circle-with-slash
@@ -168,6 +169,7 @@ export function EditTools() {
           centerY: (b.yMin + b.yMax) / 2,
           width: b.xMax - b.xMin,
           length: b.yMax - b.yMin,
+          track: n.track,
         })
         cur.setSongPreview(deleteNotes(cur.song, [n.id]))
         if (cur.selection.has(n.id)) {
@@ -344,11 +346,14 @@ export function EditTools() {
     const time = clickYToTime(startWorld.y, tl, settings, timeCtx)
     const midi = clickXToMidi(startWorld.x, settings.transpose)
 
-    // New notes inherit the duration & velocity of the most recently
-    // edited single note (resized, velocity-changed, or just selected).
-    // Store keeps lastNoteParams up to date for us — see store.ts.
+    // New notes inherit the duration & velocity AND track of the most
+    // recently edited single note (resized, velocity-changed, or just
+    // selected). Track inheritance lets the new note pick up the
+    // per-track colour without manual book-keeping — keep tapping in
+    // the "right hand" track and additions stay coloured for that hand.
     const newDuration = cur.lastNoteParams?.duration ?? FALLBACK_DURATION
     const newVelocity = cur.lastNoteParams?.velocity ?? FALLBACK_VELOCITY
+    const newTrack = cur.lastNoteParams?.track ?? 0
 
     // Push the pre-add snapshot first so a single undo step fully
     // reverses the click + any subsequent drag motion.
@@ -360,6 +365,7 @@ export function EditTools() {
       Math.max(0, time),
       newDuration,
       newVelocity,
+      newTrack,
     )
     cur.setSongPreview(result.song)
     cur.replaceSelection([result.id])

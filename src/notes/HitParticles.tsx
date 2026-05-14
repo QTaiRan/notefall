@@ -304,6 +304,17 @@ export function HitParticles() {
 
   const heldCount = useMemo(() => new Uint8Array(KEY_COUNT), [])
   const lastVelocity = useMemo(() => new Float32Array(KEY_COUNT), [])
+  // Track index of the most recent note-on per key (-1 = no track /
+  // live input). Read at emission time to look up the per-track tint
+  // — gives the particle plume the same colour as the falling note
+  // that triggered it. Sustained-emit loop and the attack burst both
+  // read from here, so a key held across a track switch picks up the
+  // new colour cleanly on the next press.
+  const lastTrack = useMemo(() => {
+    const a = new Int32Array(KEY_COUNT)
+    a.fill(-1)
+    return a
+  }, [])
   const emitAccum = useMemo(() => new Float32Array(KEY_COUNT), [])
   const pendingBurst = useMemo(() => new Uint8Array(KEY_COUNT), [])
   // Per-key timestamp of the most recent note-on, used to enforce a
@@ -345,6 +356,7 @@ export function HitParticles() {
       if (ev.type === 'on') {
         heldCount[idx]++
         lastVelocity[idx] = ev.velocity
+        lastTrack[idx] = ev.track ?? -1
         pendingBurst[idx] += ATTACK_BURST
         emitAccum[idx] = 0
         noteOnTime[idx] = now()
@@ -353,7 +365,7 @@ export function HitParticles() {
       }
     })
     return off
-  }, [heldCount, lastVelocity, pendingBurst, emitAccum, noteOnTime])
+  }, [heldCount, lastVelocity, lastTrack, pendingBurst, emitAccum, noteOnTime])
 
   // Active "death emitters" — each death event spawns one of these and it
   // emits particles for DEATH_EMIT_DURATION using the same per-frame rate
@@ -372,6 +384,10 @@ export function HitParticles() {
     // does — without it the death puff would be missing the brief
     // "pop" of slightly-larger particles at the very start.
     burstFired: boolean
+    /** Source track of the deleted note; -1 if the dying note had no
+     *  track tag (e.g. recorder-built song). Resolves to a per-track
+     *  tint in `resolveTrackRGB`. */
+    track: number
   }
   const deathEmittersRef = useRef<DeathEmitter[]>([])
   useEffect(() => {
@@ -385,6 +401,7 @@ export function HitParticles() {
         startTime: now(),
         emitAccum: 0,
         burstFired: false,
+        track: d.track ?? -1,
       })
     })
     return off
@@ -416,6 +433,29 @@ export function HitParticles() {
     const cr = colorVec.r
     const cg = colorVec.g
     const cb = colorVec.b
+    // Per-track RGB cache, built lazily as we emit. A track with no
+    // override resolves to the global particleColor (cr/cg/cb), so
+    // particles for live input / un-tracked notes look unchanged from
+    // before this feature.
+    const trackColors = settings.trackColors
+    const trackColorCache = new Map<number, readonly [number, number, number]>()
+    const resolveTrackRGB = (
+      trackIdx: number,
+    ): readonly [number, number, number] => {
+      if (trackIdx < 0) return [cr, cg, cb]
+      const cached = trackColorCache.get(trackIdx)
+      if (cached) return cached
+      const override = trackColors[String(trackIdx)]
+      if (!override) {
+        const v: [number, number, number] = [cr, cg, cb]
+        trackColorCache.set(trackIdx, v)
+        return v
+      }
+      colorVec.set(override)
+      const v: [number, number, number] = [colorVec.r, colorVec.g, colorVec.b]
+      trackColorCache.set(trackIdx, v)
+      return v
+    }
     const userSpeed = settings.particleSpeed
     const userLifetime = settings.particleLifetime
     const userCount = settings.particleCount
@@ -643,15 +683,16 @@ export function HitParticles() {
       const key = KEYBOARD_LAYOUT.keys[keyIdx]
       const ox = key.x + (Math.random() - 0.5) * EMITTER_WIDTH
       const oy = hitY + (Math.random() - 0.5) * 0.02
+      const [tr, tg, tb] = resolveTrackRGB(lastTrack[keyIdx])
       emitParticleAt(
         ox,
         oy,
         0,
         vel,
         isBurst,
-        cr,
-        cg,
-        cb,
+        tr,
+        tg,
+        tb,
         1.0,
         BASE_UP_SPEED * userSpeed,
         userLifetime * LIFETIME_SCALE,
@@ -702,6 +743,7 @@ export function HitParticles() {
         deathEmitters.splice(e, 1)
         continue
       }
+      const [emR, emG, emB] = resolveTrackRGB(em.track)
       // First-tick attack burst (matches a real key press's ATTACK_BURST).
       if (!em.burstFired) {
         em.burstFired = true
@@ -714,9 +756,9 @@ export function HitParticles() {
             0,
             em.velocity,
             true,
-            cr,
-            cg,
-            cb,
+            emR,
+            emG,
+            emB,
             1.0,
             BASE_UP_SPEED * userSpeed,
             userLifetime * LIFETIME_SCALE,
@@ -735,9 +777,9 @@ export function HitParticles() {
           0,
           em.velocity,
           false,
-          cr,
-          cg,
-          cb,
+          emR,
+          emG,
+          emB,
           1.0,
           BASE_UP_SPEED * userSpeed,
           userLifetime * LIFETIME_SCALE,
@@ -753,9 +795,9 @@ export function HitParticles() {
           0,
           em.velocity,
           false,
-          cr,
-          cg,
-          cb,
+          emR,
+          emG,
+          emB,
           1.0,
           BASE_UP_SPEED * userSpeed,
           userLifetime * LIFETIME_SCALE,

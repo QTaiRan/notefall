@@ -170,6 +170,9 @@ function MidiPreviewCanvas({
    *  `visStart - midiOffset`. */
   startTimeSec,
   color,
+  /** Per-track colour overrides. Sparse map keyed by track index.
+   *  Notes whose track has no override fall back to `color`. */
+  trackColors,
 }: {
   notes: NoteEvent[]
   width: number
@@ -177,6 +180,7 @@ function MidiPreviewCanvas({
   pxPerSec: number
   startTimeSec: number
   color: string
+  trackColors: Record<string, string>
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   useEffect(() => {
@@ -210,7 +214,22 @@ function MidiPreviewCanvas({
 
     // Visible window in natural MIDI-time.
     const endTimeSec = startTimeSec + width / pxPerSec
+    // Resolved per-track colour cache. Tracks without an override
+    // resolve to `color` (the global noteColor passed in). Misses are
+    // cached so we don't repeat the lookup per note in a thousand-note
+    // song.
+    const tintCache = new Map<number, string>()
+    const resolveColor = (trackIdx: number): string => {
+      const cached = tintCache.get(trackIdx)
+      if (cached) return cached
+      const v = trackColors[String(trackIdx)] ?? color
+      tintCache.set(trackIdx, v)
+      return v
+    }
+    // Set the default colour once; only call set when the track's
+    // resolved colour actually differs from the previous note's.
     ctx.fillStyle = color
+    let currentFill = color
     for (const n of notes) {
       const noteEnd = n.time + n.duration
       if (noteEnd < startTimeSec) continue
@@ -220,6 +239,11 @@ function MidiPreviewCanvas({
       const yCenter =
         ((maxMidi - n.midi) / pitchSpan) * (height - rowHeight) + rowHeight / 2
       const y = yCenter - noteThickness / 2
+      const fill = resolveColor(n.track)
+      if (fill !== currentFill) {
+        ctx.fillStyle = fill
+        currentFill = fill
+      }
       // Per-note alpha follows velocity so dynamics show up in the
       // preview — Ableton's clip preview does the same. Min alpha
       // 0.35 keeps soft notes legible.
@@ -227,7 +251,7 @@ function MidiPreviewCanvas({
       ctx.fillRect(x, y, w, noteThickness)
     }
     ctx.globalAlpha = 1
-  }, [notes, width, height, pxPerSec, startTimeSec, color])
+  }, [notes, width, height, pxPerSec, startTimeSec, color, trackColors])
 
   return (
     <canvas
@@ -1311,6 +1335,7 @@ export function Timeline() {
   const song = useStore((s) => s.song)
   const transport = useStore((s) => s.transport)
   const noteColor = useStore((s) => s.settings.noteColor)
+  const trackColors = useStore((s) => s.settings.trackColors)
   const peaks = useUserAudio((s) => s.peaks)
   const audioFileName = useUserAudio((s) => s.fileName)
   const audioLoading = useUserAudio((s) => s.loading)
@@ -2167,6 +2192,7 @@ export function Timeline() {
                   pxPerSec={pxPerSec}
                   startTimeSec={midiStartInSong}
                   color={noteColor}
+                  trackColors={trackColors}
                 />
                 <TrimHandle
                   side="left"

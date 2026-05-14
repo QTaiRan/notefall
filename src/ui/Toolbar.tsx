@@ -19,6 +19,7 @@ import { ensureAudioReady } from '../audio/midiInput'
 import { useMidiInput } from '../audio/useMidiInput'
 import { useRecorder } from '../audio/useRecorder'
 import { parseMidi } from '../midi/parse'
+import { serializeMidi } from '../midi/serialize'
 import {
   importUserAudio,
   loadDemoProject,
@@ -390,6 +391,29 @@ export function Toolbar() {
       reportError(result.title ?? 'Could not load audio', result.message)
     }
   }
+  // Export the currently loaded song as a single-track Standard MIDI
+  // File. `serializeMidi` collapses any multi-track structure from the
+  // original source (e.g. right hand / left hand / pedal split tracks)
+  // into one note track + the meta track that @tonejs/midi always
+  // prepends — DAWs see a single instrument lane instead of having
+  // to recombine three.
+  const onSaveSongAsMidi = () => {
+    if (!song) return
+    const buf = serializeMidi(song)
+    const blob = new Blob([buf], { type: 'audio/midi' })
+    const url = URL.createObjectURL(blob)
+    const base =
+      (currentFile?.name.replace(/\.[^.]+$/, '')) ||
+      projectName ||
+      'song'
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${base}.mid`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
 
   // Open the unified export-settings dialog. The dialog itself
   // figures out whether this is a WAV / silent MP4 / A+V MP4 export
@@ -707,6 +731,14 @@ export function Toolbar() {
                 className={menuItemClass}
               >
                 <span>Open Audio…</span>
+              </MenuItem>
+              <MenuItem
+                onAction={() => onSaveSongAsMidi()}
+                textValue="Save Song as MIDI"
+                isDisabled={!song}
+                className={menuItemClass}
+              >
+                <span>Save Song as MIDI…</span>
               </MenuItem>
               <Separator className="my-1 h-px bg-neutral-800" />
               <MenuItem

@@ -78,7 +78,10 @@ export type SharedLightUniforms = {
   uFalloffX: { value: number };
   uFalloffY: { value: number };
   uShadowHalo: { value: number };
-  uLightColor: { value: THREE.Color };
+  // Per-slot RGB packed as `[r0, g0, b0, r1, g1, b1, ...]`. Each entry
+  // is already the brightness-lerped colour for that slot, so the
+  // shader just multiplies it in.
+  uLightColors: { value: Float32Array };
 };
 
 // Patch MeshStandardMaterial: ADD per-flash light + black-key shadow
@@ -128,7 +131,7 @@ export function patchWhiteKeyMaterial(
         uniform float uFalloffX;
         uniform float uFalloffY;
         uniform float uShadowHalo;
-        uniform vec3 uLightColor;
+        uniform vec3 uLightColors[MAX_LIGHTS];
         varying vec2 vGroupXY;
 
         // Reverse-project this fragment through L onto z=uBlackKeyTop and
@@ -187,7 +190,7 @@ export function patchWhiteKeyMaterial(
             float effective = intensity * falloff * (
               1.0 - shadow * falloff * ${SHADOW_OPACITY.toFixed(3)}
             );
-            totalContribution += uLightColor * uLightBoost * uLightStrength * effective;
+            totalContribution += uLightColors[li] * uLightBoost * uLightStrength * effective;
           }
           // Clamp: protects against stacked shadows crushing to black /
           // dense chords saturating to white.

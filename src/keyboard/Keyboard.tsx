@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect, useCallback } from "react";
 import * as THREE from "three";
 import * as Tone from "tone";
+import { resolveTrackColorHex } from "../notes/trackColor";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import {
@@ -87,6 +88,9 @@ const PRESS_TINT_SCRATCH = new THREE.Color();
 // the keyboard glow's "spark" core matches the LandingFlashes plane's
 // brightness-lifted look.
 const WHITE_LIGHT_TARGET = new THREE.Color(1, 1, 1);
+// Scratch reused in the per-frame per-slot colour resolver so the lerp
+// + hex parse don't allocate on every frame.
+const LIGHT_COLOR_SCRATCH = new THREE.Color();
 
 export function Keyboard() {
   const settings = useStore((s) => s.settings);
@@ -166,7 +170,10 @@ export function Keyboard() {
       uFalloffX: { value: LIGHT_FALLOFF_X_BASE },
       uFalloffY: { value: LIGHT_FALLOFF_Y_BASE },
       uShadowHalo: { value: SHADOW_HALO_BASE },
-      uLightColor: { value: new THREE.Color(1, 1, 1) },
+      // Per-slot tint, packed as [r,g,b] × MAX_LIGHTS. Each slot can
+      // carry its own (per-track) colour so simultaneously-active keys
+      // from different tracks light the keyboard in different hues.
+      uLightColors: { value: new Float32Array(MAX_LIGHTS * 3) },
     }),
     [],
   );
@@ -217,6 +224,15 @@ export function Keyboard() {
   // during loading doesn't leak a stuck note.
   const pendingMidi = useRef<Map<number, number>>(new Map());
 
+  // Per-key track index of the latest note-on. -1 = no track / live
+  // input. The render loop reads this to look up the per-track tint
+  // from settings.trackColors so the glow matches the colour of the
+  // falling note that triggered it.
+  const lastTrack = useMemo(() => {
+    const a = new Int32Array(KEY_COUNT);
+    a.fill(-1);
+    return a;
+  }, []);
   useEffect(() => {
     // held[] is a refcount, not a flag — back-to-back retriggers may emit
     // on/off in either order within a frame; counting handles overlap.
@@ -226,12 +242,13 @@ export function Keyboard() {
       if (ev.type === "on") {
         glow[idx] = Math.max(glow[idx], 0.5 + ev.velocity * 0.6);
         held[idx]++;
+        lastTrack[idx] = ev.track ?? -1;
       } else {
         held[idx] = Math.max(0, held[idx] - 1);
       }
     });
     return off;
-  }, [glow, held]);
+  }, [glow, held, lastTrack]);
 
   // Window-level release so dragging off the canvas still stops the note.
   useEffect(() => {
@@ -380,8 +397,14 @@ export function Keyboard() {
       mat.color.set(baseColor).multiplyScalar(brightness);
       const e = glow[i];
       const glowOn = e > 0.001 && settings.keyGlowEnabled;
+      // Resolve the glow tint per-key: in "follow note" mode, prefer
+      // the per-track override (if the most recent note-on on this
+      // key carried a track index and that track has a colour set in
+      // settings.trackColors); otherwise the global noteColor. The
+      // explicit `keyGlowColor` mode stays global.
+      const trackIdx = lastTrack[i] >= 0 ? lastTrack[i] : undefined;
       const glowColorHex = settings.keyGlowFollowNote
-        ? settings.noteColor
+        ? resolveTrackColorHex(trackIdx, settings.trackColors, settings.noteColor)
         : settings.keyGlowColor;
       // Black-key surface tint: bring the actual color toward the glow
       // color, scaled brightness. White keys keep their pristine surface
@@ -468,13 +491,25 @@ export function Keyboard() {
     sharedLightUniforms.uShadowHalo.value =
       SHADOW_HALO_BASE *
       Math.pow(settings.flashHaloWidth / DEFAULT_FLASH_HALO, SHADOW_HALO_RESPONSE);
-    // Light color follows the same source as the LandingFlashes plane —
-    // noteColor when "Follows Note" is on, otherwise the explicit
-    // flashColor — and is then lifted toward white by flashBrightness so
-    // a saturated colour can still keep a bright "spark" core.
-    sharedLightUniforms.uLightColor.value
-      .set(settings.flashFollowNote ? settings.noteColor : settings.flashColor)
-      .lerp(WHITE_LIGHT_TARGET, settings.flashBrightness);
+    // Per-slot light colour follows the same source as the
+    // LandingFlashes plane: per-track override when "Follows Note" is
+    // on, otherwise the explicit flashColor — then lifted toward white
+    // by flashBrightness so a saturated colour still keeps a bright
+    // "spark" core. The lerp is done before pack-into-Float32Array, in
+    // a scratch THREE.Color reused across slots.
+    const lightColors = sharedLightUniforms.uLightColors.value;
+    const fallbackHex = settings.flashFollowNote
+      ? settings.noteColor
+      : settings.flashColor;
+    const flashBrightness = settings.flashBrightness;
+    const followNote = settings.flashFollowNote;
+    const trackColorMap = settings.trackColors;
+    // Pre-compute the fallback in linear RGB, post-brightness-lerp,
+    // so per-track keys that hit the fallback don't recompute it.
+    LIGHT_COLOR_SCRATCH.set(fallbackHex).lerp(WHITE_LIGHT_TARGET, flashBrightness);
+    const fallbackR = LIGHT_COLOR_SCRATCH.r;
+    const fallbackG = LIGHT_COLOR_SCRATCH.g;
+    const fallbackB = LIGHT_COLOR_SCRATCH.b;
     for (let bk = 0; bk < BLACK_KEY_COUNT; bk++) {
       blackGlow[bk] = Math.min(1, glow[BLACK_KEY_INDICES[bk]]);
     }
@@ -500,6 +535,23 @@ export function Keyboard() {
         lightIntensities[slot] = Math.min(1, bestVal);
         lightXYs[slot * 2] = KEYBOARD_LAYOUT.keys[bestI].x;
         lightXYs[slot * 2 + 1] = WHITE_KEY_LENGTH;
+        // Per-slot colour: use the per-track override if this key's
+        // most recent note-on came from a tracked song note AND that
+        // track has a color set; else the brightness-lifted fallback.
+        const ti = lastTrack[bestI];
+        const override =
+          followNote && ti >= 0 ? trackColorMap[String(ti)] : undefined;
+        const c3 = slot * 3;
+        if (override) {
+          LIGHT_COLOR_SCRATCH.set(override).lerp(WHITE_LIGHT_TARGET, flashBrightness);
+          lightColors[c3] = LIGHT_COLOR_SCRATCH.r;
+          lightColors[c3 + 1] = LIGHT_COLOR_SCRATCH.g;
+          lightColors[c3 + 2] = LIGHT_COLOR_SCRATCH.b;
+        } else {
+          lightColors[c3] = fallbackR;
+          lightColors[c3 + 1] = fallbackG;
+          lightColors[c3 + 2] = fallbackB;
+        }
       }
     } else {
       for (let slot = 0; slot < MAX_LIGHTS; slot++) {

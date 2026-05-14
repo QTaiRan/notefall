@@ -13,6 +13,7 @@ const def = defaultSettings
 
 export function Inspector() {
   const s = useStore((st) => st.settings)
+  const song = useStore((st) => st.song)
   const updateRaw = useStore((st) => st.updateSettings)
   const beginEdit = useStore((st) => st.beginSettingsEdit)
   const endEdit = useStore((st) => st.endSettingsEdit)
@@ -230,7 +231,68 @@ export function Inspector() {
           defaultValue={def.fallDirection}
         />
         <SliderRow label="Fall Time (s)" value={s.fallDurationSec} min={0.5} max={8} step={0.1} onChange={(v) => update({ fallDurationSec: v })} defaultValue={def.fallDurationSec} />
-        <ColorRow label="Color" value={s.noteColor} onChange={(v) => update({ noteColor: v })} defaultValue={def.noteColor} />
+        {/* Per-track colour overrides. Shows one row per MIDI track that
+            actually contained notes — tempo / meta tracks (track 0 in
+            most Format 1 files) are hidden via `hasNotes`. A row's
+            value defaults to the global `noteColor` when the user hasn't
+            picked an override yet; double-click resets the override
+            (sets the colour back to noteColor in storage).
+
+            When the song has any note-track, every note is already
+            reachable through a track row, so the global Color row is
+            redundant and hidden. Only shown when no song / no
+            note-tracks exist, as the primary fallback control. */}
+        {(() => {
+          const noteTracks = song?.tracks
+            .map((t, idx) => ({ t, idx }))
+            .filter(({ t }) => t.hasNotes)
+            ?? []
+          return (
+            <>
+              {noteTracks.length === 0 && (
+                <ColorRow
+                  label="Color"
+                  value={s.noteColor}
+                  onChange={(v) => update({ noteColor: v })}
+                  defaultValue={def.noteColor}
+                />
+              )}
+              {noteTracks.map(({ t, idx }) => {
+                const key = String(idx)
+                const hasOverride = s.trackColors[key] !== undefined
+                const value = s.trackColors[key] ?? s.noteColor
+                return (
+                  <ColorRow
+                    key={idx}
+                    label={t.name}
+                    value={value}
+                    onChange={(v) =>
+                      update({ trackColors: { ...s.trackColors, [key]: v } })
+                    }
+                    defaultValue={s.noteColor}
+                    // Reset DELETES the entry instead of writing
+                    // `noteColor` as a literal so later theme changes
+                    // (which update `noteColor`) propagate to this
+                    // track dynamically. `isModified` is driven by
+                    // override-presence (not value-equality) so the
+                    // chip stays available even when the override
+                    // happens to match noteColor right now.
+                    isModified={hasOverride}
+                    onReset={
+                      hasOverride
+                        ? () => {
+                            const next = { ...s.trackColors }
+                            delete next[key]
+                            update({ trackColors: next })
+                          }
+                        : undefined
+                    }
+                  />
+                )
+              })}
+            </>
+          )
+        })()}
         <SliderRow label="Emissive" value={s.noteEmissive} min={0} max={20} step={0.1} onChange={(v) => update({ noteEmissive: v })} defaultValue={def.noteEmissive} />
         <SliderRow label="Opacity" value={s.noteOpacity} min={0} max={1} step={0.01} onChange={(v) => update({ noteOpacity: v })} defaultValue={def.noteOpacity} />
         <SliderRow label="Width" value={s.noteWidthScale} min={0.2} max={1.5} step={0.01} onChange={(v) => update({ noteWidthScale: v })} defaultValue={def.noteWidthScale} />

@@ -8,11 +8,18 @@ import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH } from '../keybo
 
 const VERTEX_SHADER = /* glsl */ `
   attribute float instanceIntensity;
+  // Per-key RGB tint. Resolved from settings.trackColors[lastTrack[key]]
+  // with fallback to flashColor / noteColor — populated each frame on
+  // the CPU side. The shader uses this in place of a uColor uniform so
+  // simultaneously-flashing keys can show different track colours.
+  attribute vec3 instanceTint;
   varying vec2 vUv;
   varying float vIntensity;
+  varying vec3 vTint;
   void main() {
     vUv = uv;
     vIntensity = instanceIntensity;
+    vTint = instanceTint;
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
 `
@@ -21,11 +28,11 @@ const FRAGMENT_SHADER = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
   varying float vIntensity;
-  uniform vec3 uColor;
+  varying vec3 vTint;
   // 1.0 = default core softness. Larger value = wider, softer halo edge
   // around the bright spot. Smaller = tighter, sharper edge.
   uniform float uHaloWidth;
-  // 0 = pure uColor, 1 = pure white. Lifts the flash colour toward white
+  // 0 = pure tint, 1 = pure white. Lifts the flash colour toward white
   // so a coloured flash can still have a hot bright core.
   uniform float uBrightness;
   void main() {
@@ -46,7 +53,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     float edgeFade = 1.0 - smoothstep(0.7, 1.0, length(p));
     float a = core * edgeFade * vIntensity;
     if (a < 0.001) discard;
-    vec3 tinted = mix(uColor, vec3(1.0), uBrightness);
+    vec3 tinted = mix(vTint, vec3(1.0), uBrightness);
     gl_FragColor = vec4(tinted * a * 1.5, a);
   }
 `
@@ -76,6 +83,20 @@ export function LandingFlashes() {
     a.setUsage(THREE.DynamicDrawUsage)
     return a
   }, [intensities])
+  // Per-key RGB tint, re-uploaded each frame (cheap — 88 × 3 floats).
+  const tints = useMemo(() => new Float32Array(KEY_COUNT * 3), [])
+  const tintAttr = useMemo(() => {
+    const a = new THREE.InstancedBufferAttribute(tints, 3)
+    a.setUsage(THREE.DynamicDrawUsage)
+    return a
+  }, [tints])
+  // Track index of the most recent note-on per key (-1 = no track /
+  // live input). Read in the per-frame tint update loop.
+  const lastTrack = useMemo(() => {
+    const a = new Int32Array(KEY_COUNT)
+    a.fill(-1)
+    return a
+  }, [])
   const heldCount = useMemo(() => new Uint8Array(KEY_COUNT), [])
   const sustainLevels = useMemo(() => new Float32Array(KEY_COUNT), [])
   // Earliest wall-clock time at which a key can fade to off. Bumped on every
@@ -85,7 +106,6 @@ export function LandingFlashes() {
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        uColor: { value: new THREE.Color(settings.flashFollowNote ? settings.noteColor : settings.flashColor) },
         uHaloWidth: { value: settings.flashHaloWidth },
         uBrightness: { value: settings.flashBrightness },
       },
@@ -100,10 +120,6 @@ export function LandingFlashes() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => () => material.dispose(), [material])
-
-  useEffect(() => {
-    material.uniforms.uColor.value.set(settings.flashFollowNote ? settings.noteColor : settings.flashColor)
-  }, [material, settings.flashColor, settings.flashFollowNote, settings.noteColor])
 
   useEffect(() => {
     material.uniforms.uHaloWidth.value = settings.flashHaloWidth
@@ -128,6 +144,7 @@ export function LandingFlashes() {
         // Instant on — no rise time. Also extend the minimum-visible window.
         intensities[idx] = sustainLevels[idx]
         heldUntil[idx] = now() + MIN_HOLD_SECONDS
+        lastTrack[idx] = ev.track ?? -1
         intensityAttr.needsUpdate = true
       } else {
         heldCount[idx] = Math.max(0, heldCount[idx] - 1)
@@ -135,7 +152,7 @@ export function LandingFlashes() {
       }
     })
     return off
-  }, [heldCount, sustainLevels, heldUntil, intensities, intensityAttr])
+  }, [heldCount, sustainLevels, heldUntil, lastTrack, intensities, intensityAttr])
 
   // Refresh per-instance transforms when size / width settings change.
   // `flashSize` is the uniform scale; `flashWidth` is an extra horizontal
@@ -145,6 +162,7 @@ export function LandingFlashes() {
     const mesh = meshRef.current
     if (!mesh) return
     mesh.geometry.setAttribute('instanceIntensity', intensityAttr)
+    mesh.geometry.setAttribute('instanceTint', tintAttr)
     for (let i = 0; i < KEY_COUNT; i++) {
       const k = KEYBOARD_LAYOUT.keys[i]
       const baseScale = k.width * BASE_PLANE_SCALE * settings.flashSize
@@ -159,8 +177,13 @@ export function LandingFlashes() {
     mesh.count = KEY_COUNT
     return () => {
       mesh.geometry.deleteAttribute('instanceIntensity')
+      mesh.geometry.deleteAttribute('instanceTint')
     }
-  }, [intensityAttr, dummy, settings.flashSize, settings.flashWidth])
+  }, [intensityAttr, tintAttr, dummy, settings.flashSize, settings.flashWidth])
+
+  // Scratch THREE.Color reused inside the per-frame tint resolver to
+  // parse hex strings without allocating.
+  const tmpColor = useMemo(() => new THREE.Color(), [])
 
   useFrame(() => {
     const nowSec = now()
@@ -176,6 +199,49 @@ export function LandingFlashes() {
       }
     }
     if (dirty) intensityAttr.needsUpdate = true
+
+    // Per-track RGB cache for this frame. Only keys with intensity > 0
+    // get a fresh tint write — saves cost when the keyboard is idle.
+    const fallbackHex = settings.flashFollowNote
+      ? settings.noteColor
+      : settings.flashColor
+    tmpColor.set(fallbackHex)
+    const defaultR = tmpColor.r
+    const defaultG = tmpColor.g
+    const defaultB = tmpColor.b
+    const trackColors = settings.trackColors
+    const trackRgbCache = new Map<number, readonly [number, number, number]>()
+    const resolveTint = (
+      trackIdx: number,
+    ): readonly [number, number, number] => {
+      if (trackIdx < 0 || !settings.flashFollowNote)
+        return [defaultR, defaultG, defaultB]
+      const cached = trackRgbCache.get(trackIdx)
+      if (cached) return cached
+      const override = trackColors[String(trackIdx)]
+      if (!override) {
+        const v: [number, number, number] = [defaultR, defaultG, defaultB]
+        trackRgbCache.set(trackIdx, v)
+        return v
+      }
+      tmpColor.set(override)
+      const v: [number, number, number] = [tmpColor.r, tmpColor.g, tmpColor.b]
+      trackRgbCache.set(trackIdx, v)
+      return v
+    }
+    let tintDirty = false
+    for (let i = 0; i < KEY_COUNT; i++) {
+      if (intensities[i] === 0) continue
+      const [r, g, b] = resolveTint(lastTrack[i])
+      const o = i * 3
+      if (tints[o] !== r || tints[o + 1] !== g || tints[o + 2] !== b) {
+        tints[o] = r
+        tints[o + 1] = g
+        tints[o + 2] = b
+        tintDirty = true
+      }
+    }
+    if (tintDirty) tintAttr.needsUpdate = true
   })
 
   return (
