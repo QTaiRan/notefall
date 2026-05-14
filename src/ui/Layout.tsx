@@ -27,114 +27,122 @@ const isProjectName = (name: string) => PROJECT_EXT_RE.test(name)
 const isMidiName = (name: string) => MIDI_EXT_RE.test(name)
 
 export function Layout() {
-  const settings = useStore((s) => s.settings)
   const transport = useStore((s) => s.transport)
-  const loop = useStore((s) => s.loop)
   useGlobalShortcuts()
 
-  // sync engine settings
+  // ── Engine settings sync via imperative subscription ─────────────
+  //
+  // Previously Layout subscribed to `settings` (whole object) and had
+  // ~25 `useEffect`s with per-key deps. That worked but forced Layout
+  // to re-render on EVERY settings change — and since Layout is the
+  // common ancestor of Toolbar / Viewport / Inspector / TimelineEditor,
+  // every Inspector slider drag re-rendered the entire app tree
+  // (visible in React Scan). The component bodies were cheap but the
+  // cascading reconciliation through R3F / many BoundRows was not.
+  //
+  // The fix is to read settings only via `useStore.subscribe` inside
+  // a mount-time effect: the diff happens in the subscription callback,
+  // not in React's render cycle, so Layout never re-renders for these.
   useEffect(() => {
-    audioEngine.setVolume(settings.volume)
-  }, [settings.volume])
-  useEffect(() => {
-    audioEngine.setMidiVolume(settings.midiVolume)
-  }, [settings.midiVolume])
-  useEffect(() => {
-    audioEngine.setMidiEnabled(settings.midiEnabled)
-  }, [settings.midiEnabled])
-  useEffect(() => {
-    audioEngine.setRate(settings.playbackRate)
-  }, [settings.playbackRate])
-  useEffect(() => {
-    audioEngine.setPedalEnabled(settings.pedalEnabled)
-  }, [settings.pedalEnabled])
-  useEffect(() => {
-    audioEngine.setReverbEnabled(settings.reverbEnabled)
-  }, [settings.reverbEnabled])
-  useEffect(() => {
-    audioEngine.setReverbDry(settings.reverbDry)
-  }, [settings.reverbDry])
-  useEffect(() => {
-    audioEngine.setReverbWet(settings.reverbWet)
-  }, [settings.reverbWet])
-  useEffect(() => {
-    audioEngine.setReverbSize(settings.reverbSize)
-  }, [settings.reverbSize])
-  useEffect(() => {
-    audioEngine.setReverbDecayTime(settings.reverbDecayTime)
-  }, [settings.reverbDecayTime])
-  useEffect(() => {
-    audioEngine.setReverbDecay(settings.reverbDecay)
-  }, [settings.reverbDecay])
-  useEffect(() => {
-    audioEngine.setReverbPreDelay(settings.reverbPreDelay)
-  }, [settings.reverbPreDelay])
-  useEffect(() => {
-    audioEngine.setReverbDamping(settings.reverbDamping)
-  }, [settings.reverbDamping])
-  useEffect(() => {
-    audioEngine.setReverbHiCut(settings.reverbHiCut)
-  }, [settings.reverbHiCut])
-  useEffect(() => {
-    audioEngine.setReverbLowCut(settings.reverbLowCut)
-  }, [settings.reverbLowCut])
-  useEffect(() => {
-    audioEngine.setReleaseTime(settings.releaseTime)
-  }, [settings.releaseTime])
-  useEffect(() => {
-    audioEngine.setDetune(settings.samplerDetune)
-  }, [settings.samplerDetune])
-  useEffect(() => {
-    settings.eqBands.forEach((db, i) => audioEngine.setEqBand(i, db))
-  }, [settings.eqBands])
-  useEffect(() => {
-    audioEngine.setVelocityCurve(settings.velocityCurve)
-  }, [settings.velocityCurve])
-  useEffect(() => {
-    audioEngine.setVelocityCompensation(settings.velocityCompensation)
-  }, [settings.velocityCompensation])
-  // Transpose is applied at TWO independent stages — engine handles song
-  // notes, midiInput handles live MIDI input — so the value goes to both.
-  // Screen-keyboard / PC-keyboard touches stay un-shifted.
-  useEffect(() => {
-    audioEngine.setTranspose(settings.transpose)
-    midiInput.setTranspose(settings.transpose)
-  }, [settings.transpose])
+    // Initial sync from the live store state.
+    let prev = useStore.getState().settings
+    audioEngine.setVolume(prev.volume)
+    audioEngine.setMidiVolume(prev.midiVolume)
+    audioEngine.setMidiEnabled(prev.midiEnabled)
+    audioEngine.setRate(prev.playbackRate)
+    audioEngine.setPedalEnabled(prev.pedalEnabled)
+    audioEngine.setReverbEnabled(prev.reverbEnabled)
+    audioEngine.setReverbDry(prev.reverbDry)
+    audioEngine.setReverbWet(prev.reverbWet)
+    audioEngine.setReverbSize(prev.reverbSize)
+    audioEngine.setReverbDecayTime(prev.reverbDecayTime)
+    audioEngine.setReverbDecay(prev.reverbDecay)
+    audioEngine.setReverbPreDelay(prev.reverbPreDelay)
+    audioEngine.setReverbDamping(prev.reverbDamping)
+    audioEngine.setReverbHiCut(prev.reverbHiCut)
+    audioEngine.setReverbLowCut(prev.reverbLowCut)
+    audioEngine.setReleaseTime(prev.releaseTime)
+    audioEngine.setDetune(prev.samplerDetune)
+    prev.eqBands.forEach((db, i) => audioEngine.setEqBand(i, db))
+    audioEngine.setVelocityCurve(prev.velocityCurve)
+    audioEngine.setVelocityCompensation(prev.velocityCompensation)
+    audioEngine.setTranspose(prev.transpose)
+    midiInput.setTranspose(prev.transpose)
+    audioEngine.setUserAudioOffset(prev.userAudioOffsetSec)
+    audioEngine.setUserAudioVolume(prev.userAudioVolume)
+    audioEngine.setMidiOffset(prev.midiOffsetSec)
+    audioEngine.setMidiTrim(prev.midiTrimStartSec, prev.midiTrimEndSec)
+    audioEngine.setUserAudioTrim(prev.userAudioTrimStartSec, prev.userAudioTrimEndSec)
+    audioEngine.setSpeedAutomation(prev.midiSpeedAutomation)
+    return useStore.subscribe((state) => {
+      const cur = state.settings
+      if (cur === prev) return
+      if (cur.volume !== prev.volume) audioEngine.setVolume(cur.volume)
+      if (cur.midiVolume !== prev.midiVolume) audioEngine.setMidiVolume(cur.midiVolume)
+      if (cur.midiEnabled !== prev.midiEnabled) audioEngine.setMidiEnabled(cur.midiEnabled)
+      if (cur.playbackRate !== prev.playbackRate) audioEngine.setRate(cur.playbackRate)
+      if (cur.pedalEnabled !== prev.pedalEnabled) audioEngine.setPedalEnabled(cur.pedalEnabled)
+      if (cur.reverbEnabled !== prev.reverbEnabled) audioEngine.setReverbEnabled(cur.reverbEnabled)
+      if (cur.reverbDry !== prev.reverbDry) audioEngine.setReverbDry(cur.reverbDry)
+      if (cur.reverbWet !== prev.reverbWet) audioEngine.setReverbWet(cur.reverbWet)
+      if (cur.reverbSize !== prev.reverbSize) audioEngine.setReverbSize(cur.reverbSize)
+      if (cur.reverbDecayTime !== prev.reverbDecayTime) audioEngine.setReverbDecayTime(cur.reverbDecayTime)
+      if (cur.reverbDecay !== prev.reverbDecay) audioEngine.setReverbDecay(cur.reverbDecay)
+      if (cur.reverbPreDelay !== prev.reverbPreDelay) audioEngine.setReverbPreDelay(cur.reverbPreDelay)
+      if (cur.reverbDamping !== prev.reverbDamping) audioEngine.setReverbDamping(cur.reverbDamping)
+      if (cur.reverbHiCut !== prev.reverbHiCut) audioEngine.setReverbHiCut(cur.reverbHiCut)
+      if (cur.reverbLowCut !== prev.reverbLowCut) audioEngine.setReverbLowCut(cur.reverbLowCut)
+      if (cur.releaseTime !== prev.releaseTime) audioEngine.setReleaseTime(cur.releaseTime)
+      if (cur.samplerDetune !== prev.samplerDetune) audioEngine.setDetune(cur.samplerDetune)
+      if (cur.eqBands !== prev.eqBands) {
+        cur.eqBands.forEach((db, i) => {
+          if (db !== prev.eqBands[i]) audioEngine.setEqBand(i, db)
+        })
+      }
+      if (cur.velocityCurve !== prev.velocityCurve) audioEngine.setVelocityCurve(cur.velocityCurve)
+      if (cur.velocityCompensation !== prev.velocityCompensation)
+        audioEngine.setVelocityCompensation(cur.velocityCompensation)
+      if (cur.transpose !== prev.transpose) {
+        audioEngine.setTranspose(cur.transpose)
+        midiInput.setTranspose(cur.transpose)
+      }
+      if (cur.userAudioOffsetSec !== prev.userAudioOffsetSec)
+        audioEngine.setUserAudioOffset(cur.userAudioOffsetSec)
+      if (cur.userAudioVolume !== prev.userAudioVolume)
+        audioEngine.setUserAudioVolume(cur.userAudioVolume)
+      if (cur.midiOffsetSec !== prev.midiOffsetSec)
+        audioEngine.setMidiOffset(cur.midiOffsetSec)
+      if (
+        cur.midiTrimStartSec !== prev.midiTrimStartSec ||
+        cur.midiTrimEndSec !== prev.midiTrimEndSec
+      ) {
+        audioEngine.setMidiTrim(cur.midiTrimStartSec, cur.midiTrimEndSec)
+      }
+      if (
+        cur.userAudioTrimStartSec !== prev.userAudioTrimStartSec ||
+        cur.userAudioTrimEndSec !== prev.userAudioTrimEndSec
+      ) {
+        audioEngine.setUserAudioTrim(cur.userAudioTrimStartSec, cur.userAudioTrimEndSec)
+      }
+      if (cur.midiSpeedAutomation !== prev.midiSpeedAutomation)
+        audioEngine.setSpeedAutomation(cur.midiSpeedAutomation)
+      prev = cur
+    })
+  }, [])
+
+  // Loop is a top-level store value (not nested under settings), kept
+  // here as a stand-alone effect.
+  const loop = useStore((s) => s.loop)
   useEffect(() => {
     audioEngine.setLoop(loop)
   }, [loop])
 
-  // ── Sync user-provided audio buffer + offset + volume into the engine ──
-  // The buffer is a heavy decoded AudioBuffer kept outside the main
-  // store; subscribing here (not via a `useStore` selector that returns
-  // an object) lets us push it through to the engine without forcing
-  // every Layout re-render to re-set it. Offset / volume are normal
-  // settings.
+  // User audio buffer is kept outside the main store (heavy AudioBuffer);
+  // subscribe to it directly so Layout doesn't re-render on settings.
   const userAudioBuffer = useUserAudio((s) => s.buffer)
   useEffect(() => {
     audioEngine.setUserAudio(userAudioBuffer)
   }, [userAudioBuffer])
-  useEffect(() => {
-    audioEngine.setUserAudioOffset(settings.userAudioOffsetSec)
-  }, [settings.userAudioOffsetSec])
-  useEffect(() => {
-    audioEngine.setUserAudioVolume(settings.userAudioVolume)
-  }, [settings.userAudioVolume])
-  useEffect(() => {
-    audioEngine.setMidiOffset(settings.midiOffsetSec)
-  }, [settings.midiOffsetSec])
-  useEffect(() => {
-    audioEngine.setMidiTrim(settings.midiTrimStartSec, settings.midiTrimEndSec)
-  }, [settings.midiTrimStartSec, settings.midiTrimEndSec])
-  useEffect(() => {
-    audioEngine.setUserAudioTrim(
-      settings.userAudioTrimStartSec,
-      settings.userAudioTrimEndSec,
-    )
-  }, [settings.userAudioTrimStartSec, settings.userAudioTrimEndSec])
-  useEffect(() => {
-    audioEngine.setSpeedAutomation(settings.midiSpeedAutomation)
-  }, [settings.midiSpeedAutomation])
 
   // sync transport state if engine auto-stopped at end-of-song
   useEffect(() => {
@@ -157,7 +165,7 @@ export function Layout() {
     // earlier Viewport-scoped DropZone left users dropping onto the
     // wrong surface with nothing happening.
     <DropZone
-      className="relative flex h-full w-full flex-col bg-neutral-950 outline-none"
+      className="group/dropzone relative flex h-full w-full flex-col bg-neutral-950 outline-none"
       // Accept every file drop. react-aria's `DragTypes.has('Files')`
       // does NOT match native file drops the way HTML's
       // `dataTransfer.types.includes('Files')` does — it checks the
@@ -221,37 +229,35 @@ export function Layout() {
         })
       }}
     >
-      {({ isDropTarget }) => (
-        <>
-          <Toolbar />
-          {/* Viewport + TimelineEditor stack in a left column so the
-              timeline editor sits under the canvas only. The Inspector
-              remains a tall right column from Toolbar to bottom — the
-              editor never extends under it. */}
-          <div className="flex flex-1 overflow-hidden">
-            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-              <Viewport />
-              <TimelineEditor />
-            </div>
-            <Inspector />
-          </div>
-          <LoadingOverlay />
-          <ConfirmModal />
-          {/* Drop indicator. `pointer-events-none` so the DropZone
-              underneath still receives the drop event regardless of
-              which UI surface the user releases on. */}
-          {isDropTarget && (
-            <div
-              aria-hidden
-              className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-sky-500/10 backdrop-blur-sm"
-            >
-              <div className="rounded-md border border-sky-500/40 bg-black/55 px-5 py-3 text-sm font-medium text-sky-100 shadow-lg backdrop-blur-md">
-                Drop to load (.mid / .midi / .nfz / .mp3 / .wav)
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      <Toolbar />
+      {/* Viewport + TimelineEditor stack in a left column so the
+          timeline editor sits under the canvas only. The Inspector
+          remains a tall right column from Toolbar to bottom — the
+          editor never extends under it. */}
+      <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Viewport />
+          <TimelineEditor />
+        </div>
+        <Inspector />
+      </div>
+      <LoadingOverlay />
+      <ConfirmModal />
+      {/* Drop indicator. Toggled via CSS off the DropZone's
+          `data-drop-target` attribute — using a render-prop here would
+          re-execute the entire Layout subtree on every focus / hover /
+          press change to the DropZone, not just when a file drag
+          enters. `pointer-events-none` so the DropZone underneath
+          still receives the drop event regardless of which UI surface
+          the user releases on. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 z-50 hidden items-center justify-center bg-sky-500/10 backdrop-blur-sm group-data-[drop-target]/dropzone:flex"
+      >
+        <div className="rounded-md border border-sky-500/40 bg-black/55 px-5 py-3 text-sm font-medium text-sky-100 shadow-lg backdrop-blur-md">
+          Drop to load (.mid / .midi / .nfz / .mp3 / .wav)
+        </div>
+      </div>
     </DropZone>
   )
 }

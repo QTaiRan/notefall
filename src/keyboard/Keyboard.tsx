@@ -45,8 +45,34 @@ import {
   type WhiteKeyUniforms,
 } from "./whiteKeyShader";
 import { usePcKeyboardInput } from "./pcInput";
-import { useStore, defaultSettings } from "../store";
+import { useStore, useSettingsSlice, defaultSettings } from "../store";
 import { computeLiveVisibleTop } from "../scene/visibleTop";
+
+const KEYBOARD_KEYS = [
+  "blackKeyColor",
+  "cameraFov",
+  "cameraLookAt",
+  "cameraPos",
+  "flashBrightness",
+  "flashColor",
+  "flashEnabled",
+  "flashFollowNote",
+  "flashHaloWidth",
+  "flashIntensity",
+  "flashSize",
+  "flashWidth",
+  "keyboardBrightness",
+  "keyboardY",
+  "keyGlowColor",
+  "keyGlowDecay",
+  "keyGlowEnabled",
+  "keyGlowFollowNote",
+  "keyGlowIntensity",
+  "noteColor",
+  "trackColors",
+  "whiteKeyColor",
+  "woodColor",
+] as const;
 import { audioEngine } from "../audio/engine";
 
 // Press animation: each key's group sits at the rear edge; press dips
@@ -93,7 +119,7 @@ const WHITE_LIGHT_TARGET = new THREE.Color(1, 1, 1);
 const LIGHT_COLOR_SCRATCH = new THREE.Color();
 
 export function Keyboard() {
-  const settings = useStore((s) => s.settings);
+  const settings = useSettingsSlice(KEYBOARD_KEYS);
   const setLoadStatus = useStore((s) => s.setLoadStatus);
   const { gl } = useThree();
 

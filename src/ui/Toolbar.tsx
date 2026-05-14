@@ -9,7 +9,14 @@ import {
   Separator,
   SubmenuTrigger,
 } from 'react-aria-components'
-import { useStore } from '../store'
+import { useStore, useSettingsSlice } from '../store'
+
+const TOOLBAR_KEYS = [
+  'userAudioOffsetSec',
+  'userAudioTrimEndSec',
+  'userAudioTrimStartSec',
+  'userAudioVolume',
+] as const
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong } from '../audio/playback'
@@ -160,7 +167,7 @@ function fmtCreatedAt(epochMs: number): string {
 
 export function Toolbar() {
   const song = useStore((s) => s.song)
-  const settings = useStore((s) => s.settings)
+  const settings = useSettingsSlice(TOOLBAR_KEYS)
   const setSong = useStore((s) => s.setSong)
   const setTransport = useStore((s) => s.setTransport)
   const setLoadStatus = useStore((s) => s.setLoadStatus)
@@ -519,7 +526,7 @@ export function Toolbar() {
           : null
 
       if (isAudioOnly) {
-        const result = await exportSongToWav(song, settings, {
+        const result = await exportSongToWav(song, useStore.getState().settings, {
           fileName,
           signal: abort.signal,
           userAudio: userAudioForExport,
@@ -552,7 +559,7 @@ export function Toolbar() {
           values.fps,
           values.quality,
         )
-        const result = await exportSongToMp4(song, settings, {
+        const result = await exportSongToMp4(song, useStore.getState().settings, {
           width: resInfo.width,
           height: resInfo.height,
           fps: values.fps,

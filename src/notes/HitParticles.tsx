@@ -1,7 +1,38 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
-import { useStore } from '../store'
+import { useSettingsSlice } from '../store'
+
+const HIT_PARTICLES_KEYS = [
+  'cameraFov',
+  'cameraLookAt',
+  'cameraPos',
+  'drag',
+  'fallDurationSec',
+  'flowSpeed',
+  'keyboardY',
+  'kick',
+  'noiseLocality',
+  'noteMinLength',
+  'octaveMultiplier',
+  'octaveScale',
+  'particleBrightness',
+  'particleColor',
+  'particleCount',
+  'particleLifetime',
+  'particleOpacity',
+  'particlesEnabled',
+  'particleSize',
+  'particleSpeed',
+  'particleTurbulence',
+  'swirl',
+  'trackColors',
+  'turbulenceFrequency',
+  'turbulenceOctaves',
+  'turbulenceX',
+  'turbulenceY',
+  'turbulenceZ',
+] as const
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH, WHITE_KEY_WIDTH } from '../keyboard/layout'
@@ -206,7 +237,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 `
 
 export function HitParticles() {
-  const settings = useStore((s) => s.settings)
+  const settings = useSettingsSlice(HIT_PARTICLES_KEYS)
 
   const births = useMemo(() => {
     const a = new Float32Array(MAX_PARTICLES)

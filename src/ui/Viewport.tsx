@@ -6,7 +6,7 @@ import {
   SliderThumb,
   SliderTrack,
 } from "react-aria-components";
-import { useHover } from "react-aria";
+import { UNSAFE_PortalProvider, useHover } from "react-aria";
 import { Scene } from "../scene/Scene";
 import { SeekBar } from "./SeekBar";
 import {
@@ -607,11 +607,20 @@ export function Viewport() {
   // canvas — routes the file. The earlier Viewport-scoped `DropZone` was
   // too narrow: users routinely dropped onto the Inspector or Toolbar
   // and saw nothing happen.
+  // Fullscreen tooltips / popovers: react-aria portals these into
+  // `document.body` by default, but body sits OUTSIDE the fullscreened
+  // wrapper element — so portaled overlays disappear once the user goes
+  // fullscreen. Redirect the portal container to wrapRef while in that
+  // state. Outside fullscreen, returning null lets react-aria fall back
+  // to its default (body).
+  const getPortalContainer = () =>
+    isFullscreen ? wrapRef.current : null;
   return (
     <div
       ref={wrapRef}
       className="relative flex flex-1 items-center justify-center overflow-hidden bg-black outline-none"
     >
+      <UNSAFE_PortalProvider getContainer={getPortalContainer}>
       <div
         ref={innerRef}
         className={`relative shadow-2xl ${cursorHidden && !popoverOpen ? "cursor-none" : ""}`}
@@ -654,6 +663,7 @@ export function Viewport() {
           />
         </div>
       </div>
+      </UNSAFE_PortalProvider>
     </div>
   );
 }

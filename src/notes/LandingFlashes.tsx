@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
-import { useStore } from '../store'
+import { useStore, useSettingsSlice } from '../store'
+
+const LANDING_FLASHES_KEYS = [
+  'flashBrightness',
+  'flashColor',
+  'flashFollowNote',
+  'flashHaloWidth',
+  'flashIntensity',
+  'flashSize',
+  'flashWidth',
+  'keyboardY',
+  'noteColor',
+  'trackColors',
+] as const
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH } from '../keyboard/layout'
@@ -73,7 +86,7 @@ const BASE_PLANE_SCALE = 2.6
  * the aspect ratio never changes.
  */
 export function LandingFlashes() {
-  const settings = useStore((s) => s.settings)
+  const settings = useSettingsSlice(LANDING_FLASHES_KEYS)
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
 

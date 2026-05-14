@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useShallow } from 'zustand/react/shallow'
 import type { ParsedSong } from './midi/types'
 import type { SpeedPoint } from './midi/speedMap'
 import { audioEngine } from './audio/engine'
@@ -547,7 +548,20 @@ const endSettingsEdit = (): void => {
     if (state.settings === baseline) return state
     const history = state.editHistory.concat({ kind: 'settings', before: baseline })
     if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
-    return { editHistory: history, editFuture: [] }
+    // Recompute dirty here (gesture commit). Per-frame updateSettings
+    // calls inside the gesture skipped the hash for performance; this
+    // settles dirty once on release so the indicator reflects the
+    // final state.
+    return {
+      editHistory: history,
+      editFuture: [],
+      dirty: dirtyFor({
+        song: state.song,
+        settings: state.settings,
+        savedContentHash: state.savedContentHash,
+        externalDirty: state.externalDirty,
+      }),
+    }
   })
 }
 
@@ -919,19 +933,15 @@ export const useStore = create<AppState>((set) => ({
     set((state) => {
       if (!state.song) return state
       audioEngine.updateSong(s)
-      // Per-frame setter — drags fire this many times. Recompute the
-      // dirty hash so a drag that ends back at the original note
-      // positions cleans up correctly (the commit at gesture end goes
-      // through `applySongEdit` and recomputes too, but `setSongPreview`
-      // also stands alone for some flows).
+      // Per-frame setter — drags fire this many times. We deliberately
+      // SKIP the dirty hash here: `hashSong` walks every note and
+      // allocates a fresh string each call, which at 60fps becomes the
+      // dominant CPU cost during a note drag. The gesture's commit
+      // (applySongEdit) recomputes dirty correctly on release; the
+      // indicator may lag by one drag but that's invisible to users
+      // since they're already mid-edit.
       const patch: Partial<AppState> = {
         song: s,
-        dirty: dirtyFor({
-          song: s,
-          settings: state.settings,
-          savedContentHash: state.savedContentHash,
-          externalDirty: state.externalDirty,
-        }),
       }
       if (state.selection.size === 1) {
         const id = state.selection.values().next().value as number
@@ -1148,6 +1158,17 @@ export const useStore = create<AppState>((set) => ({
   updateSettings: (patch) =>
     set((state) => {
       const settings = { ...state.settings, ...patch }
+      // Inside a gesture (slider drag, color popover session, etc.)
+      // every onChange would otherwise call `dirtyFor` → `hashSong`
+      // (O(notes)) + JSON.stringify(settings). At 60fps on a multi-
+      // thousand-note song that burns several ms per frame for a value
+      // that only matters at gesture end. `endSettingsEdit` recomputes
+      // it once when the outermost begin/end pair closes; outside a
+      // gesture (atomic switch/select clicks) we still compute it
+      // synchronously so the indicator flips immediately.
+      if (pendingSettingsDepth > 0) {
+        return { settings }
+      }
       return {
         settings,
         dirty: dirtyFor({
@@ -1276,3 +1297,26 @@ export const useStore = create<AppState>((set) => ({
     })
   },
 }))
+
+/**
+ * Subscribe to a narrow slice of `settings` instead of the whole object.
+ * `keys` is an `as const` tuple — the returned object's type narrows to
+ * `Pick<Settings, …>` automatically. With `useShallow`, the component
+ * re-renders ONLY when one of the listed values actually changes —
+ * Inspector slider drags on unrelated keys (e.g. dragging Reverb Wet
+ * while reading flash params) won't trigger a re-render.
+ *
+ * Pass the keys array as a module-level `as const` constant (NOT inline)
+ * so its identity stays stable across renders.
+ */
+export function useSettingsSlice<K extends readonly (keyof Settings)[]>(
+  keys: K,
+): Pick<Settings, K[number]> {
+  return useStore(
+    useShallow((s) => {
+      const out = {} as Pick<Settings, K[number]>
+      for (const k of keys) (out as Record<string, unknown>)[k as string] = s.settings[k]
+      return out
+    }),
+  )
+}

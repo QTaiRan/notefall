@@ -1,7 +1,17 @@
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
-import { useStore } from '../store'
+import { useStore, useSettingsSlice } from '../store'
+
+const EDIT_TOOLS_KEYS = [
+  'cameraFov',
+  'cameraLookAt',
+  'cameraPos',
+  'keyboardY',
+  'midiOffsetSec',
+  'midiSpeedAutomation',
+  'transpose',
+] as const
 import { audioEngine } from '../audio/engine'
 import { ensureSamplerLoaded, previewNote } from '../audio/preview'
 import { addNote, deleteNotes, moveNotes } from '../midi/edit'
@@ -93,7 +103,7 @@ const NOTE_Z = 0.1
 const PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), -NOTE_Z)
 
 export function EditTools() {
-  const s = useStore((st) => st.settings)
+  const s = useSettingsSlice(EDIT_TOOLS_KEYS)
   const { camera, gl } = useThree()
   // Time-context for the geometry helpers. Same shape FallingNotes
   // builds; mirroring it here keeps click→time conversions aligned

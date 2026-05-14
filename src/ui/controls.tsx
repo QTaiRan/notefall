@@ -1,4 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import {
   Slider,
   SliderOutput,
@@ -23,7 +32,7 @@ import {
   Dialog,
 } from 'react-aria-components'
 import type { Key } from 'react-aria-components'
-import { useStore } from '../store'
+import { defaultSettings, useStore, type Settings } from '../store'
 
 /**
  * Wrap an atomic settings mutation in a begin/end pair so it produces
@@ -36,6 +45,60 @@ const commitAtomic = (apply: () => void): void => {
   s.beginSettingsEdit()
   apply()
   s.endSettingsEdit()
+}
+
+// ── Search / collapse infrastructure ──────────────────────────────────
+//
+// Inspector wraps its content in a `SearchProvider`; nested sections and
+// rows read the current query from context. Rows whose label doesn't
+// fuzzy-match return null; sections detect they've gone empty by
+// counting `[data-search-label]` descendants after layout. When a
+// section's TITLE matches, it relays an empty query to its children so
+// every row inside stays visible (intuitive: matching "Audio" shows the
+// whole Audio section, not just rows whose label happens to contain
+// "audio").
+const SearchContext = createContext<string>('')
+
+export function SearchProvider({
+  query,
+  children,
+}: {
+  query: string
+  children: ReactNode
+}) {
+  return (
+    <SearchContext.Provider value={query.trim().toLowerCase()}>
+      {children}
+    </SearchContext.Provider>
+  )
+}
+
+export function useSearchQuery(): string {
+  return useContext(SearchContext)
+}
+
+export function rowMatchesQuery(label: string, query: string): boolean {
+  if (!query) return true
+  return label.toLowerCase().includes(query)
+}
+
+/**
+ * Wrap a non-standard control (EQ bands, custom-image picker, etc.) so it
+ * participates in the search filter. The wrapped block carries a virtual
+ * `label` for matching and emits `data-search-label` so the surrounding
+ * Section's "any visible row?" check sees it. Returns null when the query
+ * is non-empty and doesn't match — mirroring the *Row components.
+ */
+export function SearchableBlock({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  const q = useSearchQuery()
+  if (!rowMatchesQuery(label, q)) return null
+  return <div data-search-label={label}>{children}</div>
 }
 
 const isMacPlatform = () =>
@@ -357,6 +420,7 @@ type SliderRowProps = {
 }
 
 export function SliderRow({ label, value, min, max, step = 0.01, onChange, format, defaultValue }: SliderRowProps) {
+  const q = useSearchQuery()
   const { ref: trackRef, menuNode } = useSliderTrackGestures({
     value,
     min,
@@ -372,8 +436,10 @@ export function SliderRow({ label, value, min, max, step = 0.01, onChange, forma
   // both pointer release AND keyboard arrows, so each press of an arrow
   // key also commits as its own entry.
   const gestureOpen = useRef(false)
+  if (!rowMatchesQuery(label, q)) return null
   return (
     <Slider
+      data-search-label={label}
       value={value}
       minValue={min}
       maxValue={max}
@@ -442,8 +508,11 @@ type SwitchRowProps = {
 }
 
 export function SwitchRow({ label, value, onChange, defaultValue }: SwitchRowProps) {
+  const q = useSearchQuery()
+  if (!rowMatchesQuery(label, q)) return null
   return (
     <Switch
+      data-search-label={label}
       isSelected={value}
       onChange={(v) => commitAtomic(() => onChange(v))}
       className="group relative flex items-center justify-between gap-2 py-1.5 text-xs cursor-pointer"
@@ -523,8 +592,10 @@ export function ColorRow({
       ? isModifiedOverride
       : defaultValue !== undefined &&
         value.toLowerCase() !== defaultValue.toLowerCase()
+  const q = useSearchQuery()
+  if (!rowMatchesQuery(label, q)) return null
   return (
-    <div className="flex items-center justify-between py-1 text-xs">
+    <div data-search-label={label} className="flex items-center justify-between py-1 text-xs">
       <span
         className={`text-neutral-400 select-none ${reset ? 'cursor-pointer' : ''}`}
         onDoubleClick={reset}
@@ -625,8 +696,10 @@ export function SelectRow<T extends string>({ label, value, options, onChange, d
     defaultValue !== undefined
       ? () => commitAtomic(() => onChange(defaultValue))
       : undefined
+  const q = useSearchQuery()
+  if (!rowMatchesQuery(label, q)) return null
   return (
-    <div className="flex items-center justify-between py-1 text-xs">
+    <div data-search-label={label} className="flex items-center justify-between py-1 text-xs">
       <span
         className={`text-neutral-400 select-none ${reset ? 'cursor-pointer' : ''}`}
         onDoubleClick={reset}
@@ -662,18 +735,112 @@ export function SelectRow<T extends string>({ label, value, options, onChange, d
   )
 }
 
-export function SectionTitle({
-  children,
+function useStoredBool(
+  key: string,
+  defaultValue: boolean,
+): [boolean, (v: boolean) => void] {
+  const [value, setValue] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return defaultValue
+    try {
+      const stored = window.localStorage.getItem(key)
+      if (stored === null) return defaultValue
+      return stored === '1'
+    } catch {
+      return defaultValue
+    }
+  })
+  const set = (v: boolean) => {
+    setValue(v)
+    try {
+      window.localStorage.setItem(key, v ? '1' : '0')
+    } catch {
+      /* storage unavailable (private mode, ITP) — collapse state is
+         ephemeral. Not worth surfacing. */
+    }
+  }
+  return [value, set]
+}
+
+/**
+ * Collapsible section with header (title + optional action slot). Title
+ * click toggles the collapsed state, which is persisted to localStorage
+ * under `inspector.section.<title>`. Plays into the Inspector's search
+ * bar: when a query is active, the section force-expands; if no
+ * descendant row carries `data-search-label` matching the query AND the
+ * title itself doesn't match, the whole section is hidden. When the
+ * title matches, every row inside renders regardless of label match
+ * (a relayed empty query via SearchContext.Provider).
+ */
+export function Section({
+  title,
   action,
+  defaultOpen = true,
+  children,
 }: {
-  children: React.ReactNode
-  /** Optional right-aligned slot — typically a section-scoped reset button. */
-  action?: React.ReactNode
+  title: string
+  action?: ReactNode
+  defaultOpen?: boolean
+  children: ReactNode
 }) {
+  const q = useSearchQuery()
+  const titleMatches = !q || title.toLowerCase().includes(q)
+  const [storedOpen, setStoredOpen] = useStoredBool(
+    `inspector.section.${title}`,
+    defaultOpen,
+  )
+  const open = q ? true : storedOpen
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [hasRow, setHasRow] = useState(true)
+  useLayoutEffect(() => {
+    if (!q) {
+      setHasRow(true)
+      return
+    }
+    const c = contentRef.current
+    setHasRow(!!c && c.querySelector('[data-search-label]') !== null)
+    // Dep on `q` only — without this the effect runs on every render, so a
+    // single slider drag (which re-renders Inspector at 60fps) would do
+    // ~13 `querySelector` calls per frame for no reason.
+  }, [q])
+  const visible = !q || titleMatches || hasRow
+  if (!visible) return null
+  // When the title itself matches, relay an empty query so every child
+  // row renders (no per-row filter applied inside this section).
+  const childQuery = titleMatches && q ? '' : q
   return (
-    <div className="mt-3 mb-1 flex items-center justify-between px-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-      <span>{children}</span>
-      {action}
+    <div data-search-label={title} className="mt-4 border-t border-neutral-800/80 first:mt-1 first:border-t-0">
+      <div className="mt-4 mb-3 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-300">
+        <button
+          type="button"
+          onClick={() => setStoredOpen(!storedOpen)}
+          disabled={!!q}
+          className="flex flex-1 items-center justify-between outline-none hover:text-white disabled:cursor-default disabled:opacity-80"
+        >
+          <span>{title}</span>
+          <svg
+            width="9"
+            height="9"
+            viewBox="0 0 12 12"
+            className={`transition-transform ${open ? 'rotate-90' : ''}`}
+            aria-hidden
+          >
+            <path
+              d="M4 2 L8 6 L4 10"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        {action}
+      </div>
+      <div ref={contentRef} hidden={!open}>
+        <SearchContext.Provider value={childQuery}>
+          {children}
+        </SearchContext.Provider>
+      </div>
     </div>
   )
 }
@@ -825,5 +992,94 @@ function Band({ label, value, min, max, step, trackHeight, defaultValue, onChang
       <span className="text-[9px] text-neutral-500">{label}</span>
       {menuNode}
     </div>
+  )
+}
+
+// ── Setting-bound row wrappers ────────────────────────────────────────
+//
+// These subscribe to a single settings key via Zustand's selector, so
+// each row only re-renders when ITS value changes. The Inspector itself
+// no longer needs to subscribe to the whole `settings` object — which
+// was the dominant cost during slider drags (a single setting change
+// re-rendered the Inspector and forced all ~80 rows through React's
+// reconciliation, even though only one of them actually changed).
+
+type NumericKeys = {
+  [K in keyof Settings]: Settings[K] extends number ? K : never
+}[keyof Settings]
+type BooleanKeys = {
+  [K in keyof Settings]: Settings[K] extends boolean ? K : never
+}[keyof Settings]
+type StringKeys = {
+  [K in keyof Settings]: Settings[K] extends string ? K : never
+}[keyof Settings]
+
+const writeSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => {
+  useStore.getState().updateSettings({ [key]: value } as Partial<Settings>)
+}
+
+export function BoundSliderRow({
+  label,
+  settingKey,
+  min,
+  max,
+  step,
+  format,
+}: {
+  label: string
+  settingKey: NumericKeys
+  min: number
+  max: number
+  step?: number
+  format?: (v: number) => string
+}) {
+  const value = useStore((s) => s.settings[settingKey] as number)
+  return (
+    <SliderRow
+      label={label}
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      format={format}
+      onChange={(v) => writeSetting(settingKey, v as Settings[NumericKeys])}
+      defaultValue={defaultSettings[settingKey] as number}
+    />
+  )
+}
+
+export function BoundSwitchRow({
+  label,
+  settingKey,
+}: {
+  label: string
+  settingKey: BooleanKeys
+}) {
+  const value = useStore((s) => s.settings[settingKey] as boolean)
+  return (
+    <SwitchRow
+      label={label}
+      value={value}
+      onChange={(v) => writeSetting(settingKey, v as Settings[BooleanKeys])}
+      defaultValue={defaultSettings[settingKey] as boolean}
+    />
+  )
+}
+
+export function BoundColorRow({
+  label,
+  settingKey,
+}: {
+  label: string
+  settingKey: StringKeys
+}) {
+  const value = useStore((s) => s.settings[settingKey] as string)
+  return (
+    <ColorRow
+      label={label}
+      value={value}
+      onChange={(v) => writeSetting(settingKey, v as Settings[StringKeys])}
+      defaultValue={defaultSettings[settingKey] as string}
+    />
   )
 }

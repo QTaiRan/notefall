@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { rowMatchesQuery, useSearchQuery } from './controls'
 import {
   DEFAULT_VELOCITY_CURVE,
   clampVelocityCurve,
@@ -164,13 +165,12 @@ export function VelocityCurveEditor() {
     p4: { x: PAD_X + curve.p4.x * PLOT_W, y: PAD_Y + (1 - curve.p4.y) * PLOT_H },
   }
 
+  const q = useSearchQuery()
+  if (!rowMatchesQuery('Velocity Curve', q)) return null
   return (
-    <div className="flex flex-col gap-1 py-1">
-      <div className="flex items-center justify-between text-xs select-none">
+    <div data-search-label="Velocity Curve" className="flex flex-col gap-2 py-1">
+      <div className="flex items-center text-xs select-none">
         <span id={labelId} className="text-neutral-400">Velocity Curve</span>
-        <span className="text-neutral-500 tabular-nums text-[10px]">
-          {(curve.p0.y * 127).toFixed(0)} · {(curve.p1.x * 127).toFixed(0)},{(curve.p1.y * 127).toFixed(0)} · {(curve.p2.x * 127).toFixed(0)},{(curve.p2.y * 127).toFixed(0)} · {(curve.p3.x * 127).toFixed(0)},{(curve.p3.y * 127).toFixed(0)} · {(curve.p4.y * 127).toFixed(0)}
-        </span>
       </div>
       <svg
         ref={svgRef}

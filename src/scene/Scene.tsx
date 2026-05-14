@@ -2,7 +2,32 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
 import * as THREE from 'three'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useStore } from '../store'
+import { useStore, useSettingsSlice } from '../store'
+
+const SCENE_ROOT_KEYS = [
+  'backgroundColor',
+  'bloomEnabled',
+  'bloomIntensity',
+  'bloomRadius',
+  'bloomSmoothing',
+  'bloomThreshold',
+  'cameraFov',
+  'cameraLookAt',
+  'cameraPos',
+] as const
+const SCENE_CONTENTS_KEYS = [
+  'cameraFov',
+  'cameraLookAt',
+  'cameraPos',
+  'flashEnabled',
+  'notesEnabled',
+] as const
+const PLAY_TOGGLE_KEYS = [
+  'cameraFov',
+  'cameraLookAt',
+  'cameraPos',
+  'keyboardY',
+] as const
 import { recorder } from '../audio/recorder'
 import { registerR3FStateGetter } from './exportBridge'
 import { Keyboard } from '../keyboard/Keyboard'
@@ -23,7 +48,7 @@ import { CameraControls } from './CameraControls'
 const PREVIEW_FRAME_INTERVAL_MS = 1000 / 30
 
 export function Scene() {
-  const s = useStore((st) => st.settings)
+  const s = useSettingsSlice(SCENE_ROOT_KEYS)
   const highFps = useStore((st) => st.settings.previewHighFps)
   // Recorder state kept here just for prop drilling into SceneContents
   // (edit-mode gating).
@@ -73,7 +98,7 @@ function ThrottledTicker({ intervalMs }: { intervalMs: number }) {
 }
 
 function SceneContents({ recState }: { recState: 'idle' | 'recording' }) {
-  const s = useStore((st) => st.settings)
+  const s = useSettingsSlice(SCENE_CONTENTS_KEYS)
   const transport = useStore((st) => st.transport)
   // Edit mode = not currently playing or recording. Mounting EditTools
   // (instead of PlayToggleArea) flips the meaning of every empty-area
@@ -107,7 +132,7 @@ function SceneContents({ recState }: { recState: 'idle' | 'recording' }) {
 const HOLD_THRESHOLD_MS = 200
 
 function PlayToggleArea() {
-  const s = useStore((st) => st.settings)
+  const s = useSettingsSlice(PLAY_TOGGLE_KEYS)
   const camDistance = Math.abs(s.cameraPos[2])
   const halfVisHeight = camDistance * Math.tan((s.cameraFov * Math.PI) / 360)
   const visibleTopY = s.cameraLookAt[1] + halfVisHeight
@@ -168,6 +193,10 @@ function PlayToggleArea() {
   }, [stopFastForward])
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Middle button is reserved for camera orbit and right button for the
+    // browser context menu — only left clicks should toggle playback or
+    // arm the press-and-hold fast-forward.
+    if (e.nativeEvent.button !== 0) return
     e.stopPropagation()
     if (holdTimer.current !== null || fastForwardActive.current) return
     holdTimer.current = window.setTimeout(async () => {
@@ -191,6 +220,7 @@ function PlayToggleArea() {
   }
 
   const onPointerUp = (e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.button !== 0) return
     e.stopPropagation()
     const wasArmed = holdTimer.current !== null
     const wasFastForward = fastForwardActive.current

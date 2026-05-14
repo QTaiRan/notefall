@@ -1,8 +1,28 @@
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
-import { useStore } from '../store'
+import { useSettingsSlice } from '../store'
 import { KEYBOARD_LAYOUT, WHITE_KEY_LENGTH } from '../keyboard/layout'
+
+const HIT_LINE_KEYS = [
+  'hitLineBarHalo',
+  'hitLineBarY',
+  'hitLineColor',
+  'hitLineEnabled',
+  'hitLineIntensity',
+  'hitLineThickness',
+  'hitLineWaveAmplitude',
+  'hitLineWaveEnabled',
+  'hitLineWaveGrain',
+  'hitLineWaveHalo',
+  'hitLineWaveIntensity',
+  'hitLineWaveMorphSpeed',
+  'hitLineWaveScale',
+  'hitLineWaveScrollSpeed',
+  'hitLineWaveThickness',
+  'hitLineWaveY',
+  'keyboardY',
+] as const
 import { now } from '../audio/clock'
 
 const VERTEX_SHADER = /* glsl */ `
@@ -147,7 +167,7 @@ const PLANE_WIDTH_PAD = 0.5
  * a single quad each — no per-frame CPU work beyond pushing uTime.
  */
 export function HitLine() {
-  const settings = useStore((s) => s.settings)
+  const settings = useSettingsSlice(HIT_LINE_KEYS)
 
   const barMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({

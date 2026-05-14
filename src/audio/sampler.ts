@@ -202,6 +202,38 @@ export async function createPiano(
   let irDamping = 0.0
   convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
 
+  // rAF-coalesced IR rebuild. Each impulse-response generator call walks
+  // `sampleRate * irSize` samples with Math.random + Math.exp + Math.pow
+  // per sample — ~5-15 ms on a 3 s reverb. Dragging any of the four
+  // IR-affecting sliders (Size / Decay Time / Decay / Damping) at 60 fps
+  // would otherwise rebuild the buffer every pointermove and saturate
+  // the main thread. With this scheduler, multiple setter calls in the
+  // same frame coalesce to a single rebuild on the next animation frame.
+  let irRebuildPending = false
+  const scheduleIrRebuild = () => {
+    if (irRebuildPending) return
+    irRebuildPending = true
+    // requestAnimationFrame keeps the cadence aligned to the screen and
+    // automatically yields to the rest of the frame's work; if rAF isn't
+    // available (offline render context), fall back to a microtask so
+    // the rebuild still happens but doesn't block the caller.
+    const flush = () => {
+      irRebuildPending = false
+      convolver.buffer = createImpulseResponse(
+        context,
+        irSize,
+        irDecayTime,
+        irShape,
+        irDamping,
+      )
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(flush)
+    } else {
+      queueMicrotask(flush)
+    }
+  }
+
   // 6-band graphic EQ. Endpoints use shelving filters (everything below 80 Hz
   // and above 12 kHz follows the slider), middle bands use peaking with Q=1
   // (~octave-wide bell, smooth crossover with neighbors).
@@ -315,15 +347,15 @@ export async function createPiano(
     },
     setReverbSize(seconds) {
       irSize = Math.max(0.1, Math.min(8, seconds))
-      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+      scheduleIrRebuild()
     },
     setReverbDecayTime(seconds) {
       irDecayTime = Math.max(0.1, Math.min(10, seconds))
-      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+      scheduleIrRebuild()
     },
     setReverbDecay(decay) {
       irShape = Math.max(0, Math.min(8, decay))
-      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+      scheduleIrRebuild()
     },
     setReverbPreDelay(seconds) {
       const v = Math.max(0, Math.min(0.5, seconds))
@@ -333,7 +365,7 @@ export async function createPiano(
     },
     setReverbDamping(amount) {
       irDamping = Math.max(0, Math.min(0.99, amount))
-      convolver.buffer = createImpulseResponse(context, irSize, irDecayTime, irShape, irDamping)
+      scheduleIrRebuild()
     },
     setReverbHiCut(hz) {
       const v = Math.max(200, Math.min(20000, hz))

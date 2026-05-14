@@ -5,8 +5,8 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { Button } from "react-aria-components";
-import { useStore } from "../store";
+import { Button, OverlayArrow, Tooltip, TooltipTrigger } from "react-aria-components";
+import { defaultSettings, useStore } from "../store";
 import { audioEngine } from "../audio/engine";
 import { pauseSong, playSong } from "../audio/playback";
 import { useCurrentTime } from "../audio/useCurrentTime";
@@ -19,6 +19,7 @@ import {
   PauseIcon,
   PlayIcon,
   Replay10Icon,
+  ResetViewIcon,
   RewindToStartIcon,
   VolumeHighIcon,
   VolumeLowIcon,
@@ -177,12 +178,80 @@ function PopSliderButton({
 const fmtSpeed = (v: number) => `${v.toFixed(2)}×`;
 const fmtVolume = (v: number) => `${Math.round(v * 100)}%`;
 
+/**
+ * Time readout (current / total). Subscribes to `useCurrentTime` so it
+ * updates per frame, but the rest of the SeekBar doesn't need to: keep
+ * the per-frame subscription isolated here so the transport buttons +
+ * volume/speed popovers don't re-render 60×/sec.
+ */
+function TimeReadout({ duration }: { duration: number }) {
+  const currentTime = useCurrentTime();
+  return (
+    <span className="font-mono text-sm tabular-nums text-neutral-300">
+      {fmt(currentTime)} / {fmt(duration)}
+    </span>
+  );
+}
+
+/**
+ * Progress-bar fill. Same isolation as `TimeReadout` — keeps the
+ * per-frame update local to this slim child so the surrounding
+ * scrubbable track + outer SeekBar don't re-render every frame.
+ */
+function ProgressFill({ duration }: { duration: number }) {
+  const currentTime = useCurrentTime();
+  return (
+    <div
+      className="h-full bg-sky-500/80 transition-colors duration-150 group-hover:bg-sky-400"
+      style={{
+        width: duration > 0 ? `${(currentTime / duration) * 100}%` : "0%",
+      }}
+    />
+  );
+}
+
+/**
+ * Wrap a Button in a react-aria Tooltip so each transport-icon button
+ * surfaces its purpose on hover. Volume and Speed have hover popovers
+ * already (they're not icon-only), so they don't get this treatment —
+ * a tooltip would conflict with the popover trigger.
+ */
+function WithTooltip({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <TooltipTrigger delay={300}>
+      {children}
+      <Tooltip
+        offset={8}
+        placement="top"
+        className="rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] text-neutral-200 shadow-lg outline-none data-[entering]:animate-in data-[entering]:fade-in data-[exiting]:animate-out data-[exiting]:fade-out"
+      >
+        <OverlayArrow>
+          <svg
+            viewBox="0 0 8 8"
+            width={8}
+            height={8}
+            className="fill-neutral-800 stroke-neutral-700 group-data-[placement=bottom]/popover:rotate-180"
+          >
+            <path d="M0 0 L4 4 L8 0" />
+          </svg>
+        </OverlayArrow>
+        {label}
+      </Tooltip>
+    </TooltipTrigger>
+  );
+}
+
 export function SeekBar({
   isFullscreen,
   onToggleFullscreen,
   onPopoverOpenChange,
 }: Props) {
-  const currentTime = useCurrentTime();
   const song = useStore((s) => s.song);
   const transport = useStore((s) => s.transport);
   const loadStatus = useStore((s) => s.loadStatus);
@@ -191,6 +260,17 @@ export function SeekBar({
   const volume = useStore((s) => s.settings.volume);
   const playbackRate = useStore((s) => s.settings.playbackRate);
   const updateSettings = useStore((s) => s.updateSettings);
+  const beginEdit = useStore((s) => s.beginSettingsEdit);
+  const endEdit = useStore((s) => s.endSettingsEdit);
+  const resetCameraView = () => {
+    beginEdit();
+    updateSettings({
+      cameraFov: defaultSettings.cameraFov,
+      cameraPos: defaultSettings.cameraPos,
+      cameraLookAt: defaultSettings.cameraLookAt,
+    });
+    endEdit();
+  };
   // Subscribe to inputs that affect the TL_audio total duration so
   // the slider rescales when the user changes the speed curve / MIDI
   // offset. The values themselves aren't read here — only the
@@ -234,13 +314,16 @@ export function SeekBar({
   };
 
   const SKIP_SECONDS = 10;
+  // Read the playhead imperatively at click time so SeekBar doesn't need
+  // to subscribe to `useCurrentTime` — that subscription would re-render
+  // the whole transport row + buttons at 60 fps during playback.
   const onSkipBack = () => {
-    const t = Math.max(0, currentTime - SKIP_SECONDS);
+    const t = Math.max(0, audioEngine.currentSongTime() - SKIP_SECONDS);
     audioEngine.seek(t);
     useStore.getState().setCurrentTime(t);
   };
   const onSkipForward = () => {
-    const t = Math.min(duration, currentTime + SKIP_SECONDS);
+    const t = Math.min(duration, audioEngine.currentSongTime() + SKIP_SECONDS);
     audioEngine.seek(t);
     useStore.getState().setCurrentTime(t);
   };
@@ -292,62 +375,70 @@ export function SeekBar({
       <div className="relative flex items-center">
         {/* Big-font, at-a-glance time readout on the left of the
             transport row. */}
-        <span className="font-mono text-sm tabular-nums text-neutral-300">
-          {fmt(currentTime)} / {fmt(duration)}
-        </span>
+        <TimeReadout duration={duration} />
 
         {/* Absolute-centered transport group: always at the geometric
             middle of the seek-bar row, independent of how wide the left
             (time) or right (volume/speed/fullscreen) groups become. */}
         <div className="pointer-events-none absolute left-1/2 flex -translate-x-1/2 items-center gap-3">
-          <Button
-            isDisabled={!song}
-            onPress={onRewind}
-            aria-label="Rewind to start"
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
-          >
-            <RewindToStartIcon className="h-5 w-5" />
-          </Button>
-          <Button
-            isDisabled={!song}
-            onPress={onSkipBack}
-            aria-label="Rewind 10 seconds"
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
-          >
-            <Replay10Icon className="h-5 w-5" />
-          </Button>
-          <Button
-            isDisabled={!song || loadStatus.state === "loading"}
-            onPress={transport === "playing" ? pauseSong : playSong}
-            aria-label={transport === "playing" ? "Pause" : "Play"}
-            className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-500/90 text-neutral-950 outline-none backdrop-blur-sm hover:bg-sky-400/95 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800/70 disabled:text-neutral-600"
-          >
-            {transport === "playing" ? (
-              <PauseIcon className="h-6 w-6" />
-            ) : (
-              <PlayIcon className="ml-0.5 h-6 w-6" />
-            )}
-          </Button>
-          <Button
-            isDisabled={!song}
-            onPress={onSkipForward}
-            aria-label="Forward 10 seconds"
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
-          >
-            <Forward10Icon className="h-5 w-5" />
-          </Button>
-          <Button
-            isDisabled={!song}
-            onPress={() => setLoop(!loop)}
-            aria-label={loop ? "Disable loop" : "Enable loop"}
-            className={
-              loop
-                ? "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/20 text-sky-300 outline-none backdrop-blur-sm hover:bg-sky-500/30 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
-                : "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
-            }
-          >
-            <LoopIcon className="h-5 w-5" />
-          </Button>
+          <WithTooltip label="Rewind to start">
+            <Button
+              isDisabled={!song}
+              onPress={onRewind}
+              aria-label="Rewind to start"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
+            >
+              <RewindToStartIcon className="h-5 w-5" />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label="Rewind 10 seconds">
+            <Button
+              isDisabled={!song}
+              onPress={onSkipBack}
+              aria-label="Rewind 10 seconds"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
+            >
+              <Replay10Icon className="h-5 w-5" />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label={transport === "playing" ? "Pause" : "Play"}>
+            <Button
+              isDisabled={!song || loadStatus.state === "loading"}
+              onPress={transport === "playing" ? pauseSong : playSong}
+              aria-label={transport === "playing" ? "Pause" : "Play"}
+              className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-500/90 text-neutral-950 outline-none backdrop-blur-sm hover:bg-sky-400/95 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:bg-neutral-800/70 disabled:text-neutral-600"
+            >
+              {transport === "playing" ? (
+                <PauseIcon className="h-6 w-6" />
+              ) : (
+                <PlayIcon className="ml-0.5 h-6 w-6" />
+              )}
+            </Button>
+          </WithTooltip>
+          <WithTooltip label="Forward 10 seconds">
+            <Button
+              isDisabled={!song}
+              onPress={onSkipForward}
+              aria-label="Forward 10 seconds"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
+            >
+              <Forward10Icon className="h-5 w-5" />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label={loop ? "Disable loop" : "Enable loop"}>
+            <Button
+              isDisabled={!song}
+              onPress={() => setLoop(!loop)}
+              aria-label={loop ? "Disable loop" : "Enable loop"}
+              className={
+                loop
+                  ? "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-sky-500 bg-sky-500/20 text-sky-300 outline-none backdrop-blur-sm hover:bg-sky-500/30 focus-visible:ring-2 focus-visible:ring-sky-300 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
+                  : "pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500 disabled:border-neutral-800 disabled:bg-black/15 disabled:text-neutral-600"
+              }
+            >
+              <LoopIcon className="h-5 w-5" />
+            </Button>
+          </WithTooltip>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -395,17 +486,28 @@ export function SeekBar({
             format={fmtSpeed}
             buttonClass="flex h-11 min-w-[52px] items-center justify-center rounded-full border border-neutral-700 bg-black/20 px-2 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
           />
-          <Button
-            onPress={onToggleFullscreen}
-            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-            className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
-          >
-            {isFullscreen ? (
-              <FullscreenExitIcon className="h-5 w-5" />
-            ) : (
-              <FullscreenIcon className="h-5 w-5" />
-            )}
-          </Button>
+          <WithTooltip label="Reset camera view">
+            <Button
+              onPress={resetCameraView}
+              aria-label="Reset camera view"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
+            >
+              <ResetViewIcon className="h-5 w-5" />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
+            <Button
+              onPress={onToggleFullscreen}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-neutral-700 bg-black/20 text-neutral-200 outline-none backdrop-blur-sm hover:bg-neutral-800/50 focus-visible:border-sky-500"
+            >
+              {isFullscreen ? (
+                <FullscreenExitIcon className="h-5 w-5" />
+              ) : (
+                <FullscreenIcon className="h-5 w-5" />
+              )}
+            </Button>
+          </WithTooltip>
         </div>
       </div>
 
@@ -428,12 +530,7 @@ export function SeekBar({
         aria-label="Seek"
       >
         <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-neutral-700/70 transition-all duration-150 group-hover:h-3 group-hover:bg-neutral-500/80">
-          <div
-            className="h-full bg-sky-500/80 transition-colors duration-150 group-hover:bg-sky-400"
-            style={{
-              width: duration > 0 ? `${(currentTime / duration) * 100}%` : "0%",
-            }}
-          />
+          <ProgressFill duration={duration} />
         </div>
       </div>
     </div>

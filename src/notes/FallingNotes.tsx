@@ -1,7 +1,7 @@
 import { useMemo, useRef, useEffect } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { useStore, defaultSettings } from '../store'
+import { useStore, useSettingsSlice, defaultSettings } from '../store'
 import { computeLiveVisibleTop } from '../scene/visibleTop'
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
@@ -438,8 +438,47 @@ const PLACEHOLDER_TEXTURE = new THREE.DataTexture(
 )
 PLACEHOLDER_TEXTURE.needsUpdate = true
 
+// Keys FallingNotes actually reads from settings. Selecting these with
+// `useShallow` means an Inspector slider drag on an unrelated key (e.g.
+// any Audio / Reverb / Particles slider) does NOT re-render this
+// component — and therefore doesn't trigger Three.js / R3F
+// reconciliation on the instanced mesh.
+const FALLING_NOTES_KEYS = [
+  'cameraFov',
+  'cameraLookAt',
+  'cameraPos',
+  'edgeEnabled',
+  'fallDirection',
+  'fallDurationSec',
+  'keyboardY',
+  'midiOffsetSec',
+  'midiSpeedAutomation',
+  'midiTrimEndSec',
+  'midiTrimStartSec',
+  'noteAnimSpeedX',
+  'noteAnimSpeedY',
+  'noteColor',
+  'noteCornerRadius',
+  'noteEdgeColor',
+  'noteEdgeIntensity',
+  'noteEdgeWidth',
+  'noteEmissive',
+  'noteMinLength',
+  'noteOpacity',
+  'noteTexture',
+  'noteTextureBlur',
+  'noteTextureContrast',
+  'noteTextureOffsetX',
+  'noteTextureOffsetY',
+  'noteTextureScale',
+  'noteTextureVariation',
+  'noteWidthScale',
+  'trackColors',
+  'transpose',
+] as const
+
 export function FallingNotes() {
-  const settings = useStore((s) => s.settings)
+  const settings = useSettingsSlice(FALLING_NOTES_KEYS)
   const song = useStore((s) => s.song)
   const customTexture = useCustomTexture((s) => s.texture)
   const transport = useStore((s) => s.transport)
