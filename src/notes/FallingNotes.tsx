@@ -1231,8 +1231,15 @@ export function FallingNotes() {
     const isDownFall = state.settings.fallDirection === 'down'
     const distTop = Math.abs(e.point.y - b.yMax)
     const distBottom = Math.abs(e.point.y - b.yMin)
-    const nearTop = distTop < EDGE_PROXIMITY && distTop <= distBottom
-    const nearBottom = distBottom < EDGE_PROXIMITY && distBottom < distTop
+    // Scale the edge-grab zone for short notes so the centre stays
+    // reachable for body-drag / pitch-change. Each edge gets at most
+    // 30 % of the note's visual height — guarantees the middle 40 %
+    // always falls through as a body hit even for sub-EDGE_PROXIMITY
+    // (≈ 16-pixel-tall) notes.
+    const noteHeight = Math.max(0.001, b.yMax - b.yMin)
+    const edgeReach = Math.min(EDGE_PROXIMITY, noteHeight * 0.3)
+    const nearTop = distTop < edgeReach && distTop <= distBottom
+    const nearBottom = distBottom < edgeReach && distBottom < distTop
 
     if (nearTop) {
       hoveredEdgeRef.current = { noteId, edge: isDownFall ? 'tail' : 'head' }
