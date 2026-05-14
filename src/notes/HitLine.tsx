@@ -265,12 +265,18 @@ export function HitLine() {
           0.061/0.062 — fine when every key was a flat plane at z≈0, but
           the 3D black keys would have hidden the bar/wave behind their
           tops near the back edge. */}
-      <mesh position={[0, hitY + settings.hitLineBarY, 0.14]}>
+      {/* Explicit renderOrder pins the bar below the falling notes in
+          the transparent-object paint sequence — notes (renderOrder=2)
+          draw on top so the user-coloured note body isn't overlaid by
+          the bar's additive glow as it crosses the hit line. The z
+          coordinate stays where it is (in front of the 3D black keys
+          at z=0.125) so the line is still visible against the keys. */}
+      <mesh position={[0, hitY + settings.hitLineBarY, 0.14]} renderOrder={0}>
         <planeGeometry args={[planeWidth, BAR_PLANE_HEIGHT]} />
         <primitive object={barMaterial} attach="material" />
       </mesh>
       {settings.hitLineWaveEnabled && (
-        <mesh position={[0, hitY + settings.hitLineWaveY, 0.141]}>
+        <mesh position={[0, hitY + settings.hitLineWaveY, 0.141]} renderOrder={0}>
           <planeGeometry args={[planeWidth, WAVE_PLANE_HEIGHT]} />
           <primitive object={waveMaterial} attach="material" />
         </mesh>

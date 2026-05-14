@@ -1416,6 +1416,12 @@ export function FallingNotes() {
       frustumCulled={false}
       material={material}
       count={0}
+      // Force notes to draw AFTER the hit-line bar so the note body
+      // visually sits in front of the line as it falls past. Without
+      // this, three.js's transparent-object sort lands the bar (z=0.14)
+      // on top of the notes (z=0.1) and the bar's additive blend
+      // brightens / overlays the note where they overlap.
+      renderOrder={2}
       onPointerDown={onPointerDownNote}
       onPointerMove={onPointerMoveNote}
       onPointerOut={onPointerOutNote}
