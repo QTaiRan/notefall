@@ -3,7 +3,16 @@ import {
   Scheduler,
   type StopFn,
 } from 'smplr'
-import { buildSalamanderDescriptor } from './salamanderDescriptor'
+import {
+  applyVelocityCompensation,
+  buildSalamanderDescriptor,
+} from './salamanderDescriptor'
+// Side-effect import: patches AudioParam.prototype.linearRampToValueAtTime
+// so smplr's hardcoded linear release becomes an exponential decay.
+// MUST be imported before any Smplr instance is created; placing it
+// here (top of sampler.ts) guarantees that since createPiano is the
+// only construction site.
+import './smoothRelease'
 import { createSampleStorage } from './sampleCache'
 import * as Tone from 'tone'
 
@@ -77,6 +86,14 @@ export type PianoInstrument = {
   /** 6-band master EQ. Gain in dB (typically ±12). Bands are ordered
    * low → high; see EQ_BAND_FREQUENCIES for centers. */
   setEqBand(index: number, db: number): void
+  /**
+   * Adjust how much of smplr's built-in quadratic velocity-to-gain
+   * curve we cancel out via the per-layer group `volume`. See
+   * `salamanderDescriptor.applyVelocityCompensation`. 0 = leave
+   * smplr's default attenuation in place; 1 = neutralise it
+   * entirely. Changes apply to subsequent voices only.
+   */
+  setVelocityCompensation(compensation: number): void
   dispose(): void
 }
 
@@ -231,9 +248,13 @@ export async function createPiano(
   // so the click-on-first-frame problem that older 4-layer piano
   // sets had doesn't apply here — we don't need a fade-in storage
   // wrapper.
+  // Hold a reference to the descriptor so `setVelocityCompensation`
+  // can mutate per-group `volume` later — smplr re-reads these on
+  // every `piano.start()` (RegionMatcher stores `groupRef`).
+  const descriptor = buildSalamanderDescriptor(SAMPLES_BASE_URL)
   const piano = new Smplr(
     context as AudioContext,
-    buildSalamanderDescriptor(SAMPLES_BASE_URL),
+    descriptor,
     {
       destination: masterGain,
       storage: createSampleStorage(),
@@ -340,6 +361,10 @@ export async function createPiano(
       node.gain.cancelScheduledValues(now)
       // Short-time-constant ramp avoids clicks while still feeling immediate.
       node.gain.setTargetAtTime(v, now, 0.02)
+    },
+    setVelocityCompensation(compensation) {
+      const c = Math.max(0, Math.min(1, compensation))
+      applyVelocityCompensation(descriptor, c)
     },
     dispose() {
       if (disposed) return

@@ -88,14 +88,11 @@ export function Layout() {
     settings.eqBands.forEach((db, i) => audioEngine.setEqBand(i, db))
   }, [settings.eqBands])
   useEffect(() => {
-    audioEngine.setVelocityGamma(settings.velocityGamma)
-  }, [settings.velocityGamma])
+    audioEngine.setVelocityCurve(settings.velocityCurve)
+  }, [settings.velocityCurve])
   useEffect(() => {
-    audioEngine.setVelocityFloor(settings.velocityFloor)
-  }, [settings.velocityFloor])
-  useEffect(() => {
-    audioEngine.setVelocityCap(settings.velocityCap)
-  }, [settings.velocityCap])
+    audioEngine.setVelocityCompensation(settings.velocityCompensation)
+  }, [settings.velocityCompensation])
   // Transpose is applied at TWO independent stages — engine handles song
   // notes, midiInput handles live MIDI input — so the value goes to both.
   // Screen-keyboard / PC-keyboard touches stay un-shifted.

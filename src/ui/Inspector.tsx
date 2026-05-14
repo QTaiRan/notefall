@@ -1,5 +1,6 @@
 import { useStore, defaultSettings } from '../store'
 import { ColorRow, SectionTitle, SelectRow, SliderRow, SwitchRow, VerticalSliderBands } from './controls'
+import { VelocityCurveEditor } from './VelocityCurveEditor'
 import { Button, FileTrigger, OverlayArrow, Tooltip, TooltipTrigger } from 'react-aria-components'
 import { useCustomTexture } from '../notes/customTexture'
 import { CAMERA_LIMITS } from '../scene/cameraLimits'
@@ -421,9 +422,8 @@ export function Inspector() {
           }}
           defaultValues={def.eqBands}
         />
-        <SliderRow label="Velocity Curve" value={s.velocityGamma} min={0.3} max={3} step={0.05} onChange={(v) => update({ velocityGamma: v })} defaultValue={def.velocityGamma} />
-        <SliderRow label="Velocity Floor" value={s.velocityFloor} min={0} max={1} step={0.01} onChange={(v) => update({ velocityFloor: v })} defaultValue={def.velocityFloor} />
-        <SliderRow label="Velocity Cap" value={s.velocityCap} min={0} max={1} step={0.01} onChange={(v) => update({ velocityCap: v })} defaultValue={def.velocityCap} />
+        <VelocityCurveEditor />
+        <SliderRow label="Velocity Compensation" value={s.velocityCompensation} min={0} max={1} step={0.05} onChange={(v) => update({ velocityCompensation: v })} defaultValue={def.velocityCompensation} />
         <SliderRow label="Transpose" value={s.transpose} min={-24} max={24} step={1} onChange={(v) => update({ transpose: v })} defaultValue={def.transpose} />
         <SwitchRow label="Pedal Enabled" value={s.pedalEnabled} onChange={(v) => update({ pedalEnabled: v })} defaultValue={def.pedalEnabled} />
 

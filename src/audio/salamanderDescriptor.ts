@@ -21,10 +21,17 @@ import type { SmplrGroup, SmplrJson, SmplrRegion } from 'smplr'
  *     come from there; Cache Storage (see `sampleCache.ts`) makes
  *     the one-time ~77 MB download invisible on subsequent loads.
  *
- * Velocity layers are evenly split across 1..127 for now — the SFZ
- * file's `amp_velcurve_N` curve isn't replicated here, so soft layers
- * may be louder than the original. Re-tune `ampVelCurve` later if
- * needed.
+ * Velocity compensation. smplr applies `(v/127)^2` gain to every
+ * voice (see `midiVelToGain` in smplr/dist/index.js) AND uses the
+ * same velocity to pick the velocity layer. Salamander's 16 layers
+ * are already pre-recorded at velocity-appropriate dynamic levels —
+ * the quadratic gain compounds on top, so soft layers come out far
+ * too quiet. smplr ignores SFZ-style `ampVelCurve` at playback time,
+ * so the only lever we have is per-group `volume` (dB). We add a
+ * positive dB offset to each layer that cancels HALF of smplr's
+ * quadratic attenuation at the layer's centre velocity (equivalent
+ * to SFZ `amp_veltrack ≈ 50`). The recorded per-layer amplitudes
+ * still provide natural piano dynamics on top of this.
  */
 
 // 30 sampled root keys — every minor third from A0 (MIDI 21) to C8
@@ -91,7 +98,32 @@ function computeKeyRanges(): Array<{
   return out
 }
 
-export function buildSalamanderDescriptor(baseUrl: string): SmplrJson {
+/**
+ * Default value used to seed a new piano build. Changes at runtime go
+ * through `setGroupVolumeCompensation` which mutates the live
+ * descriptor (smplr re-reads `group.volume` on every `start()`).
+ */
+export const DEFAULT_VELOCITY_COMPENSATION = 0.80
+
+/**
+ * dB compensation for layer N (1-indexed) at compensation level `c`.
+ * The smplr playback path applies `(v/127)^2` gain at the layer's
+ * centre velocity — we add `-c · 40·log10(vCenter/127)` dB on the
+ * group to cancel `c` of that quadratic attenuation. `c = 0` leaves
+ * smplr's default; `c = 1` fully neutralises velocity-driven gain so
+ * only the recorded per-layer amplitudes contribute to dynamics.
+ */
+function computeLayerVolumeDb(layer: number, compensation: number): number {
+  const vLow = Math.max(1, Math.round(((layer - 1) * 127) / VELOCITY_LAYERS) + 1)
+  const vHigh = Math.round((layer * 127) / VELOCITY_LAYERS)
+  const vCenter = (vLow + vHigh) / 2
+  return -compensation * 40 * Math.log10(vCenter / 127)
+}
+
+export function buildSalamanderDescriptor(
+  baseUrl: string,
+  compensation: number = DEFAULT_VELOCITY_COMPENSATION,
+): SmplrJson {
   const keyRanges = computeKeyRanges()
   const groups: SmplrGroup[] = []
   for (let layer = 1; layer <= VELOCITY_LAYERS; layer++) {
@@ -112,6 +144,7 @@ export function buildSalamanderDescriptor(baseUrl: string): SmplrJson {
     }))
     groups.push({
       velRange: [vLow, vHigh],
+      volume: computeLayerVolumeDb(layer, compensation),
       regions,
     })
   }
@@ -126,5 +159,22 @@ export function buildSalamanderDescriptor(baseUrl: string): SmplrJson {
       formats: ['ogg'],
     },
     groups,
+  }
+}
+
+/**
+ * Mutate the per-group `volume` of an already-built descriptor.
+ * smplr's `RegionMatcher` keeps each group by reference (`groupRef`),
+ * and `Smplr.start()` calls `resolveParams` which re-reads
+ * `group.volume` on every voice, so subsequent notes pick up the new
+ * value without reloading samples or reconstructing the instrument.
+ * Currently-sounding voices keep their previously-set gain.
+ */
+export function applyVelocityCompensation(
+  descriptor: SmplrJson,
+  compensation: number,
+): void {
+  for (let i = 0; i < descriptor.groups.length; i++) {
+    descriptor.groups[i].volume = computeLayerVolumeDb(i + 1, compensation)
   }
 }

@@ -3,6 +3,7 @@ import type { ParsedSong } from '../midi/types'
 import { buildSpeedMap, midiToTimeline } from '../midi/speedMap'
 import type { Settings } from '../store'
 import { createPiano } from '../audio/sampler'
+import { evaluateVelocityCurve } from '../audio/velocityCurve'
 
 /**
  * Offline render of `song` with the given `settings` into a stereo
@@ -66,11 +67,6 @@ function raceWithAbort<T>(p: Promise<T>, signal: AbortSignal | undefined): Promi
   })
 }
 
-/** 0..1 → 0..1 with engine.shapeVelocity's gamma + floor/cap clip. */
-function shapeVelocity(v: number, gamma: number, floor: number, cap: number): number {
-  const curved = Math.pow(v, gamma)
-  return Math.max(floor, Math.min(cap, curved))
-}
 
 /**
  * Convert pedal CC events into closed [start,end] sustain ranges. A note
@@ -226,6 +222,7 @@ export async function renderSongAudio(
     piano.setReverbLowCut(settings.reverbLowCut)
     piano.setReleaseTime(settings.releaseTime)
     piano.setDetune(settings.samplerDetune)
+    piano.setVelocityCompensation(settings.velocityCompensation)
     for (let i = 0; i < settings.eqBands.length; i++) {
       piano.setEqBand(i, settings.eqBands[i])
     }
@@ -275,12 +272,7 @@ export async function renderSongAudio(
       const playedMidi = n.midi + settings.transpose
       if (playedMidi < 0 || playedMidi > 127) continue
 
-      const shaped = shapeVelocity(
-        n.velocity,
-        settings.velocityGamma,
-        settings.velocityFloor,
-        settings.velocityCap,
-      )
+      const shaped = evaluateVelocityCurve(settings.velocityCurve, n.velocity)
       // n.time is MIDI-time; map through the speed curve and shift by
       // `midiOffset` to land on the export timeline. Without
       // automation `midiToTimeline` is the identity, so this collapses

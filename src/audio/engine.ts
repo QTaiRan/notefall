@@ -14,6 +14,13 @@ import {
   type LoadProgress,
 } from './sampler'
 import { now } from './clock'
+import {
+  DEFAULT_VELOCITY_CURVE,
+  clampVelocityCurve,
+  evaluateVelocityCurve,
+  type VelocityCurve,
+} from './velocityCurve'
+import { DEFAULT_VELOCITY_COMPENSATION } from './salamanderDescriptor'
 
 type ActiveNote = {
   id: number
@@ -116,9 +123,12 @@ export class AudioEngine {
   private detuneCents = 0
   private eqBandsDb: number[] = [0, 0, 0, 0, 0, 0]
   // Velocity shaping applied to every triggered note (song + live + touch).
-  private velocityGamma = 1.0
-  private velocityFloor = 0
-  private velocityCap = 1
+  // See `audio/velocityCurve.ts` for the curve format.
+  private velocityCurve: VelocityCurve = DEFAULT_VELOCITY_CURVE
+  // How much of smplr's built-in quadratic velocity-to-gain we cancel
+  // out via per-layer group volume. See
+  // `salamanderDescriptor.applyVelocityCompensation`.
+  private velocityCompensation = DEFAULT_VELOCITY_COMPENSATION
   // Pitch shift in semitones. Applied to song notes here; live MIDI input
   // applies its own copy in midiInput.ts before calling triggerKey, and
   // screen-keyboard touches stay un-shifted (the user clicks visible keys).
@@ -225,6 +235,7 @@ export class AudioEngine {
         this.piano.setReverbWet(this.effectiveWet())
         this.piano.setReleaseTime(this.releaseTime)
         this.piano.setDetune(this.detuneCents)
+        this.piano.setVelocityCompensation(this.velocityCompensation)
         this.eqBandsDb.forEach((db, i) => this.piano!.setEqBand(i, db))
       } finally {
         this.initPromise = null
@@ -352,14 +363,12 @@ export class AudioEngine {
     this.piano?.setEqBand(index, db)
   }
 
-  setVelocityGamma(g: number): void {
-    this.velocityGamma = Math.max(0.05, g)
+  setVelocityCurve(curve: VelocityCurve): void {
+    this.velocityCurve = clampVelocityCurve(curve)
   }
-  setVelocityFloor(v: number): void {
-    this.velocityFloor = Math.max(0, Math.min(1, v))
-  }
-  setVelocityCap(v: number): void {
-    this.velocityCap = Math.max(0, Math.min(1, v))
+  setVelocityCompensation(c: number): void {
+    this.velocityCompensation = Math.max(0, Math.min(1, c))
+    this.piano?.setVelocityCompensation(this.velocityCompensation)
   }
   setTranspose(semitones: number): void {
     this.transpose = Math.round(semitones)
@@ -369,12 +378,13 @@ export class AudioEngine {
   }
 
   /**
-   * Apply curve + clip to a 0..1 velocity. Curve first so the gamma fully
-   * shapes the dynamic range, then floor/cap as a final hard limit.
+   * Apply the user's velocity curve to a 0..1 velocity. The curve's
+   * endpoints are fixed at (0,0) and (1,1); interior control points
+   * shape the response (low-end lift, high-end ceiling, mid-range
+   * compression/expansion).
    */
   private shapeVelocity(velocity: number): number {
-    const curved = Math.pow(velocity, this.velocityGamma)
-    return Math.max(this.velocityFloor, Math.min(this.velocityCap, curved))
+    return evaluateVelocityCurve(this.velocityCurve, velocity)
   }
 
   setRate(rate: number): void {

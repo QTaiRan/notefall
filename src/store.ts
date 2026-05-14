@@ -3,6 +3,10 @@ import type { ParsedSong } from './midi/types'
 import type { SpeedPoint } from './midi/speedMap'
 import { audioEngine } from './audio/engine'
 import type { FileRef } from './projects/types'
+import {
+  DEFAULT_VELOCITY_CURVE,
+  type VelocityCurve,
+} from './audio/velocityCurve'
 
 // Cap on the in-memory undo stack. 50 individual edits is plenty for a
 // session of editing without tipping into multi-MB snapshot retention on
@@ -240,10 +244,14 @@ export type Settings = {
   eqBands: number[]
   // Velocity shaping — applied at every note trigger (song playback + live
   // MIDI + on-screen keyboard) so the user's dynamics preferences feel
-  // consistent across input sources.
-  velocityGamma: number      // pow(velocity, gamma): <1 = harder/brighter, >1 = softer
-  velocityFloor: number      // minimum velocity floor (0..1) — boost weak taps
-  velocityCap: number        // maximum velocity cap (0..1) — clip hard hits
+  // consistent across input sources. Two interior control points define
+  // a monotone-cubic curve from (0,0) to (1,1). See
+  // `audio/velocityCurve.ts` for the evaluator.
+  velocityCurve: VelocityCurve
+  // Cancels a fraction of smplr's built-in `(v/127)^2` velocity-to-gain
+  // curve via per-layer group volume offsets. 0..1; default 0.85.
+  // See `audio/salamanderDescriptor.applyVelocityCompensation`.
+  velocityCompensation: number
   // Pitch shift in semitones applied at every "input" stage — live MIDI
   // input from a physical device, AND the song timeline. Falling-note
   // positions also shift so the visualization stays aligned with the
@@ -435,12 +443,11 @@ export const defaultSettings: Settings = {
   reverbDamping: 0.4,
   reverbHiCut: 6000,
   reverbLowCut: 100,
-  releaseTime: 0.3,
+  releaseTime: 0.45,
   samplerDetune: 0,
-  eqBands: [0, 0, 0, 0, 0, 0],
-  velocityGamma: 1.0,
-  velocityFloor: 0,
-  velocityCap: 1,
+  eqBands: [-6, -4, 0, 0, 0, 0],
+  velocityCurve: DEFAULT_VELOCITY_CURVE,
+  velocityCompensation: 0.85,
   transpose: 0,
   userAudioOffsetSec: 0,
   userAudioVolume: 1.0,
