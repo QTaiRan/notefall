@@ -60,8 +60,12 @@ export function Scene() {
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
       camera={{ position: s.cameraPos, fov: s.cameraFov, near: 0.1, far: 100 }}
       frameloop={highFps ? 'always' : 'demand'}
-      onCreated={({ camera }) => {
+      onCreated={({ camera, gl }) => {
         camera.lookAt(...s.cameraLookAt)
+        // Black keys are clipped at the keyboard's back edge (see
+        // Keyboard.tsx) so their tilted/extended rear can't poke a
+        // coloured sliver above the keyboard into the falling-note lane.
+        gl.localClippingEnabled = true
       }}
     >
       <color attach="background" args={[s.backgroundColor]} />

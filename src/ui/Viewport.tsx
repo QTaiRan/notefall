@@ -611,10 +611,12 @@ export function Viewport() {
   // `document.body` by default, but body sits OUTSIDE the fullscreened
   // wrapper element — so portaled overlays disappear once the user goes
   // fullscreen. Redirect the portal container to wrapRef while in that
-  // state. Outside fullscreen, returning null lets react-aria fall back
-  // to its default (body).
+  // state. Outside fullscreen we must return document.body explicitly:
+  // once a PortalProvider is present, Overlay does NOT fall back to body
+  // on a nullish getContainer() — it bails with `return null` and renders
+  // nothing, so every tooltip/popover would silently disappear.
   const getPortalContainer = () =>
-    isFullscreen ? wrapRef.current : null;
+    isFullscreen ? wrapRef.current ?? document.body : document.body;
   return (
     <div
       ref={wrapRef}

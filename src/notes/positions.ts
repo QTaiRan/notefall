@@ -1,7 +1,30 @@
 import type { NoteEvent } from '../midi/types'
-import type { Settings } from '../store'
+import { defaultSettings, type Settings } from '../store'
 import { midiToTimeline, timelineToMidi, type SpeedMap } from '../midi/speedMap'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, noteHitYWorld } from '../keyboard/layout'
+
+// Falling notes render on the z = NOTE_PLANE_Z plane so they sit in front
+// of the 3D key caps (white at z=0, black tops at z=0.09) instead of
+// intersecting them as they cross the hit line. But the keyboard surface
+// a note must visually land on is at z = 0. Under perspective the two
+// depths project to different screen-x for the same world-x, so off-centre
+// notes drift outward — the further from centre, the larger the gap.
+//
+// Pre-scale every note's x about the camera's x so its z = NOTE_PLANE_Z
+// projection coincides with the key's z = 0 projection:
+//   x' = camX + (x - camX) · (camZ - NOTE_PLANE_Z) / camZ
+// Frozen to the *default* camera framing (like FALL_DISTANCE) so orbiting
+// / zoom never shifts the keyboard alignment.
+export const NOTE_PLANE_Z = 0.1
+const CAM_X = defaultSettings.cameraPos[0]
+const CAM_Z = Math.abs(defaultSettings.cameraPos[2])
+export const NOTE_PARALLAX_SCALE =
+  CAM_Z > NOTE_PLANE_Z ? (CAM_Z - NOTE_PLANE_Z) / CAM_Z : 1
+
+/** Perspective-compensated world-x for a raw keyboard-plane x. */
+export function parallaxX(rawX: number): number {
+  return CAM_X + (rawX - CAM_X) * NOTE_PARALLAX_SCALE
+}
 
 /**
  * Shared context for the geometry helpers below. With speed automation,
@@ -95,11 +118,14 @@ export function clickYToTime(
  * favors them when the click is near their center.
  */
 export function clickXToMidi(x: number, transpose: number): number {
+  // `x` is sampled on the falling-note plane (where the user clicks the
+  // visible note), so it lives in the parallax-compensated space — match
+  // it against the keys' compensated centres, not their raw layout x.
   let bestMidi = MIDI_MIN
   let bestDist = Infinity
   for (let i = 0; i < KEY_COUNT; i++) {
     const k = KEYBOARD_LAYOUT.keys[i]
-    const d = Math.abs(k.x - x)
+    const d = Math.abs(parallaxX(k.x) - x)
     if (d < bestDist) {
       bestDist = d
       bestMidi = k.midi
@@ -136,7 +162,7 @@ export function timeToHeadY(
 export function midiToX(displayedMidi: number): number | null {
   const idx = displayedMidi - MIDI_MIN
   if (idx < 0 || idx >= KEY_COUNT) return null
-  return KEYBOARD_LAYOUT.keys[idx].x
+  return parallaxX(KEYBOARD_LAYOUT.keys[idx].x)
 }
 
 /**
@@ -199,9 +225,11 @@ export function noteVisualBounds(
     if (topY <= hitY) return null
   }
 
+  // Mirror the renderer's parallax compensation (applied as a mesh-level
+  // x-affine, so the ±halfWidth extents scale with the centre too).
   return {
-    xMin: key.x - halfWidth,
-    xMax: key.x + halfWidth,
+    xMin: parallaxX(key.x - halfWidth),
+    xMax: parallaxX(key.x + halfWidth),
     yMin: bottomY,
     yMax: topY,
   }

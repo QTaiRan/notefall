@@ -563,10 +563,6 @@ export function Inspector() {
           <BoundSliderRow label="Hi Cut (Hz)" settingKey="reverbHiCut" min={500} max={20000} step={100} />
           <BoundSliderRow label="Low Cut (Hz)" settingKey="reverbLowCut" min={20} max={1000} step={10} />
         </Section>
-
-        <div className="mt-4 px-2 text-[10px] text-neutral-600">
-          Default colors: {defaultSettings.noteColor}
-        </div>
       </div>
       </SearchProvider>
     </aside>

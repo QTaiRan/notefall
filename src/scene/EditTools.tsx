@@ -22,6 +22,8 @@ import {
   clickYToTime,
   fallDistance,
   noteVisualBounds,
+  parallaxX,
+  NOTE_PLANE_Z,
   type TimeContext,
 } from '../notes/positions'
 import { noteDeathFx } from '../notes/noteDeathFx'
@@ -99,8 +101,7 @@ const RANGE_SELECT_CURSOR = 'cell'
 // a real margin to avoid accidental nudges on a select-click.
 const DRAG_THRESHOLD_PX = 4
 
-const NOTE_Z = 0.1
-const PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), -NOTE_Z)
+const PLANE = new THREE.Plane(new THREE.Vector3(0, 0, 1), -NOTE_PLANE_Z)
 
 export function EditTools() {
   const s = useSettingsSlice(EDIT_TOOLS_KEYS)
@@ -389,7 +390,7 @@ export function EditTools() {
     const anchorDisplayedMidi = midi + settings.transpose
     const anchorIdx = anchorDisplayedMidi - MIDI_MIN
     if (anchorIdx < 0 || anchorIdx >= KEY_COUNT) return
-    const anchorOriginalDisplayedX = KEYBOARD_LAYOUT.keys[anchorIdx].x
+    const anchorOriginalDisplayedX = parallaxX(KEYBOARD_LAYOUT.keys[anchorIdx].x)
 
     let lastDeltaSemis = 0
     let started = false

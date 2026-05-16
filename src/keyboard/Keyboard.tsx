@@ -152,6 +152,22 @@ export function Keyboard() {
   const glow = useMemo(() => new Float32Array(KEY_COUNT), []);
   const held = useMemo(() => new Uint8Array(KEY_COUNT), []);
   const press = useMemo(() => new Float32Array(KEY_COUNT), []);
+  // World-space clip applied to the black-key materials: keep only
+  // geometry at or in front of the keyboard's back edge (the hit line,
+  // world Y = keyboardY + WHITE_KEY_LENGTH). Black keys are modelled
+  // 0.01 past that edge (to kill a white sliver at the shared seam) and
+  // tilt rearward when pressed — without this clip that coloured rear
+  // pokes up above the keyboard into the falling-note lane. Normal is
+  // -Y so the kept half-space is y <= constant; `constant` is refreshed
+  // each frame from the live keyboardY. Cutting through the geometry is
+  // safe: black keys have an inner solid fill, so the cross-section
+  // reads as the key colour rather than a hollow shell.
+  const blackKeyClip = useMemo(
+    () => new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),
+    [],
+  );
+  // Stable array identity so r3f doesn't re-assign the prop every frame.
+  const blackKeyClipPlanes = useMemo(() => [blackKeyClip], [blackKeyClip]);
   // Scratch buffer for top-K light selection; allocated once to keep
   // useFrame allocation-free.
   const claimed = useMemo(() => new Uint8Array(KEY_COUNT), []);
@@ -397,6 +413,9 @@ export function Keyboard() {
   useFrame((_, delta) => {
     const brightness = settings.keyboardBrightness;
     const pressK = 1 - Math.exp(-delta / Math.max(0.005, PRESS_TC));
+    // Track the live keyboard back edge so the black-key clip stays put
+    // if keyboardY is adjusted. Normal = (0,-1,0) → kept where y <= c.
+    blackKeyClip.constant = settings.keyboardY + WHITE_KEY_LENGTH;
     for (let i = 0; i < KEY_COUNT; i++) {
       const decay = settings.keyGlowDecay;
       const target = held[i] ? Math.max(glow[i], 0.6) : 0;
@@ -656,6 +675,7 @@ export function Keyboard() {
                     color={settings.blackKeyColor}
                     roughness={0.4}
                     metalness={0.05}
+                    clippingPlanes={blackKeyClipPlanes}
                   />
                   <meshStandardMaterial
                     attach="material-1"
@@ -663,6 +683,7 @@ export function Keyboard() {
                     color={settings.blackKeyColor}
                     roughness={0.4}
                     metalness={0.05}
+                    clippingPlanes={blackKeyClipPlanes}
                   />
                   <meshStandardMaterial
                     attach="material-2"
@@ -670,6 +691,7 @@ export function Keyboard() {
                     color={FILLET_FRONT_COLOR}
                     roughness={0.4}
                     metalness={0.05}
+                    clippingPlanes={blackKeyClipPlanes}
                   />
                 </>
               )}

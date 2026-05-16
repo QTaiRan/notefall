@@ -14,6 +14,9 @@ import {
   clickYToTime,
   fallDistance,
   noteVisualBounds,
+  parallaxX,
+  NOTE_PLANE_Z,
+  NOTE_PARALLAX_SCALE,
   type TimeContext,
 } from './positions'
 import { buildSpeedMap, midiToTimeline } from '../midi/speedMap'
@@ -685,9 +688,16 @@ export function FallingNotes() {
     // Sit in front of the 3D black keys (top face at z=BLACK_KEY_THICKNESS
     // = 0.09) so notes don't appear stuck inside them at the moment they
     // cross the hit line. Hit-line clipping happens per-pixel in the
-    // fragment shader, so geometry below hitY is invisible. Parallax vs.
-    // the keys at this z offset (camera at z=12) is sub-pixel.
-    const noteZ = 0.1
+    // fragment shader, so geometry below hitY is invisible.
+    const noteZ = NOTE_PLANE_Z
+    // Perspective parallax between this z plane and the keyboard surface
+    // (z=0) is NOT sub-pixel — at the keyboard edges it visibly pushes
+    // notes outward. Counter it with a mesh-level x-affine so every
+    // instance's z=NOTE_PLANE_Z projection lands on its key's z=0
+    // projection. Width scales with it too, which is also correct (the
+    // note should project the same width as the key it lands on).
+    mesh.scale.x = NOTE_PARALLAX_SCALE
+    mesh.position.x = parallaxX(0)
     material.uniforms.uHitY.value = hitY
     // Wall clock — used by texture presets (e.g. liquid flow). Pause-friendly
     // (keeps animating) since the texture should breathe even when stopped.
@@ -961,11 +971,13 @@ export function FallingNotes() {
     tintAttr.needsUpdate = true
   })
 
-  // Project a screen-space pointer to the falling-note z plane (z = 0.1).
+  // Project a screen-space pointer to the falling-note z plane.
   // Used during drag tracking via window-level pointermove (which is in
   // client coords, not three event coords). Returns null if the canvas has
-  // disappeared mid-drag (e.g. the user navigated away).
-  const noteZ = 0.1
+  // disappeared mid-drag (e.g. the user navigated away). The result is in
+  // the parallax-compensated x space (same space the notes are drawn in),
+  // so it matches `parallaxX(key.x)` / `noteVisualBounds` directly.
+  const noteZ = NOTE_PLANE_Z
   const screenToWorld = (clientX: number, clientY: number): THREE.Vector3 | null => {
     const canvas = gl.domElement
     if (!canvas) return null
@@ -1044,7 +1056,7 @@ export function FallingNotes() {
       snapshot: state.song,
       ids,
       anchorMidi: anchor.midi + state.settings.transpose,
-      anchorOriginalDisplayedX: KEYBOARD_LAYOUT.keys[anchorIdx].x,
+      anchorOriginalDisplayedX: parallaxX(KEYBOARD_LAYOUT.keys[anchorIdx].x),
       startWorld,
       startClient,
       moved: false,
