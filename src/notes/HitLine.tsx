@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useSettingsSlice } from '../store'
+import { getResolvedSettings } from '../scene/automatedSettings'
 import { KEYBOARD_LAYOUT, WHITE_KEY_LENGTH } from '../keyboard/layout'
 
 const HIT_LINE_KEYS = [
@@ -168,6 +169,8 @@ const PLANE_WIDTH_PAD = 0.5
  */
 export function HitLine() {
   const settings = useSettingsSlice(HIT_LINE_KEYS)
+  const barMeshRef = useRef<THREE.Mesh>(null)
+  const waveMeshRef = useRef<THREE.Mesh>(null)
 
   const barMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
@@ -214,43 +217,12 @@ export function HitLine() {
   }, [])
   useEffect(() => () => waveMaterial.dispose(), [waveMaterial])
 
-  useEffect(() => {
-    barMaterial.uniforms.uColor.value.set(settings.hitLineColor)
-    waveMaterial.uniforms.uColor.value.set(settings.hitLineColor)
-  }, [barMaterial, waveMaterial, settings.hitLineColor])
-  useEffect(() => {
-    barMaterial.uniforms.uIntensity.value = settings.hitLineIntensity
-  }, [barMaterial, settings.hitLineIntensity])
-  useEffect(() => {
-    barMaterial.uniforms.uThickness.value = settings.hitLineThickness
-  }, [barMaterial, settings.hitLineThickness])
-  useEffect(() => {
-    barMaterial.uniforms.uHalo.value = settings.hitLineBarHalo
-  }, [barMaterial, settings.hitLineBarHalo])
-  useEffect(() => {
-    waveMaterial.uniforms.uIntensity.value = settings.hitLineWaveIntensity
-  }, [waveMaterial, settings.hitLineWaveIntensity])
-  useEffect(() => {
-    waveMaterial.uniforms.uAmplitude.value = settings.hitLineWaveAmplitude
-  }, [waveMaterial, settings.hitLineWaveAmplitude])
-  useEffect(() => {
-    waveMaterial.uniforms.uThickness.value = settings.hitLineWaveThickness
-  }, [waveMaterial, settings.hitLineWaveThickness])
-  useEffect(() => {
-    waveMaterial.uniforms.uWaveScale.value = settings.hitLineWaveScale
-  }, [waveMaterial, settings.hitLineWaveScale])
-  useEffect(() => {
-    waveMaterial.uniforms.uScrollSpeed.value = settings.hitLineWaveScrollSpeed
-  }, [waveMaterial, settings.hitLineWaveScrollSpeed])
-  useEffect(() => {
-    waveMaterial.uniforms.uMorphSpeed.value = settings.hitLineWaveMorphSpeed
-  }, [waveMaterial, settings.hitLineWaveMorphSpeed])
-  useEffect(() => {
-    waveMaterial.uniforms.uHalo.value = settings.hitLineWaveHalo
-  }, [waveMaterial, settings.hitLineWaveHalo])
-  useEffect(() => {
-    waveMaterial.uniforms.uGrain.value = settings.hitLineWaveGrain
-  }, [waveMaterial, settings.hitLineWaveGrain])
+  // Animatable uniforms are pushed per-frame from the pin-resolved
+  // settings (see useFrame below) instead of via per-field useEffects.
+  // This makes them follow timeline pins AND animate correctly under
+  // the export's `r3f.advance()` loop. With zero pins the resolved
+  // values equal the live settings, so every write is the same value
+  // the old effects wrote — behaviour is unchanged.
 
   // Wrap uTime so the shader's noise inputs stay in float32-precise
   // territory. `performance.now()` grows unboundedly per page session,
@@ -265,7 +237,28 @@ export function HitLine() {
   // continuous morph so users don't perceive it as a glitch.
   const TIME_WRAP_SECONDS = 600
   useFrame(() => {
+    const r = getResolvedSettings()
     waveMaterial.uniforms.uTime.value = now() % TIME_WRAP_SECONDS
+    barMaterial.uniforms.uColor.value.set(r.hitLineColor)
+    barMaterial.uniforms.uIntensity.value = r.hitLineIntensity
+    barMaterial.uniforms.uThickness.value = r.hitLineThickness
+    barMaterial.uniforms.uHalo.value = r.hitLineBarHalo
+    waveMaterial.uniforms.uColor.value.set(r.hitLineColor)
+    waveMaterial.uniforms.uIntensity.value = r.hitLineWaveIntensity
+    waveMaterial.uniforms.uAmplitude.value = r.hitLineWaveAmplitude
+    waveMaterial.uniforms.uThickness.value = r.hitLineWaveThickness
+    waveMaterial.uniforms.uWaveScale.value = r.hitLineWaveScale
+    waveMaterial.uniforms.uScrollSpeed.value = r.hitLineWaveScrollSpeed
+    waveMaterial.uniforms.uMorphSpeed.value = r.hitLineWaveMorphSpeed
+    waveMaterial.uniforms.uHalo.value = r.hitLineWaveHalo
+    waveMaterial.uniforms.uGrain.value = r.hitLineWaveGrain
+    // Pin-resolved vertical placement. keyboardY is non-animatable but
+    // the resolver passes it straight through, so this stays correct
+    // whether or not pins are present. Zero pins ⇒ same Y the JSX prop
+    // computes, so no visible change.
+    const hitYR = r.keyboardY + WHITE_KEY_LENGTH
+    if (barMeshRef.current) barMeshRef.current.position.y = hitYR + r.hitLineBarY
+    if (waveMeshRef.current) waveMeshRef.current.position.y = hitYR + r.hitLineWaveY
   })
 
   if (!settings.hitLineEnabled) return null
@@ -291,12 +284,20 @@ export function HitLine() {
           the bar's additive glow as it crosses the hit line. The z
           coordinate stays where it is (in front of the 3D black keys
           at z=0.125) so the line is still visible against the keys. */}
-      <mesh position={[0, hitY + settings.hitLineBarY, 0.14]} renderOrder={0}>
+      <mesh
+        ref={barMeshRef}
+        position={[0, hitY + settings.hitLineBarY, 0.14]}
+        renderOrder={0}
+      >
         <planeGeometry args={[planeWidth, BAR_PLANE_HEIGHT]} />
         <primitive object={barMaterial} attach="material" />
       </mesh>
       {settings.hitLineWaveEnabled && (
-        <mesh position={[0, hitY + settings.hitLineWaveY, 0.141]} renderOrder={0}>
+        <mesh
+          ref={waveMeshRef}
+          position={[0, hitY + settings.hitLineWaveY, 0.141]}
+          renderOrder={0}
+        >
           <planeGeometry args={[planeWidth, WAVE_PLANE_HEIGHT]} />
           <primitive object={waveMaterial} attach="material" />
         </mesh>

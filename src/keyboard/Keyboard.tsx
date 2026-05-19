@@ -47,6 +47,7 @@ import {
 import { usePcKeyboardInput } from "./pcInput";
 import { useStore, useSettingsSlice, defaultSettings } from "../store";
 import { computeLiveVisibleTop } from "../scene/visibleTop";
+import { getResolvedSettings } from "../scene/automatedSettings";
 
 const KEYBOARD_KEYS = [
   "blackKeyColor",
@@ -172,6 +173,9 @@ export function Keyboard() {
   // useFrame allocation-free.
   const claimed = useMemo(() => new Uint8Array(KEY_COUNT), []);
 
+  // Root group — its Y follows the pin-resolved keyboardY each frame so
+  // the whole keyboard animates under pins + the export advance() loop.
+  const rootGroupRef = useRef<THREE.Group>(null);
   const meshRefs = useRef<(THREE.Mesh | null)[]>([]);
   // Group wraps each key with its origin at the rear pivot; animating the
   // group's rotation+position tilts/dips the key during press.
@@ -411,13 +415,20 @@ export function Keyboard() {
   usePcKeyboardInput(ensureAudio);
 
   useFrame((_, delta) => {
-    const brightness = settings.keyboardBrightness;
+    // Pin-resolved settings for every animatable key in this pass.
+    // Non-animatable toggles (keyGlowEnabled / keyGlowFollowNote /
+    // flashEnabled / flashFollowNote) keep reading the React `settings`
+    // slice. Zero pins ⇒ `rs` is the live settings object by reference,
+    // so every value below is bit-identical to the pre-pin code.
+    const rs = getResolvedSettings();
+    const brightness = rs.keyboardBrightness;
     const pressK = 1 - Math.exp(-delta / Math.max(0.005, PRESS_TC));
     // Track the live keyboard back edge so the black-key clip stays put
     // if keyboardY is adjusted. Normal = (0,-1,0) → kept where y <= c.
-    blackKeyClip.constant = settings.keyboardY + WHITE_KEY_LENGTH;
+    blackKeyClip.constant = rs.keyboardY + WHITE_KEY_LENGTH;
+    if (rootGroupRef.current) rootGroupRef.current.position.y = rs.keyboardY;
     for (let i = 0; i < KEY_COUNT; i++) {
-      const decay = settings.keyGlowDecay;
+      const decay = rs.keyGlowDecay;
       const target = held[i] ? Math.max(glow[i], 0.6) : 0;
       const k1 = 1 - Math.exp(-delta / Math.max(0.01, decay));
       glow[i] += (target - glow[i]) * k1;
@@ -437,8 +448,8 @@ export function Keyboard() {
       if (!mat) continue;
 
       const baseColor = k.isBlack
-        ? settings.blackKeyColor
-        : settings.whiteKeyColor;
+        ? rs.blackKeyColor
+        : rs.whiteKeyColor;
       mat.color.set(baseColor).multiplyScalar(brightness);
       const e = glow[i];
       const glowOn = e > 0.001 && settings.keyGlowEnabled;
@@ -449,8 +460,8 @@ export function Keyboard() {
       // explicit `keyGlowColor` mode stays global.
       const trackIdx = lastTrack[i] >= 0 ? lastTrack[i] : undefined;
       const glowColorHex = settings.keyGlowFollowNote
-        ? resolveTrackColorHex(trackIdx, settings.trackColors, settings.noteColor)
-        : settings.keyGlowColor;
+        ? resolveTrackColorHex(trackIdx, rs.trackColors, rs.noteColor)
+        : rs.keyGlowColor;
       // Black-key surface tint: bring the actual color toward the glow
       // color, scaled brightness. White keys keep their pristine surface
       // (the additive emissive already reads cleanly off light gray).
@@ -463,7 +474,7 @@ export function Keyboard() {
       }
       if (glowOn) {
         mat.emissive.set(glowColorHex);
-        mat.emissiveIntensity = e * settings.keyGlowIntensity * brightness;
+        mat.emissiveIntensity = e * rs.keyGlowIntensity * brightness;
       } else {
         mat.emissiveIntensity = 0;
       }
@@ -507,35 +518,35 @@ export function Keyboard() {
     // Wood chassis tint — single shared material, single color.set per
     // frame. Brightness multiplied so it dims with the rest of the keys.
     WHITE_BODY_WOOD_MATERIAL.color
-      .set(settings.woodColor)
+      .set(rs.woodColor)
       .multiplyScalar(brightness);
     // White-coated front face follows whiteKeyColor. Front-face normals
     // are forced to +Z (see tagWhiteBodyFrontFace) so the surface gets
     // the same N·L diffuse contribution as the cap top. We dim by 0.85
     // so the front still reads slightly darker than the top.
     WHITE_BODY_FRONT_MATERIAL.color
-      .set(settings.whiteKeyColor)
+      .set(rs.whiteKeyColor)
       .multiplyScalar(brightness * 0.85);
 
     const lightXYs = sharedLightUniforms.uLightXYs.value;
     const lightIntensities = sharedLightUniforms.uLightIntensities.value;
     const blackGlow = sharedLightUniforms.uBlackGlow.value;
     sharedLightUniforms.uLightStrength.value = settings.flashEnabled
-      ? settings.flashBrightness
+      ? rs.flashBrightness
       : 0;
     // Mirror flash UI sliders into the white-key shadow shader so the
     // glow on the white surface matches the LandingFlashes plane visually.
     // Mapping is calibrated so each slider's *default* reproduces the
     // pre-uniform hardcoded look.
     sharedLightUniforms.uLightBoost.value =
-      LIGHT_BOOST_BASE * (settings.flashIntensity / DEFAULT_FLASH_INTENSITY);
+      LIGHT_BOOST_BASE * (rs.flashIntensity / DEFAULT_FLASH_INTENSITY);
     sharedLightUniforms.uFalloffX.value =
-      LIGHT_FALLOFF_X_BASE * (DEFAULT_FLASH_WIDTH / Math.max(0.01, settings.flashWidth));
+      LIGHT_FALLOFF_X_BASE * (DEFAULT_FLASH_WIDTH / Math.max(0.01, rs.flashWidth));
     sharedLightUniforms.uFalloffY.value =
-      LIGHT_FALLOFF_Y_BASE * (DEFAULT_FLASH_SIZE / Math.max(0.01, settings.flashSize));
+      LIGHT_FALLOFF_Y_BASE * (DEFAULT_FLASH_SIZE / Math.max(0.01, rs.flashSize));
     sharedLightUniforms.uShadowHalo.value =
       SHADOW_HALO_BASE *
-      Math.pow(settings.flashHaloWidth / DEFAULT_FLASH_HALO, SHADOW_HALO_RESPONSE);
+      Math.pow(rs.flashHaloWidth / DEFAULT_FLASH_HALO, SHADOW_HALO_RESPONSE);
     // Per-slot light colour follows the same source as the
     // LandingFlashes plane: per-track override when "Follows Note" is
     // on, otherwise the explicit flashColor — then lifted toward white
@@ -544,11 +555,11 @@ export function Keyboard() {
     // a scratch THREE.Color reused across slots.
     const lightColors = sharedLightUniforms.uLightColors.value;
     const fallbackHex = settings.flashFollowNote
-      ? settings.noteColor
-      : settings.flashColor;
-    const flashBrightness = settings.flashBrightness;
+      ? rs.noteColor
+      : rs.flashColor;
+    const flashBrightness = rs.flashBrightness;
     const followNote = settings.flashFollowNote;
-    const trackColorMap = settings.trackColors;
+    const trackColorMap = rs.trackColors;
     // Pre-compute the fallback in linear RGB, post-brightness-lerp,
     // so per-track keys that hit the fallback don't recompute it.
     LIGHT_COLOR_SCRATCH.set(fallbackHex).lerp(WHITE_LIGHT_TARGET, flashBrightness);
@@ -641,7 +652,7 @@ export function Keyboard() {
   );
 
   return (
-    <group position={[0, settings.keyboardY, 0]}>
+    <group ref={rootGroupRef} position={[0, settings.keyboardY, 0]}>
       {KEYBOARD_LAYOUT.keys.map((k, i) => {
         const isBlack = k.isBlack;
         const customMat = whiteKeyMaterials[i];

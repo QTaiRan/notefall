@@ -1,8 +1,10 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
+import type { BloomEffect } from 'postprocessing'
 import * as THREE from 'three'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, useSettingsSlice } from '../store'
+import { getResolvedSettings, updateResolvedSettings } from './automatedSettings'
 
 const SCENE_ROOT_KEYS = [
   'backgroundColor',
@@ -54,6 +56,11 @@ export function Scene() {
   // (edit-mode gating).
   const [recState, setRecState] = useState(recorder.getState())
   useEffect(() => recorder.addListener(() => setRecState(recorder.getState())), [])
+  // Ref to the underlying postprocessing BloomEffect — `BloomSync`
+  // pushes pin-resolved intensity / threshold / smoothing / radius
+  // into it every frame so the effect animates under the export's
+  // `r3f.advance()` loop (which never re-renders React props).
+  const bloomRef = useRef<BloomEffect>(null)
   return (
     <Canvas
       dpr={[1, 2]}
@@ -69,21 +76,96 @@ export function Scene() {
       }}
     >
       <color attach="background" args={[s.backgroundColor]} />
+      {/* Pin driver mounts FIRST so its useFrame subscribes before any
+          consumer's — same-priority R3F callbacks run in subscription
+          (mount) order, so every consumer this frame reads a snapshot
+          resolved against the current playhead. */}
+      <AutomatedSettingsDriver />
+      <BackgroundSync />
       <SceneContents recState={recState} />
       {!highFps && <ThrottledTicker intervalMs={PREVIEW_FRAME_INTERVAL_MS} />}
       {s.bloomEnabled && (
         <EffectComposer>
           <Bloom
+            // @react-three/postprocessing types the ref as
+            // `typeof BloomEffect` (the class) instead of an instance —
+            // a known typings quirk. The runtime ref IS a BloomEffect
+            // instance, which is what BloomSync needs, so cast here.
+            ref={bloomRef as unknown as React.Ref<typeof BloomEffect>}
             intensity={s.bloomIntensity}
             luminanceThreshold={s.bloomThreshold}
             luminanceSmoothing={s.bloomSmoothing}
             radius={s.bloomRadius}
             mipmapBlur
           />
+          <BloomSync bloomRef={bloomRef} />
         </EffectComposer>
       )}
     </Canvas>
   )
+}
+
+/**
+ * Single per-frame driver: recomputes the pin-resolved settings
+ * snapshot from the live base + `audioEngine.currentSongTime()` once
+ * per frame. Mounted before every visual consumer so the snapshot is
+ * fresh when they read it (R3F runs same-priority useFrames in mount
+ * order). With zero pins the resolver returns `base` by reference, so
+ * this is effectively free and changes nothing.
+ */
+function AutomatedSettingsDriver() {
+  useFrame(() => {
+    updateResolvedSettings()
+  })
+  return null
+}
+
+/**
+ * Imperatively syncs `scene.background` to the pin-resolved background
+ * colour each frame. The declarative `<color attach="background">`
+ * still seeds the initial value (and the zero-pin steady state — the
+ * resolved colour is then identical to it), but the offline exporter
+ * only steps `r3f.advance()` and never re-renders React props, so the
+ * per-frame imperative write is what makes the background animate in
+ * the rendered MP4.
+ */
+function BackgroundSync() {
+  const scene = useThree((s) => s.scene)
+  const bg = useMemo(() => new THREE.Color(), [])
+  useFrame(() => {
+    bg.set(getResolvedSettings().backgroundColor)
+    if (scene.background instanceof THREE.Color) {
+      scene.background.copy(bg)
+    } else {
+      scene.background = bg.clone()
+    }
+  })
+  return null
+}
+
+/**
+ * Imperatively pushes pin-resolved Bloom params into the underlying
+ * postprocessing `BloomEffect` each frame. React props on `<Bloom>`
+ * cover the initial / zero-pin state; this write makes the values
+ * animate through pins AND survive the export pass (which never
+ * re-renders React, so prop-only Bloom params would freeze).
+ *
+ * `intensity` → effect.intensity; `radius` →
+ * `mipmapBlurPass.radius`; threshold / smoothing →
+ * `luminanceMaterial.threshold` / `.smoothing` (the same internal
+ * properties react-three-postprocessing maps the props to).
+ */
+function BloomSync({ bloomRef }: { bloomRef: React.RefObject<BloomEffect | null> }) {
+  useFrame(() => {
+    const eff = bloomRef.current
+    if (!eff) return
+    const r = getResolvedSettings()
+    eff.intensity = r.bloomIntensity
+    eff.mipmapBlurPass.radius = r.bloomRadius
+    eff.luminanceMaterial.threshold = r.bloomThreshold
+    eff.luminanceMaterial.smoothing = r.bloomSmoothing
+  })
+  return null
 }
 
 /**
@@ -284,6 +366,10 @@ function CameraSync({
   fov: number
 }) {
   const { camera } = useThree()
+  // Non-pin (or zero-pin) path: apply on prop change so a slider drag
+  // updates the camera immediately even while paused. With pins this
+  // sets the base framing; the per-frame block below then overrides
+  // with the resolved (interpolated) values.
   useEffect(() => {
     camera.position.set(...pos)
     if ('fov' in camera) {
@@ -292,9 +378,25 @@ function CameraSync({
     }
     camera.lookAt(...lookAt)
   }, [camera, pos, lookAt, fov])
-  // also follow each frame in case other code moves camera
+  // Follow the pin-resolved camera every frame. With zero pins the
+  // resolved values equal the props, so position/fov writes are
+  // idempotent and this collapses to the original "re-aim lookAt each
+  // frame in case other code moved the camera" behaviour.
+  const prevFov = useRef<number | null>(null)
   useFrame(() => {
-    camera.lookAt(...lookAt)
+    const r = getResolvedSettings()
+    const [px, py, pz] = r.cameraPos
+    const [lx, ly, lz] = r.cameraLookAt
+    camera.position.set(px, py, pz)
+    if ('fov' in camera) {
+      const persp = camera as THREE.PerspectiveCamera
+      if (persp.fov !== r.cameraFov || prevFov.current !== r.cameraFov) {
+        persp.fov = r.cameraFov
+        persp.updateProjectionMatrix()
+        prevFov.current = r.cameraFov
+      }
+    }
+    camera.lookAt(lx, ly, lz)
   })
   return null
 }
