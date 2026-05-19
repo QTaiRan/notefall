@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useStore, defaultSettings, type Settings } from '../store'
+import { useStore, defaultSettings, targetPinIndex, type Settings } from '../store'
+import { useCurrentTime } from '../audio/useCurrentTime'
 import {
   BoundColorRow,
   BoundSliderRow,
@@ -361,14 +362,21 @@ function PreDelayRow() {
   )
 }
 
-// Banner shown while a timeline pin is selected — every Inspector
-// control then edits THAT pin's snapshot (the store stamps animatable
-// patches into the pin transparently). Makes the "you're editing a
-// pin, not the base look" mode explicit + offers a one-click exit.
+// Indicator of which pin the Inspector controls currently edit. Once
+// any pin exists, edits always route to the pin the playhead sits in
+// (the nearest past pin — see `targetPinIndex`); this banner names it
+// so the user always knows what they're changing. No "clear" action:
+// the target is purely playhead-derived, so it follows the head /
+// pin-clicks automatically — there is nothing to deselect.
 function PinEditingBanner() {
-  const editingTime = useStore((st) => st.editingKeyframeTime)
-  if (editingTime === null) return null
-  const s = Math.max(0, editingTime)
+  const keyframes = useStore((st) => st.settings.settingsKeyframes)
+  // rAF-polled TL_audio playhead — the exact value `targetPinIndex`
+  // resolves against, so the banner names the pin edits actually hit.
+  useCurrentTime()
+  if (keyframes.length === 0) return null
+  const idx = targetPinIndex(keyframes)
+  if (idx < 0) return null
+  const s = Math.max(0, keyframes[idx].time)
   const m = Math.floor(s / 60)
   const r = s - m * 60
   const stamp = `${m}:${r.toFixed(2).padStart(5, '0')}`
@@ -379,15 +387,8 @@ function PinEditingBanner() {
         className="h-2 w-2 shrink-0 rotate-45 rounded-[1px] bg-amber-300"
       />
       <span className="flex-1 truncate text-[11px] text-amber-200">
-        Editing pin @ {stamp}
+        Editing pin {idx + 1}/{keyframes.length} @ {stamp}
       </span>
-      <button
-        type="button"
-        onClick={() => useStore.getState().selectKeyframe(null)}
-        className="shrink-0 rounded bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-100 outline-none hover:bg-amber-500/35"
-      >
-        Clear
-      </button>
     </div>
   )
 }

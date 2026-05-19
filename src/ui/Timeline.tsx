@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Slider, SliderThumb, SliderTrack } from 'react-aria-components'
-import { useStore } from '../store'
+import { useStore, targetPinIndex } from '../store'
 import { audioEngine } from '../audio/engine'
 import { useUserAudio, type UserAudioPeaks } from '../audio/userAudio'
 import { useCurrentDisplayTime } from '../audio/useCurrentTime'
@@ -1459,7 +1459,15 @@ export function Timeline() {
   // Timeline pins (settings keyframes). `time` is TL_audio; the pin
   // strip converts to the editor's display-time x-axis itself.
   const settingsKeyframes = useStore((s) => s.settings.settingsKeyframes)
-  const editingKeyframeTime = useStore((s) => s.editingKeyframeTime)
+  // The pin Inspector edits currently route to — purely playhead-
+  // derived (nearest past pin). `currentTime` (the rAF display-time
+  // hook) re-renders this as the head moves so the lane highlights
+  // the governing pin live; `targetPinIndex` itself reads the TL_audio
+  // playhead. `null` when no pins.
+  const pinEditTargetTime =
+    settingsKeyframes.length > 0
+      ? (settingsKeyframes[targetPinIndex(settingsKeyframes)]?.time ?? null)
+      : null
 
   // Per-note tint for the timeline MIDI clip: each note is coloured by
   // the pin-resolved tint at its OWN time, so the whole colour
@@ -1681,12 +1689,13 @@ export function Timeline() {
       if (e.code === 'KeyP' && !e.repeat && !e.shiftKey) {
         e.preventDefault()
         s.addKeyframe(audioEngine.currentSongTime())
-      } else if (
-        (e.key === 'Delete' || e.key === 'Backspace') &&
-        s.editingKeyframeTime !== null
-      ) {
-        e.preventDefault()
-        s.removeKeyframe(s.editingKeyframeTime)
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const kfs = s.settings.settingsKeyframes
+        const ti = targetPinIndex(kfs)
+        if (ti >= 0) {
+          e.preventDefault()
+          s.removeKeyframe(kfs[ti].time)
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -2319,7 +2328,7 @@ export function Timeline() {
           {showPinLane && (
             <SettingsPinLane
               keyframes={settingsKeyframes}
-              editingTime={editingKeyframeTime}
+              editingTime={pinEditTargetTime}
               speedMap={speedMap}
               laneHeight={PIN_LANE_HEIGHT}
               pxPerSec={pxPerSec}

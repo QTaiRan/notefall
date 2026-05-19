@@ -637,38 +637,39 @@ function dirtyFor(s: {
 }
 
 /**
- * Which pin an Inspector edit / Reset targets when pins exist.
+ * Which pin an Inspector edit / Reset / indicator targets when pins
+ * exist. Purely playhead-derived (no manual selection): the pin
+ * **active at the current playhead** — the nearest pin AT OR BEFORE
+ * the head (`time <= playhead`), i.e. the pin that opens the segment
+ * the head sits in / whose look is currently held. Editing that pin
+ * changes "what you see" forward from here, which is what users
+ * expect when tweaking an automation.
  *
- * - An explicitly-selected pin (`editingKeyframeTime`) always wins —
- *   the user clicked it / the Clear button is showing.
- * - Otherwise the pin **reflected at the current playhead** (nearest
- *   by time) so editing a control changes "what you see" instead of
- *   the shadowed base settings (which the resolver ignores once any
- *   pin exists — the symptom being "the Inspector does nothing").
- *
- * Returns -1 when there are no pins (caller falls back to plain base
- * editing — the original behaviour).
+ * If the head is before every pin, the first pin's look is what's
+ * shown (held), so that's the target. Returns -1 only when there are
+ * no pins (caller falls back to plain base editing — original
+ * behaviour). `settingsKeyframes` is kept time-sorted by the pin
+ * actions, but this scans defensively rather than assuming it.
  */
-function targetPinIndex(
-  kfs: readonly SettingsKeyframe[],
-  editingTime: number | null,
-): number {
+export function targetPinIndex(kfs: readonly SettingsKeyframe[]): number {
   if (kfs.length === 0) return -1
-  if (editingTime !== null) {
-    const i = kfs.findIndex((p) => Math.abs(p.time - editingTime) < 1e-6)
-    if (i >= 0) return i
-  }
-  const t = audioEngine.currentSongTime()
-  let best = -1
-  let bestDist = Infinity
+  const t = audioEngine.currentSongTime() + 1e-6
+  let idx = -1
+  let bestTime = -Infinity
+  let firstIdx = 0
+  let firstTime = Infinity
   for (let i = 0; i < kfs.length; i++) {
-    const d = Math.abs(kfs[i].time - t)
-    if (d < bestDist) {
-      bestDist = d
-      best = i
+    const time = kfs[i].time
+    if (time < firstTime) {
+      firstTime = time
+      firstIdx = i
+    }
+    if (time <= t && time > bestTime) {
+      bestTime = time
+      idx = i
     }
   }
-  return best
+  return idx >= 0 ? idx : firstIdx
 }
 
 export type TransportState = 'stopped' | 'playing' | 'paused'
@@ -1238,12 +1239,12 @@ export const useStore = create<AppState>((set) => ({
       // Pin-edit indirection: once any pin exists the resolver shadows
       // the base animatable settings, so a bare base edit would do
       // nothing visible ("the Inspector can't be operated"). Instead
-      // mirror the animatable part of the patch into the pin the user
-      // is effectively editing — the explicitly-selected one, or the
-      // pin reflected at the playhead — so EVERY Inspector control
-      // keeps working unchanged and edits "what you see". The base is
-      // still updated too so the Inspector reflects the new value
-      // (harmless: animatable base is shadowed while pins exist).
+      // mirror the animatable part of the patch into the pin the
+      // playhead is currently sitting in (the nearest past pin) so
+      // EVERY Inspector control keeps working unchanged and edits
+      // "what you see". The base is still updated too so the Inspector
+      // reflects the new value (harmless: animatable base is shadowed
+      // while pins exist).
       const kfs = state.settings.settingsKeyframes
       if (kfs.length > 0) {
         const animPatch: Record<string, unknown> = {}
@@ -1251,7 +1252,7 @@ export const useStore = create<AppState>((set) => ({
           if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
         }
         if (Object.keys(animPatch).length > 0) {
-          const idx = targetPinIndex(kfs, state.editingKeyframeTime)
+          const idx = targetPinIndex(kfs)
           if (idx >= 0) {
             const next = kfs.slice()
             next[idx] = {
@@ -1305,7 +1306,7 @@ export const useStore = create<AppState>((set) => ({
         settingsKeyframes: kfs,
       }
       if (kfs.length > 0) {
-        const idx = targetPinIndex(kfs, state.editingKeyframeTime)
+        const idx = targetPinIndex(kfs)
         if (idx >= 0) {
           const next = kfs.slice()
           next[idx] = {
