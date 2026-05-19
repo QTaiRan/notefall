@@ -41,7 +41,7 @@ import { WHITE_KEY_LENGTH } from '../keyboard/layout'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong, togglePlayback } from '../audio/playback'
 import { EditTools } from './EditTools'
-import { CameraControls } from './CameraControls'
+import { CameraControls, isCameraGestureActive } from './CameraControls'
 
 // On-screen preview tick rate when the user opts into the lighter
 // 30 fps mode. The rendered MP4 export drives its own fps regardless
@@ -384,16 +384,43 @@ function CameraSync({
   // frame in case other code moved the camera" behaviour.
   const prevFov = useRef<number | null>(null)
   useFrame(() => {
-    const r = getResolvedSettings()
-    const [px, py, pz] = r.cameraPos
-    const [lx, ly, lz] = r.cameraLookAt
+    // While the user is actively orbiting / panning / wheel-dollying,
+    // show the value the gesture is WRITING — the edit target: the
+    // selected pin's snapshot (animatable) or base, identical to the
+    // Inspector's `useEffectiveSetting`. Otherwise the playhead-time
+    // resolver pulls the camera back to the interpolated state every
+    // frame and the gesture can't actually move it. Idle / playback /
+    // export (never a gesture) keep the time-resolved path untouched,
+    // so pin animation preview and export parity are unchanged.
+    let cp: readonly [number, number, number]
+    let cl: readonly [number, number, number]
+    let cf: number
+    if (isCameraGestureActive()) {
+      const st = useStore.getState()
+      const base = st.settings
+      const kt = st.editingKeyframeTime
+      const kf =
+        kt !== null
+          ? base.settingsKeyframes.find((p) => Math.abs(p.time - kt) < 1e-6)
+          : undefined
+      cp = (kf?.settings.cameraPos ?? base.cameraPos) as [number, number, number]
+      cl = (kf?.settings.cameraLookAt ?? base.cameraLookAt) as [number, number, number]
+      cf = kf?.settings.cameraFov ?? base.cameraFov
+    } else {
+      const r = getResolvedSettings()
+      cp = r.cameraPos
+      cl = r.cameraLookAt
+      cf = r.cameraFov
+    }
+    const [px, py, pz] = cp
+    const [lx, ly, lz] = cl
     camera.position.set(px, py, pz)
     if ('fov' in camera) {
       const persp = camera as THREE.PerspectiveCamera
-      if (persp.fov !== r.cameraFov || prevFov.current !== r.cameraFov) {
-        persp.fov = r.cameraFov
+      if (persp.fov !== cf || prevFov.current !== cf) {
+        persp.fov = cf
         persp.updateProjectionMatrix()
-        prevFov.current = r.cameraFov
+        prevFov.current = cf
       }
     }
     camera.lookAt(lx, ly, lz)

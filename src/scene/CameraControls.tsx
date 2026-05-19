@@ -4,6 +4,20 @@ import * as THREE from 'three'
 import { useStore } from '../store'
 import { CAMERA_LIMITS, clamp } from './cameraLimits'
 
+// True while the user is actively orbiting / panning / wheel-dollying.
+// `CameraSync` reads this: during a gesture it must show the value the
+// gesture is WRITING (the edit target — selected pin snapshot or base,
+// same as the Inspector's `useEffectiveSetting`) instead of the
+// playhead-time-resolved value, otherwise the per-frame resolver pulls
+// the camera back to the interpolated state and the gesture can't move
+// it. Never true during the headless export (no input), so export
+// parity is untouched. Wheel has no "end" event → cleared on idle.
+let cameraGestureActive = false
+let wheelIdleTimer: number | null = null
+export function isCameraGestureActive(): boolean {
+  return cameraGestureActive
+}
+
 // Blender-style viewport navigation:
 //   middle-drag           → orbit around cameraLookAt
 //   Shift + middle-drag   → pan (translate pos + lookAt together)
@@ -46,12 +60,58 @@ export function CameraControls() {
     let lastY = 0
     let activePointerId: number | null = null
 
+    // Apply a camera change. `cameraPos/LookAt/Fov` are ANIMATABLE, so
+    // when a settings pin is the edit target `updateSettings` routes the
+    // write into THAT pin's snapshot (not base) — exactly what the
+    // Inspector edits. Visibility is handled by `CameraSync` (it shows
+    // the edit target while `isCameraGestureActive()`), so this just
+    // writes; it must NOT seek the playhead (that yanked the view to the
+    // pin and fought the resolver).
+    const commitCamera = (patch: {
+      cameraPos: [number, number, number]
+      cameraLookAt?: [number, number, number]
+    }) => {
+      useStore.getState().updateSettings(patch)
+    }
+
+    // Current camera state to base a gesture delta on. MUST read from
+    // the same place `commitCamera` writes to: when a pin is the edit
+    // target the writes land in that pin's snapshot, so reading `base`
+    // (settings.cameraPos) would feed every move/notch the same stale
+    // value — the gesture never accumulates and the camera barely
+    // budges ("locked"). Mirrors the Inspector's `useEffectiveSetting`
+    // / `updateSettings` routing: targeted pin snapshot, else base.
+    const readEffectiveCamera = () => {
+      const st = useStore.getState()
+      const base = st.settings
+      const kt = st.editingKeyframeTime
+      let cp = base.cameraPos
+      let cl = base.cameraLookAt
+      let cf = base.cameraFov
+      if (kt !== null) {
+        const kf = base.settingsKeyframes.find(
+          (p) => Math.abs(p.time - kt) < 1e-6,
+        )
+        if (kf) {
+          cp = kf.settings.cameraPos ?? cp
+          cl = kf.settings.cameraLookAt ?? cl
+          cf = kf.settings.cameraFov ?? cf
+        }
+      }
+      return {
+        pos: new THREE.Vector3(...cp),
+        target: new THREE.Vector3(...cl),
+        fov: cf,
+      }
+    }
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 1) return
       // preventDefault on the pointerdown also suppresses Chrome/Firefox
       // middle-button autoscroll (the little compass cursor).
       e.preventDefault()
       mode = e.shiftKey ? 'pan' : 'orbit'
+      cameraGestureActive = true
       lastX = e.clientX
       lastY = e.clientY
       activePointerId = e.pointerId
@@ -70,9 +130,7 @@ export function CameraControls() {
       lastY = e.clientY
       if (dx === 0 && dy === 0) return
 
-      const s = useStore.getState().settings
-      const pos = new THREE.Vector3(...s.cameraPos)
-      const target = new THREE.Vector3(...s.cameraLookAt)
+      const { pos, target, fov } = readEffectiveCamera()
 
       if (mode === 'orbit') {
         const offset = pos.clone().sub(target)
@@ -81,7 +139,7 @@ export function CameraControls() {
         sph.phi = clamp(sph.phi - dy * ORBIT_SENSITIVITY, PHI_MIN, PHI_MAX)
         const newOffset = new THREE.Vector3().setFromSpherical(sph)
         const newPos = newOffset.add(target)
-        useStore.getState().updateSettings({
+        commitCamera({
           cameraPos: [newPos.x, newPos.y, newPos.z],
         })
       } else {
@@ -95,7 +153,7 @@ export function CameraControls() {
         const camUp = new THREE.Vector3().crossVectors(right, view).normalize()
         // World units per CSS pixel at the target plane (perspective scale).
         const distance = pos.distanceTo(target)
-        const fovRad = (s.cameraFov * Math.PI) / 180
+        const fovRad = (fov * Math.PI) / 180
         const worldPerPx = (2 * Math.tan(fovRad / 2) * distance) / size.height
         const deltaWorld = right
           .multiplyScalar(-dx * worldPerPx)
@@ -111,7 +169,7 @@ export function CameraControls() {
         )
         const realDelta = clampedTarget.clone().sub(target)
         const newPos = pos.clone().add(realDelta)
-        useStore.getState().updateSettings({
+        commitCamera({
           cameraPos: [newPos.x, newPos.y, newPos.z],
           cameraLookAt: [clampedTarget.x, clampedTarget.y, clampedTarget.z],
         })
@@ -120,6 +178,7 @@ export function CameraControls() {
 
     const endGesture = (pointerId?: number) => {
       mode = null
+      cameraGestureActive = false
       const id = pointerId ?? activePointerId
       activePointerId = null
       if (id !== null) {
@@ -145,9 +204,17 @@ export function CameraControls() {
       const unit = e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? PAGE_PX : 1
       const dy = e.deltaY * unit
       if (dy === 0) return
-      const s = useStore.getState().settings
-      const pos = new THREE.Vector3(...s.cameraPos)
-      const target = new THREE.Vector3(...s.cameraLookAt)
+      // Wheel emits no gesture-end event; hold the "active" flag and let
+      // it lapse a short while after the last notch so `CameraSync`
+      // shows the edit target throughout a continuous scroll, then hands
+      // back to the time-resolved path.
+      cameraGestureActive = true
+      if (wheelIdleTimer !== null) clearTimeout(wheelIdleTimer)
+      wheelIdleTimer = window.setTimeout(() => {
+        cameraGestureActive = false
+        wheelIdleTimer = null
+      }, 200)
+      const { pos, target } = readEffectiveCamera()
       const offset = pos.clone().sub(target)
       const distance = offset.length()
       // Multiplicative dolly: same number of pixels scrolled produces the
@@ -163,7 +230,7 @@ export function CameraControls() {
       )
       offset.setLength(next)
       const newPos = target.clone().add(offset)
-      useStore.getState().updateSettings({
+      commitCamera({
         cameraPos: [newPos.x, newPos.y, newPos.z],
       })
     }
@@ -189,6 +256,11 @@ export function CameraControls() {
       window.removeEventListener('blur', onBlur)
       el.removeEventListener('wheel', onWheel)
       el.removeEventListener('auxclick', onAuxClick)
+      if (wheelIdleTimer !== null) {
+        clearTimeout(wheelIdleTimer)
+        wheelIdleTimer = null
+      }
+      cameraGestureActive = false
     }
   }, [gl, size])
 

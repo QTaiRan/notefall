@@ -296,6 +296,14 @@ export function LandingFlashes() {
         frustumCulled={false}
         material={material}
         count={KEY_COUNT}
+        // These effects are all transparent + depthWrite:false, so paint
+        // order is renderOrder then camera-distance. The flash mesh's
+        // object origin is z≈0 (z is baked per-instance at 0.105), so the
+        // distance sort places it BEHIND the falling-notes mesh
+        // (renderOrder=2) and the notes overdraw the burst. Pin it above
+        // the notes so the landing flash blooms on top — matching the
+        // shader's deliberate upward bias into the note region.
+        renderOrder={3}
       >
         <planeGeometry args={[1, 1]} />
       </instancedMesh>
