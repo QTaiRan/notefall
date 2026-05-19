@@ -1200,24 +1200,66 @@ export const useStore = create<AppState>((set) => ({
   updateSettings: (patch) =>
     set((state) => {
       let settings = { ...state.settings, ...patch }
-      // Pin-edit indirection: when a pin is the edit target, mirror the
-      // animatable part of the patch into that pin's snapshot too. This
-      // keeps EVERY Inspector control working unchanged — it still
-      // edits "settings"; the store transparently also stamps the
-      // active pin. Base values for animatable keys are shadowed by the
-      // resolver once any pin exists, so the base drift is harmless and
-      // it keeps the Inspector reflecting what the user just changed.
-      const editT = state.editingKeyframeTime
-      if (editT !== null) {
-        const animPatch: Record<string, unknown> = {}
-        for (const k of ANIMATABLE_KEYS) {
-          if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
+      let editingKeyframeTime = state.editingKeyframeTime
+
+      // Animatable subset of this patch.
+      const animPatch: Record<string, unknown> = {}
+      for (const k of ANIMATABLE_KEYS) {
+        if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
+      }
+
+      if (Object.keys(animPatch).length > 0) {
+        const kfs = state.settings.settingsKeyframes ?? []
+
+        // DAW-style auto-keyframe: pins exist but none is explicitly
+        // selected, and this is a real Inspector gesture
+        // (`pendingSettingsDepth > 0`) — write the edit at the
+        // playhead so it's always visible, instead of editing the
+        // resolver-shadowed base invisibly. The `pendingSettingsDepth`
+        // gate is the crucial accidental-pin guard: camera orbit /
+        // dolly (CameraControls) and transport side-effects call
+        // `updateSettings` directly, OUTSIDE a begin/endSettingsEdit
+        // gesture, so navigation never spawns pins — only deliberate
+        // Inspector edits do. Update the pin under the head if one
+        // sits there (±ε); else drop a new pin capturing the resolved
+        // look so the curve doesn't jump, then stamp the change in.
+        // The whole drag stays one undo entry: the pin list lives in
+        // `settings` and the gesture's baseline (captured at
+        // beginSettingsEdit) predates the new pin.
+        if (
+          editingKeyframeTime === null &&
+          kfs.length > 0 &&
+          pendingSettingsDepth > 0
+        ) {
+          const t = Math.max(0, audioEngine.currentSongTime())
+          const hit = kfs.find((p) => Math.abs(p.time - t) < 1e-6)
+          if (hit) {
+            editingKeyframeTime = hit.time
+          } else {
+            const snapshot = pickAnimatable(
+              resolveSettingsAt(state.settings, kfs, t),
+            )
+            const created = kfs
+              .concat({ time: t, settings: snapshot })
+              .sort((a, b) => a.time - b.time)
+            settings = { ...settings, settingsKeyframes: created }
+            editingKeyframeTime = t
+          }
         }
-        if (Object.keys(animPatch).length > 0) {
-          const kfs = state.settings.settingsKeyframes
-          const idx = kfs.findIndex((p) => Math.abs(p.time - editT) < 1e-6)
+
+        // Pin-edit indirection: stamp the animatable patch into the
+        // target pin (the explicitly-selected one, or the playhead pin
+        // resolved just above). Keeps EVERY Inspector control working
+        // unchanged — it still edits "settings"; the store
+        // transparently also stamps the active pin so the Inspector
+        // reflects what the user changed (base drift is harmless since
+        // the resolver shadows base animatable keys once a pin exists).
+        if (editingKeyframeTime !== null) {
+          const target = editingKeyframeTime
+          const cur = settings.settingsKeyframes
+          const idx = cur.findIndex((p) => Math.abs(p.time - target) < 1e-6)
           if (idx >= 0) {
-            const next = kfs.slice()
+            const next = cur.slice()
             next[idx] = {
               ...next[idx],
               settings: { ...next[idx].settings, ...animPatch },
@@ -1225,6 +1267,11 @@ export const useStore = create<AppState>((set) => ({
             settings = { ...settings, settingsKeyframes: next }
           }
         }
+      }
+
+      const changed: Partial<AppState> = { settings }
+      if (editingKeyframeTime !== state.editingKeyframeTime) {
+        changed.editingKeyframeTime = editingKeyframeTime
       }
       // Inside a gesture (slider drag, color popover session, etc.)
       // every onChange would otherwise call `dirtyFor` → `hashSong`
@@ -1235,10 +1282,10 @@ export const useStore = create<AppState>((set) => ({
       // gesture (atomic switch/select clicks) we still compute it
       // synchronously so the indicator flips immediately.
       if (pendingSettingsDepth > 0) {
-        return { settings }
+        return changed
       }
       return {
-        settings,
+        ...changed,
         dirty: dirtyFor({
           song: state.song,
           settings,
