@@ -379,14 +379,14 @@ function PinEditingBanner() {
         className="h-2 w-2 shrink-0 rotate-45 rounded-[1px] bg-amber-300"
       />
       <span className="flex-1 truncate text-[11px] text-amber-200">
-        ピン編集中 @ {stamp}
+        Editing pin @ {stamp}
       </span>
       <button
         type="button"
         onClick={() => useStore.getState().selectKeyframe(null)}
         className="shrink-0 rounded bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-100 outline-none hover:bg-amber-500/35"
       >
-        解除
+        Clear
       </button>
     </div>
   )

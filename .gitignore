@@ -12,3 +12,6 @@ public/samples/
 .env.production
 .env.local
 .env.production.local
+
+# Claude Code agent worktrees (harness-managed, not part of the project)
+.claude/worktrees/
