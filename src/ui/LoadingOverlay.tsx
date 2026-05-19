@@ -33,7 +33,7 @@ export function LoadingOverlay() {
           />
         </div>
         <div className="text-[11px] text-neutral-500">
-          The first load fetches ~60MB of high-quality samples; subsequent sessions are cached.
+          The first load fetches ~77MB of high-quality samples; subsequent sessions are cached.
         </div>
       </div>
     </div>
