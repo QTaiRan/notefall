@@ -708,6 +708,33 @@ const RESET_PRESERVED_KEYS = [
   'settingsKeyframes',
 ] as const satisfies readonly (keyof Settings)[]
 
+/**
+ * Timeline-editor content TIED TO THE SONG — reset to defaults when a
+ * *different* MIDI / song is opened (even within the same project),
+ * since pins / clip length / speed curve are all keyed to the old
+ * song's timeline and are meaningless against a new one. The Inspector
+ * look + editor layout + session prefs are intentionally NOT here, so
+ * opening a new MIDI keeps the user's visual setup. Reset to
+ * `defaultSettings[k]`.
+ */
+const SONG_TIED_KEYS = [
+  // Pins
+  'settingsKeyframes',
+  // MIDI clip position + length (trim)
+  'midiOffsetSec',
+  'midiTrimStartSec',
+  'midiTrimEndSec',
+  // User-audio clip sync + length — its relationship to the song is
+  // per-song, so a new MIDI invalidates it
+  'userAudioOffsetSec',
+  'userAudioTrimStartSec',
+  'userAudioTrimEndSec',
+  // Speed automation
+  'midiSpeedAutomation',
+  'midiSpeedAutomationYRangeLog2',
+  'midiSpeedAutomationYCenterLog2',
+] as const satisfies readonly (keyof Settings)[]
+
 export type TransportState = 'stopped' | 'playing' | 'paused'
 
 export type LoadStatus =
@@ -717,7 +744,12 @@ export type LoadStatus =
 
 type AppState = {
   song: ParsedSong | null
-  setSong: (s: ParsedSong | null) => void
+  // `opts.resetTimeline` clears the song-tied timeline-editor content
+  // (pins / clip length / speed — see `SONG_TIED_KEYS`) back to
+  // defaults. Pass it when OPENING A DIFFERENT MIDI so stale pins /
+  // trim / speed from the previous song don't carry over; leave it off
+  // for recorder restore / empty-song bootstrap (same song context).
+  setSong: (s: ParsedSong | null, opts?: { resetTimeline?: boolean }) => void
 
   transport: TransportState
   setTransport: (t: TransportState) => void
@@ -926,29 +958,41 @@ export const useStore = create<AppState>((set) => ({
   // Loading a new song wipes the editor state — the undo stack referenced
   // notes from the previous file and the highlighted selection no longer
   // points at anything visible. Editor restarts fresh on every load.
-  setSong: (song) => {
+  setSong: (song, opts) => {
     // A fresh song means the previous file's note-undo entries point at
     // ids that no longer exist; settings entries would survive in
     // principle but we wipe them too to keep the "this session" model
     // intuitive. Drop any pending settings baseline for the same reason.
     dropSettingsBaseline()
-    set((state) => ({
-      song,
-      editHistory: [],
-      editFuture: [],
-      selection: new Set(),
-      editingKeyframeTime: null,
-      // The freshly loaded MIDI becomes the new dirty baseline:
-      // anything from this point reads as dirty, and an edit-then-
-      // revert (add + delete, undo, etc.) returns to clean. Loading
-      // a file should not itself read as "unsaved changes" — there
-      // are no changes yet. The action layer is responsible for
-      // gating MIDI load behind a discard-unsaved confirm so we
-      // don't accidentally clobber prior work here.
-      savedContentHash: computeContentHash({ song, settings: state.settings }),
-      externalDirty: false,
-      dirty: false,
-    }))
+    set((state) => {
+      // Opening a DIFFERENT MIDI: clear the song-tied timeline-editor
+      // content (pins / clip length / speed) so it doesn't carry over
+      // from the previous song. The Inspector look is left untouched.
+      let settings = state.settings
+      if (opts?.resetTimeline) {
+        const next = { ...settings } as Record<string, unknown>
+        for (const k of SONG_TIED_KEYS) next[k as string] = defaultSettings[k]
+        settings = next as Settings
+      }
+      return {
+        song,
+        settings,
+        editHistory: [],
+        editFuture: [],
+        selection: new Set(),
+        editingKeyframeTime: null,
+        // The freshly loaded MIDI becomes the new dirty baseline:
+        // anything from this point reads as dirty, and an edit-then-
+        // revert (add + delete, undo, etc.) returns to clean. Loading
+        // a file should not itself read as "unsaved changes" — there
+        // are no changes yet. The action layer is responsible for
+        // gating MIDI load behind a discard-unsaved confirm so we
+        // don't accidentally clobber prior work here.
+        savedContentHash: computeContentHash({ song, settings }),
+        externalDirty: false,
+        dirty: false,
+      }
+    })
   },
 
   transport: 'stopped',
@@ -1371,27 +1415,18 @@ export const useStore = create<AppState>((set) => ({
 
   editingKeyframeTime: null,
   selectKeyframe: (time) => {
-    if (time === null) {
-      set((state) =>
-        state.editingKeyframeTime === null ? state : { editingKeyframeTime: null },
-      )
-      return
-    }
-    // Load the pin's snapshot into the live base settings so the
-    // Inspector reflects what the pin looks like (Inspector reads base;
-    // see updateSettings' pin-edit indirection). One undo entry.
-    beginSettingsEdit()
-    set((state) => {
-      const kf = state.settings.settingsKeyframes.find(
-        (p) => Math.abs(p.time - time) < 1e-6,
-      )
-      if (!kf) return { editingKeyframeTime: time }
-      return {
-        editingKeyframeTime: time,
-        settings: { ...state.settings, ...kf.settings },
-      }
-    })
-    endSettingsEdit()
+    // Just records which pin was clicked. It must NOT merge the pin's
+    // snapshot into base `settings`: base is the separate, editable
+    // "default look" (what the pre-first-pin region ramps from) and
+    // selecting a pin must never overwrite it. The caller seeks to the
+    // pin; the edit target / banner / lane highlight are all derived
+    // from the playhead (`targetPinIndex`), so the seek alone makes
+    // the clicked pin the live target.
+    set((state) =>
+      state.editingKeyframeTime === time
+        ? state
+        : { editingKeyframeTime: time },
+    )
   },
   addKeyframe: (time) => {
     beginSettingsEdit()

@@ -154,7 +154,10 @@ async function applyOpenedMidi(buf: ArrayBuffer, name: string): Promise<ActionRe
   // so a name they intentionally chose shouldn't be clobbered.
   const existing = useStore.getState().projectName
   const seedName = name.replace(/\.midi?$/i, '') || 'Untitled'
-  useStore.getState().setSong(parsed)
+  // Opening a different MIDI: drop the previous song's pins / clip
+  // length / speed (they're keyed to the old timeline). Inspector
+  // look is kept.
+  useStore.getState().setSong(parsed, { resetTimeline: true })
   if (!existing) useStore.setState({ projectName: seedName })
   audioEngine.loadSong(parsed)
   useStore.getState().setTransport('stopped')

@@ -345,7 +345,9 @@ export function Toolbar() {
         const buf = recorder.toArrayBuffer(r.id)
         if (!buf) return
         const parsed = await parseMidi(buf, r.name)
-        setSong(parsed)
+        // A finalized recording is a new song → clear stale pins /
+        // clip length / speed from the previous one; keep the look.
+        setSong(parsed, { resetTimeline: true })
         // setSong now treats a song load as a fresh baseline (clean).
         // A recording is unsaved work though — flip dirty so the user
         // gets the beforeunload prompt if they try to close without
@@ -611,7 +613,9 @@ export function Toolbar() {
     const buf = rec.toArrayBuffer(id)
     if (!buf) return
     const parsed = await parseMidi(buf, name)
-    setSong(parsed)
+    // Loading a saved recording as the song → reset song-tied
+    // timeline content (pins / clip length / speed); keep the look.
+    setSong(parsed, { resetTimeline: true })
     audioEngine.loadSong(parsed)
     setTransport('stopped')
     setActiveRecordingId(id)

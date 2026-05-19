@@ -195,7 +195,9 @@ export function Layout() {
             const buf = await file.arrayBuffer()
             const parsed = await parseMidi(buf, file.name)
             const store = useStore.getState()
-            store.setSong(parsed)
+            // New MIDI dropped → reset song-tied timeline content
+            // (pins / clip length / speed); keep the Inspector look.
+            store.setSong(parsed, { resetTimeline: true })
             audioEngine.loadSong(parsed)
             store.setTransport('stopped')
           } catch (err) {
