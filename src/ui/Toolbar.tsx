@@ -8,6 +8,7 @@ import {
   Popover,
   Separator,
   SubmenuTrigger,
+  Switch,
 } from 'react-aria-components'
 import { useStore, useSettingsSlice } from '../store'
 
@@ -159,6 +160,14 @@ const menuItemClass =
   'flex cursor-pointer items-center justify-between gap-6 rounded px-2 py-1.5 text-xs text-neutral-200 outline-none data-[focused]:bg-neutral-800 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50'
 const menuShortcutClass = 'font-mono text-[10px] text-neutral-500'
 
+// Help popover rows. NOT a react-aria <Menu> — mixing a Menu collection
+// with the analytics <Switch> left the last MenuItem's hover background
+// stuck (the Menu can't clear focus when the pointer exits to a non-Menu
+// sibling). Plain Buttons + Switch in a Dialog all share one hover
+// model (`data-[hovered]`), so every row highlights and clears uniformly.
+const helpRowClass =
+  'flex w-full cursor-pointer items-center rounded px-2 py-1.5 text-left text-xs text-neutral-200 outline-none data-[hovered]:bg-neutral-800 data-[focus-visible]:bg-neutral-800'
+
 function fmtElapsed(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60)
@@ -244,12 +253,13 @@ export function Toolbar() {
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
 
   // Analytics opt-out is persisted in localStorage; mirror it in React
-  // state so the Help-menu toggle reflects the current choice.
+  // state so the Help-menu switch reflects the current choice. The
+  // switch is framed positively ("Help improve" = on), so `enabled` is
+  // the inverse of the stored opt-out flag.
   const [analyticsOff, setAnalyticsOff] = useState(isAnalyticsOptedOut)
-  const toggleAnalytics = () => {
-    const next = !analyticsOff
-    setAnalyticsOptOut(next)
-    setAnalyticsOff(next)
+  const setAnalyticsEnabled = (enabled: boolean) => {
+    setAnalyticsOptOut(!enabled)
+    setAnalyticsOff(!enabled)
   }
   const confirmingDeleteTimerRef = useRef<number | null>(null)
   useEffect(() => {
@@ -1172,7 +1182,7 @@ export function Toolbar() {
             have to ask. Last section, so only `pl-3` to mirror the
             previous border's 12px right side. */}
         <div className="flex items-center border-l border-neutral-800 pl-3">
-        <MenuTrigger>
+        <DialogTrigger>
           <Button
             aria-label="Help and feedback"
             className="flex h-7 w-7 items-center justify-center rounded-full border border-neutral-800 text-xs font-semibold text-neutral-400 outline-none hover:border-neutral-600 hover:text-neutral-200 focus-visible:border-sky-500 data-[pressed]:bg-neutral-800"
@@ -1183,50 +1193,68 @@ export function Toolbar() {
             placement="bottom end"
             className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
           >
-            <Menu
-              aria-label="Help"
+            <Dialog
+              aria-label="Help and feedback"
               className="flex w-56 flex-col gap-0.5 outline-none"
             >
-              <MenuItem
-                onAction={() => openExternal(buildIssueUrl('bug'))}
-                textValue="Report a bug"
-                className={menuItemClass}
-              >
-                <span>Report a bug…</span>
-              </MenuItem>
-              <MenuItem
-                onAction={() => openExternal(buildIssueUrl('feature'))}
-                textValue="Request a feature"
-                className={menuItemClass}
-              >
-                <span>Request a feature…</span>
-              </MenuItem>
-              <Separator className="my-1 h-px bg-neutral-800" />
-              <MenuItem
-                onAction={() => openExternal(REPO_URL)}
-                textValue="View on GitHub"
-                className={menuItemClass}
-              >
-                <span>View on GitHub</span>
-              </MenuItem>
-              <Separator className="my-1 h-px bg-neutral-800" />
-              <MenuItem
-                onAction={toggleAnalytics}
-                textValue="Toggle anonymous usage analytics"
-                className={menuItemClass}
-              >
-                <div className="flex flex-col gap-0.5">
-                  <span>
-                    {analyticsOff ? '☐' : '☑'} Share anonymous usage stats
-                  </span>
-                  <span className="text-[10px] leading-tight text-neutral-500">
-                    Counts only — never your music, files, or any content.
-                  </span>
-                </div>
-              </MenuItem>
-            </Menu>
+              {({ close }) => (
+                <>
+                  <Button
+                    onPress={() => {
+                      openExternal(buildIssueUrl('bug'))
+                      close()
+                    }}
+                    className={helpRowClass}
+                  >
+                    <span>Report a bug…</span>
+                  </Button>
+                  <Button
+                    onPress={() => {
+                      openExternal(buildIssueUrl('feature'))
+                      close()
+                    }}
+                    className={helpRowClass}
+                  >
+                    <span>Request a feature…</span>
+                  </Button>
+                  <Separator className="my-1 h-px border-0 bg-neutral-800" />
+                  <Button
+                    onPress={() => {
+                      openExternal(REPO_URL)
+                      close()
+                    }}
+                    className={helpRowClass}
+                  >
+                    <span>View on GitHub</span>
+                  </Button>
+                  <Separator className="my-1 h-px border-0 bg-neutral-800" />
+                  {/* Privacy / telemetry preference — a real Switch
+                      (matching the Inspector's SwitchRow pill), framed
+                      positively ("Help improve" on by default). Same
+                      hover model as the rows above; toggling does NOT
+                      close the popover. */}
+                  <Switch
+                    isSelected={!analyticsOff}
+                    onChange={setAnalyticsEnabled}
+                    className="group flex w-full cursor-pointer items-center justify-between gap-3 rounded px-2 py-1.5 text-xs outline-none data-[hovered]:bg-neutral-800 data-[focus-visible]:bg-neutral-800"
+                  >
+                    <span className="flex flex-col gap-0.5">
+                      <span className="select-none text-neutral-200">
+                        Help improve notefall
+                      </span>
+                      <span className="text-[10px] leading-tight text-neutral-500">
+                        Anonymous usage only — never your music or files.
+                      </span>
+                    </span>
+                    <span className="relative inline-block h-4 w-7 shrink-0 rounded-full bg-neutral-700 transition group-data-[selected]:bg-sky-500">
+                      <span className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white transition group-data-[selected]:translate-x-3" />
+                    </span>
+                  </Switch>
+                </>
+              )}
+            </Dialog>
           </Popover>
-        </MenuTrigger>
+        </DialogTrigger>
         </div>
 
       </div>
