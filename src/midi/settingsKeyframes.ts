@@ -323,3 +323,56 @@ export function resolveSettingsAt(
 
   return out as Settings
 }
+
+/**
+ * Cheap variant that interpolates ONLY the note tint (`noteColor` +
+ * `trackColors`) at time `t`. The timeline MIDI overview tints every
+ * note by its OWN time so the whole colour automation is visible as a
+ * static gradient even while paused. Doing that with `resolveSettingsAt`
+ * — which spreads the ~100-key `Settings` per call — would be needlessly
+ * heavy across a thousand-note song; this touches just the two keys with
+ * the identical segment-selection + easing logic. Equal endpoints short-
+ * circuit the THREE.Color work so segments where only the camera (etc.)
+ * animates cost almost nothing per note.
+ */
+export function resolveNoteTintAt(
+  base: Settings,
+  keyframes: readonly SettingsKeyframe[] | undefined,
+  t: number,
+): { noteColor: string; trackColors: Record<string, string> } {
+  if (!keyframes || keyframes.length === 0) {
+    return { noteColor: base.noteColor, trackColors: base.trackColors }
+  }
+  const kfs = sortByTime(keyframes)
+  const last = kfs.length - 1
+  let from: Partial<Settings>
+  let to: Partial<Settings>
+  let u: number
+  if (t <= kfs[0].time) {
+    from = to = kfs[0].settings
+    u = 0
+  } else if (t >= kfs[last].time) {
+    from = to = kfs[last].settings
+    u = 1
+  } else {
+    const i = lowerIdx(kfs, t)
+    const a = kfs[i]
+    const b = kfs[i + 1]
+    from = a.settings
+    to = b.settings
+    const span = b.time - a.time
+    const raw = span > 0 ? (t - a.time) / span : 0
+    u = applyCurvature(raw, a.curvature ?? 0)
+  }
+  const an = (from.noteColor as string | undefined) ?? base.noteColor
+  const bn = (to.noteColor as string | undefined) ?? base.noteColor
+  const at =
+    (from.trackColors as Record<string, string> | undefined) ??
+    base.trackColors
+  const bt =
+    (to.trackColors as Record<string, string> | undefined) ?? base.trackColors
+  return {
+    noteColor: an === bn ? an : lerpColor(an, bn, u),
+    trackColors: at === bt ? at : lerpColorMap(at, bt, u),
+  }
+}

@@ -25,7 +25,7 @@ import {
   VolumeMuteIcon,
 } from './icons'
 import { SettingsPinLane, PIN_LANE_HEIGHT } from './SettingsPinLane'
-import { resolveSettingsAt } from '../midi/settingsKeyframes'
+import { resolveNoteTintAt } from '../midi/settingsKeyframes'
 
 /**
  * Multi-row timeline that replaces the legacy single-slider seek bar.
@@ -175,6 +175,12 @@ function MidiPreviewCanvas({
   /** Per-track colour overrides. Sparse map keyed by track index.
    *  Notes whose track has no override fall back to `color`. */
   trackColors,
+  /** Optional per-note resolved tint, aligned to `notes` by index.
+   *  Set when timeline pins animate the colour — each note is then
+   *  drawn in the pin-resolved colour at its OWN time so the whole
+   *  automation shows as a static gradient. `null` (no pins) falls
+   *  back to the `color` / `trackColors` path (unchanged behaviour). */
+  noteColors,
 }: {
   notes: NoteEvent[]
   width: number
@@ -183,6 +189,7 @@ function MidiPreviewCanvas({
   startTimeSec: number
   color: string
   trackColors: Record<string, string>
+  noteColors: string[] | null
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   useEffect(() => {
@@ -232,7 +239,8 @@ function MidiPreviewCanvas({
     // resolved colour actually differs from the previous note's.
     ctx.fillStyle = color
     let currentFill = color
-    for (const n of notes) {
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i]
       const noteEnd = n.time + n.duration
       if (noteEnd < startTimeSec) continue
       if (n.time > endTimeSec) continue
@@ -241,7 +249,9 @@ function MidiPreviewCanvas({
       const yCenter =
         ((maxMidi - n.midi) / pitchSpan) * (height - rowHeight) + rowHeight / 2
       const y = yCenter - noteThickness / 2
-      const fill = resolveColor(n.track)
+      // Pin-resolved per-note tint when present; else the per-track
+      // (or global) colour as before.
+      const fill = noteColors ? noteColors[i] : resolveColor(n.track)
       if (fill !== currentFill) {
         ctx.fillStyle = fill
         currentFill = fill
@@ -253,7 +263,7 @@ function MidiPreviewCanvas({
       ctx.fillRect(x, y, w, noteThickness)
     }
     ctx.globalAlpha = 1
-  }, [notes, width, height, pxPerSec, startTimeSec, color, trackColors])
+  }, [notes, width, height, pxPerSec, startTimeSec, color, trackColors, noteColors])
 
   return (
     <canvas
@@ -1451,43 +1461,35 @@ export function Timeline() {
   const settingsKeyframes = useStore((s) => s.settings.settingsKeyframes)
   const editingKeyframeTime = useStore((s) => s.editingKeyframeTime)
 
-  // Colour the timeline MIDI clip with the *resolved* (pin-animated)
-  // colour at the playhead — the same colour the viewport draws —
-  // instead of reading the base settings directly. The pin-edit
-  // indirection mirrors animatable patches into the base settings, so
-  // a bare `s.settings.noteColor` read would leave the clip stuck on
-  // whatever colour the last pin edit wrote. `currentTime` (the
-  // display-time playhead hook) re-renders this as the head moves; the
-  // resolver itself reads the TL_audio playhead. With NO pins the
-  // resolver returns `base` by reference, so the clip shows the plain
-  // base colour exactly as before (zero behaviour change). The ref
-  // keeps the `trackColors` object identity stable while the colour is
-  // unchanged so `NotesCanvas` only repaints when the colour actually
-  // moves, not on every playhead tick.
-  const resolvedClipColorRef = useRef<{
-    key: string
-    noteColor: string
-    trackColors: Record<string, string>
-  }>({ key: '', noteColor: baseNoteColor, trackColors: baseTrackColors })
-  let noteColor = baseNoteColor
-  let trackColors = baseTrackColors
-  if (settingsKeyframes.length > 0) {
-    const r = resolveSettingsAt(
-      useStore.getState().settings,
-      settingsKeyframes,
-      audioEngine.currentSongTime(),
-    )
-    const key = r.noteColor + '|' + JSON.stringify(r.trackColors)
-    if (key !== resolvedClipColorRef.current.key) {
-      resolvedClipColorRef.current = {
-        key,
-        noteColor: r.noteColor,
-        trackColors: r.trackColors,
-      }
+  // Per-note tint for the timeline MIDI clip: each note is coloured by
+  // the pin-resolved tint at its OWN time, so the whole colour
+  // automation reads as a static gradient along the clip even while
+  // paused — not a single playhead colour. Memoised on the inputs that
+  // actually change it (notes / pins / base tint / speed map / MIDI
+  // offset) — NOT the playhead — so scrubbing/playing never recomputes
+  // it or repaints the canvas. `null` when there are no pins → the
+  // canvas falls back to the plain base colour exactly as before (zero
+  // behaviour change, zero cost). A note's TL_audio time (the pin axis)
+  // is `midiOffset + midiToTimeline(speedMap, n.time)` — the same
+  // MIDI-time → TL_audio mapping the pin strip uses, so a note sitting
+  // under a pin gets that pin's colour.
+  const midiNoteTints = useMemo<string[] | null>(() => {
+    if (!song || settingsKeyframes.length === 0) return null
+    const base = useStore.getState().settings
+    const out = new Array<string>(song.notes.length)
+    for (let i = 0; i < song.notes.length; i++) {
+      const n = song.notes[i]
+      const audioT = midiOffsetSec + midiToTimeline(speedMap, n.time)
+      const { noteColor: nc, trackColors: tc } = resolveNoteTintAt(
+        base,
+        settingsKeyframes,
+        audioT,
+      )
+      out[i] = tc[String(n.track)] ?? nc
     }
-    noteColor = resolvedClipColorRef.current.noteColor
-    trackColors = resolvedClipColorRef.current.trackColors
-  }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [song, settingsKeyframes, baseNoteColor, baseTrackColors, speedMap, midiOffsetSec])
   // Drop a pin at the live playhead (TL_audio = currentSongTime — the
   // same axis a pin's `time` lives on). addKeyframe captures the
   // resolved look there + selects the new pin (one undo entry).
@@ -2363,8 +2365,9 @@ export function Timeline() {
                   height={midiLaneH}
                   pxPerSec={pxPerSec}
                   startTimeSec={midiStartInSong}
-                  color={noteColor}
-                  trackColors={trackColors}
+                  color={baseNoteColor}
+                  trackColors={baseTrackColors}
+                  noteColors={midiNoteTints}
                 />
                 <TrimHandle
                   side="left"
