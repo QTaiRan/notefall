@@ -24,6 +24,7 @@ import {
   VolumeLowIcon,
   VolumeMuteIcon,
 } from './icons'
+import { SettingsPinLane, PIN_LANE_HEIGHT } from './SettingsPinLane'
 
 /**
  * Multi-row timeline that replaces the legacy single-slider seek bar.
@@ -1444,6 +1445,17 @@ export function Timeline() {
     (s) => s.settings.midiSpeedAutomationYCenterLog2,
   )
   const speedMap = useMemo(() => buildSpeedMap(speedPoints), [speedPoints])
+  // Timeline pins (settings keyframes). `time` is TL_audio; the pin
+  // strip converts to the editor's display-time x-axis itself.
+  const settingsKeyframes = useStore((s) => s.settings.settingsKeyframes)
+  const editingKeyframeTime = useStore((s) => s.editingKeyframeTime)
+  // Drop a pin at the live playhead (TL_audio = currentSongTime — the
+  // same axis a pin's `time` lives on). addKeyframe captures the
+  // resolved look there + selects the new pin (one undo entry).
+  const addPinAtPlayhead = () => {
+    if (!song) return
+    useStore.getState().addKeyframe(audioEngine.currentSongTime())
+  }
   // Visible window endpoints — collapse to the trimmed range so the
   // timeline reflects what will actually play / be exported. The
   // x-axis stays in NATURAL-MIDI-time (no speed-curve stretching);
@@ -1602,6 +1614,42 @@ export function Timeline() {
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // ── Pin shortcuts ──
+  // `P` drops a pin at the playhead; Delete/Backspace removes the
+  // currently-selected pin. Bubble phase + the same text-input guard
+  // useGlobalShortcuts uses, so typing in the search box / a slider
+  // never triggers it. Gated on a loaded song.
+  useEffect(() => {
+    const isEditable = (t: EventTarget | null): boolean => {
+      if (!(t instanceof HTMLElement)) return false
+      const tag = t.tagName
+      if (tag === 'TEXTAREA' || t.isContentEditable) return true
+      if (tag === 'INPUT') {
+        const type = (t as HTMLInputElement).type.toLowerCase()
+        return !['checkbox', 'radio', 'range', 'button', 'color'].includes(type)
+      }
+      return false
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (isEditable(e.target)) return
+      const s = useStore.getState()
+      if (!s.song) return
+      if (e.code === 'KeyP' && !e.repeat && !e.shiftKey) {
+        e.preventDefault()
+        s.addKeyframe(audioEngine.currentSongTime())
+      } else if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        s.editingKeyframeTime !== null
+      ) {
+        e.preventDefault()
+        s.removeKeyframe(s.editingKeyframeTime)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   // ── Seek interactions ──
@@ -2035,10 +2083,14 @@ export function Timeline() {
   // only appears when there's a MIDI to automate. Sits inside the
   // playhead-spanning section so the playhead line covers it too.
   const showSpeedLane = !!song
+  // Pin strip — fixed thin height, sits directly under the ruler so
+  // it reads as part of the time scale. Only meaningful with a song.
+  const showPinLane = !!song
   const totalRowHeight =
     MINIMAP_HEIGHT +
     ROW_GAP +
     RULER_HEIGHT +
+    (showPinLane ? ROW_GAP + PIN_LANE_HEIGHT : 0) +
     ROW_GAP +
     midiLaneH +
     (showSpeedLane ? ROW_GAP + speedLaneH : 0) +
@@ -2071,6 +2123,29 @@ export function Timeline() {
         style={{ width: HEADER_WIDTH }}
       >
         <div style={{ height: RULER_HEIGHT }} />
+        {showPinLane && (
+          <>
+            <div style={{ height: ROW_GAP }} />
+            <div
+              className="flex items-center justify-between gap-1 rounded bg-neutral-900/40 px-2"
+              style={{ height: PIN_LANE_HEIGHT }}
+            >
+              <span className="font-mono text-[9px] text-neutral-400">
+                Pins
+              </span>
+              <button
+                type="button"
+                onClick={addPinAtPlayhead}
+                disabled={!song}
+                aria-label="Add pin at playhead"
+                title="Add a pin at the playhead (P)"
+                className="flex h-3.5 w-3.5 items-center justify-center rounded bg-amber-500/20 text-[11px] leading-none text-amber-200 outline-none hover:bg-amber-500/35 hover:text-amber-100 disabled:opacity-40"
+              >
+                +
+              </button>
+            </div>
+          </>
+        )}
         <div style={{ height: ROW_GAP }} />
         <LaneHeader
           title="MIDI"
@@ -2194,6 +2269,25 @@ export function Timeline() {
               </button>
             )}
           </div>
+
+          {/* Pin strip — settings-snapshot markers. Sits directly
+              under the ruler so it reads as part of the time scale;
+              inside the playhead-spanning section so the playhead
+              line crosses it too. Pin time is TL_audio; the strip
+              maps to the editor's display-time x-axis internally. */}
+          {showPinLane && (
+            <SettingsPinLane
+              keyframes={settingsKeyframes}
+              editingTime={editingKeyframeTime}
+              speedMap={speedMap}
+              laneHeight={PIN_LANE_HEIGHT}
+              pxPerSec={pxPerSec}
+              clampedScroll={clampedScroll}
+              viewDuration={viewDuration}
+              midiOffsetSec={midiOffsetSec}
+              totalDuration={totalDuration}
+            />
+          )}
 
           {/* MIDI lane — piano-roll preview as a draggable clip,
               mirroring the audio lane's interaction model. Click-to-
