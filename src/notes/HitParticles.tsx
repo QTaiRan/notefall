@@ -35,6 +35,7 @@ const HIT_PARTICLES_KEYS = [
 ] as const
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
+import { getResolvedSettings } from '../scene/automatedSettings'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH, WHITE_KEY_WIDTH } from '../keyboard/layout'
 import { sampleCurl, dirFromXY } from './curlNoise'
 import { noteDeathFx } from './noteDeathFx'
@@ -323,9 +324,11 @@ export function HitParticles() {
   }, [])
   useEffect(() => () => material.dispose(), [material])
 
-  useEffect(() => { material.uniforms.uSize.value = settings.particleSize }, [material, settings.particleSize])
-  useEffect(() => { material.uniforms.uOpacity.value = settings.particleOpacity }, [material, settings.particleOpacity])
-  useEffect(() => { material.uniforms.uBrightness.value = settings.particleBrightness }, [material, settings.particleBrightness])
+  // particleSize / particleOpacity / particleBrightness are animatable
+  // and get pushed into the uniforms every frame from the pin-resolved
+  // settings inside useFrame (so they follow pins + animate under the
+  // export's advance() loop). With zero pins these equal the live
+  // settings, so the value written is identical to the old effects'.
 
   const mesh = useMemo(() => {
     const m = new THREE.Mesh(geometry, material)
@@ -443,24 +446,36 @@ export function HitParticles() {
     const dt = Math.min(0.05, nowSec - lastFrame.current)
     lastFrame.current = nowSec
 
+    // Pin-resolved settings for every animatable particle parameter.
+    // `particlesEnabled` / `turbulenceOctaves` are non-animatable so
+    // they keep reading the React `settings` slice. Zero pins ⇒ `rs`
+    // is the live settings object by reference, so every read below is
+    // bit-identical to the pre-pin code.
+    const rs = getResolvedSettings()
+
+    // Push the pin-resolved global uniforms (formerly per-field
+    // useEffects). Idempotent with zero pins.
+    material.uniforms.uSize.value = rs.particleSize
+    material.uniforms.uOpacity.value = rs.particleOpacity
+    material.uniforms.uBrightness.value = rs.particleBrightness
     material.uniforms.uTime.value = nowSec
-    material.uniforms.uHitY.value = settings.keyboardY + WHITE_KEY_LENGTH
+    material.uniforms.uHitY.value = rs.keyboardY + WHITE_KEY_LENGTH
 
     if (!settings.particlesEnabled) return
 
-    const hitY = settings.keyboardY + WHITE_KEY_LENGTH
+    const hitY = rs.keyboardY + WHITE_KEY_LENGTH
     // Minimum emission duration in seconds, derived from the falling-note
     // `noteMinLength` (world units) using the same fall-distance ↔ time
     // conversion FallingNotes uses. Recomputed per frame so changes to
     // camera / keyboard / fall duration take effect immediately, including
     // for notes already in their min-emit window.
-    const camDistance = Math.abs(settings.cameraPos[2])
-    const halfVisHeight = camDistance * Math.tan((settings.cameraFov * Math.PI) / 360)
-    const visibleTop = settings.cameraLookAt[1] + halfVisHeight
+    const camDistance = Math.abs(rs.cameraPos[2])
+    const halfVisHeight = camDistance * Math.tan((rs.cameraFov * Math.PI) / 360)
+    const visibleTop = rs.cameraLookAt[1] + halfVisHeight
     const fallDistance = Math.max(0.5, visibleTop - hitY) + 1.0  // SPAWN_BUFFER = 1.0
-    const minEmitDurationSec = Math.max(0, settings.noteMinLength) / fallDistance * settings.fallDurationSec
+    const minEmitDurationSec = Math.max(0, rs.noteMinLength) / fallDistance * rs.fallDurationSec
 
-    colorVec.set(settings.particleColor)
+    colorVec.set(rs.particleColor)
     const cr = colorVec.r
     const cg = colorVec.g
     const cb = colorVec.b
@@ -468,7 +483,7 @@ export function HitParticles() {
     // override resolves to the global particleColor (cr/cg/cb), so
     // particles for live input / un-tracked notes look unchanged from
     // before this feature.
-    const trackColors = settings.trackColors
+    const trackColors = rs.trackColors
     const trackColorCache = new Map<number, readonly [number, number, number]>()
     const resolveTrackRGB = (
       trackIdx: number,
@@ -487,27 +502,27 @@ export function HitParticles() {
       trackColorCache.set(trackIdx, v)
       return v
     }
-    const userSpeed = settings.particleSpeed
-    const userLifetime = settings.particleLifetime
-    const userCount = settings.particleCount
-    const turbStrength = settings.particleTurbulence
-    const turbFreq = settings.turbulenceFrequency
-    const flowSpeed = settings.flowSpeed
+    const userSpeed = rs.particleSpeed
+    const userLifetime = rs.particleLifetime
+    const userCount = rs.particleCount
+    const turbStrength = rs.particleTurbulence
+    const turbFreq = rs.turbulenceFrequency
+    const flowSpeed = rs.flowSpeed
     // Per-axis turbulence scales — applied both as inverse feature-size
     // inside the domain transform (`/ turbX` etc.) AND as component-wise
     // amplitude on the curl output. Floor at small ε so divide-by-zero
     // doesn't blow up when the user dials an axis to 0.
-    const tx = Math.max(settings.turbulenceX, 1e-6)
-    const ty = Math.max(settings.turbulenceY, 1e-6)
-    const tz = Math.max(settings.turbulenceZ, 1e-6)
-    const locality = settings.noiseLocality
+    const tx = Math.max(rs.turbulenceX, 1e-6)
+    const ty = Math.max(rs.turbulenceY, 1e-6)
+    const tz = Math.max(rs.turbulenceZ, 1e-6)
+    const locality = rs.noiseLocality
     const oneMinusLocality = 1 - locality
     const octaves = Math.max(1, Math.floor(settings.turbulenceOctaves))
-    const octScale = settings.octaveScale
-    const octMul = settings.octaveMultiplier
-    const drag = settings.drag
-    const swirl = settings.swirl
-    const kick = settings.kick
+    const octScale = rs.octaveScale
+    const octMul = rs.octaveMultiplier
+    const drag = rs.drag
+    const swirl = rs.swirl
+    const kick = rs.kick
     // dt × 60 — turns per-60Hz-frame coefficients (friction, angle bend)
     // into framerate-independent rates. = 1.0 at 60fps; 2.0 at 30fps.
     const dtFactor = dt * 60.0

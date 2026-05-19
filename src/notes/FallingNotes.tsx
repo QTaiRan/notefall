@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { useStore, useSettingsSlice, defaultSettings } from '../store'
 import { computeLiveVisibleTop } from '../scene/visibleTop'
+import { getResolvedSettings } from '../scene/automatedSettings'
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
 import { KEYBOARD_LAYOUT, MIDI_MIN, KEY_COUNT, noteHitYWorld } from '../keyboard/layout'
@@ -592,41 +593,17 @@ export function FallingNotes() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Only the non-animatable texture-mode selector is synced here.
+  // Every animatable note uniform (emissive / opacity / radius /
+  // texture scale-offset-blur-variation-contrast / edge colour-width-
+  // intensity) is pushed per-frame from the pin-resolved settings
+  // inside useFrame, so they follow timeline pins and animate under
+  // the export advance() loop. With zero pins the resolved values
+  // equal the live settings, so the written uniforms are identical to
+  // what this effect used to write.
   useEffect(() => {
-    material.uniforms.uEmissive.value = settings.noteEmissive
-    material.uniforms.uOpacity.value = settings.noteOpacity
-    material.uniforms.uRadius.value = settings.noteCornerRadius
     material.uniforms.uTextureMode.value = TEXTURE_MODE[settings.noteTexture] ?? TEXTURE_SOLID
-    material.uniforms.uTextureScale.value = settings.noteTextureScale
-    material.uniforms.uAnimSpeed.value.set(settings.noteAnimSpeedX, settings.noteAnimSpeedY)
-    material.uniforms.uTextureOffset.value.set(settings.noteTextureOffsetX, settings.noteTextureOffsetY)
-    material.uniforms.uTextureBlur.value = settings.noteTextureBlur
-    material.uniforms.uTextureVariation.value = settings.noteTextureVariation
-    material.uniforms.uTextureContrast.value = settings.noteTextureContrast
-    material.uniforms.uEdgeColor.value.set(settings.noteEdgeColor)
-    // Edge is gated by zeroing width/intensity instead of unmounting; this
-    // keeps the user's slider values intact for a clean re-enable.
-    material.uniforms.uEdgeWidth.value = settings.edgeEnabled ? settings.noteEdgeWidth : 0
-    material.uniforms.uEdgeIntensity.value = settings.edgeEnabled ? settings.noteEdgeIntensity : 0
-  }, [
-    material,
-    settings.noteEmissive,
-    settings.noteOpacity,
-    settings.noteCornerRadius,
-    settings.noteTexture,
-    settings.noteTextureScale,
-    settings.noteAnimSpeedX,
-    settings.noteAnimSpeedY,
-    settings.noteTextureOffsetX,
-    settings.noteTextureOffsetY,
-    settings.noteTextureBlur,
-    settings.noteTextureVariation,
-    settings.noteTextureContrast,
-    settings.edgeEnabled,
-    settings.noteEdgeColor,
-    settings.noteEdgeWidth,
-    settings.noteEdgeIntensity,
-  ])
+  }, [material, settings.noteTexture])
 
   useEffect(() => {
     const mesh = meshRef.current
@@ -679,12 +656,18 @@ export function FallingNotes() {
     // visual moves. Without automation the map collapses to identity
     // and this reduces to the legacy `n.time` vs `currentSongTime`.
     const tl = audioEngine.currentSongTime()
+    // Pin-resolved settings for every animatable note parameter.
+    // Non-animatable keys (midiOffsetSec / fallDirection / transpose /
+    // noteTexture / edgeEnabled / trim + speed automation) keep reading
+    // the React `settings` slice. Zero pins ⇒ `rs` is the live settings
+    // object by reference, so all reads are bit-identical to pre-pin.
+    const rs = getResolvedSettings()
     const midiOffset = settings.midiOffsetSec
-    const hitY = noteHitYWorld(settings.keyboardY)
+    const hitY = noteHitYWorld(rs.keyboardY)
     const isDown = settings.fallDirection === 'down'
-    const fall = settings.fallDurationSec
-    const widthScale = settings.noteWidthScale
-    const minLength = Math.max(0.01, settings.noteMinLength)
+    const fall = rs.fallDurationSec
+    const widthScale = rs.noteWidthScale
+    const minLength = Math.max(0.01, rs.noteMinLength)
     // Sit in front of the 3D black keys (top face at z=BLACK_KEY_THICKNESS
     // = 0.09) so notes don't appear stuck inside them at the moment they
     // cross the hit line. Hit-line clipping happens per-pixel in the
@@ -702,6 +685,22 @@ export function FallingNotes() {
     // Wall clock — used by texture presets (e.g. liquid flow). Pause-friendly
     // (keeps animating) since the texture should breathe even when stopped.
     material.uniforms.uTime.value = now()
+    // Pin-resolved animatable note uniforms (formerly a settings-deps
+    // useEffect). Edge gating still keys off the non-animatable
+    // `edgeEnabled` toggle but the width/intensity it gates are
+    // animatable. Idempotent with zero pins.
+    material.uniforms.uEmissive.value = rs.noteEmissive
+    material.uniforms.uOpacity.value = rs.noteOpacity
+    material.uniforms.uRadius.value = rs.noteCornerRadius
+    material.uniforms.uTextureScale.value = rs.noteTextureScale
+    material.uniforms.uAnimSpeed.value.set(rs.noteAnimSpeedX, rs.noteAnimSpeedY)
+    material.uniforms.uTextureOffset.value.set(rs.noteTextureOffsetX, rs.noteTextureOffsetY)
+    material.uniforms.uTextureBlur.value = rs.noteTextureBlur
+    material.uniforms.uTextureVariation.value = rs.noteTextureVariation
+    material.uniforms.uTextureContrast.value = rs.noteTextureContrast
+    material.uniforms.uEdgeColor.value.set(rs.noteEdgeColor)
+    material.uniforms.uEdgeWidth.value = settings.edgeEnabled ? rs.noteEdgeWidth : 0
+    material.uniforms.uEdgeIntensity.value = settings.edgeEnabled ? rs.noteEdgeIntensity : 0
 
     // FALL_DISTANCE is locked to the *default* camera framing
     // (FALL_REFERENCE_DISTANCE) — re-deriving it from the live camera
@@ -715,9 +714,9 @@ export function FallingNotes() {
     // up unboundedly. Floored to the reference trajectory cap so
     // zoom-in / look-down can't shrink it and cull notes mid-travel.
     const liveVisibleTop = computeLiveVisibleTop(
-      settings.cameraPos,
-      settings.cameraLookAt,
-      settings.cameraFov,
+      rs.cameraPos,
+      rs.cameraLookAt,
+      rs.cameraFov,
       noteZ,
       hitY,
     )
@@ -747,8 +746,8 @@ export function FallingNotes() {
     // frame so changes to `noteColor` / `trackColors` apply immediately.
     // For a song with N tracks (typically <5), this saves the per-note
     // hex parse cost.
-    const trackColors = settings.trackColors
-    const defaultTintColor = tmpColor.set(settings.noteColor)
+    const trackColors = rs.trackColors
+    const defaultTintColor = tmpColor.set(rs.noteColor)
     const defaultR = defaultTintColor.r
     const defaultG = defaultTintColor.g
     const defaultB = defaultTintColor.b

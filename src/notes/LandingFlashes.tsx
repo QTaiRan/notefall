@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
-import { useStore, useSettingsSlice } from '../store'
+import { useSettingsSlice } from '../store'
 
 const LANDING_FLASHES_KEYS = [
   'flashBrightness',
@@ -17,6 +17,7 @@ const LANDING_FLASHES_KEYS = [
 ] as const
 import { audioEngine } from '../audio/engine'
 import { now } from '../audio/clock'
+import { getResolvedSettings } from '../scene/automatedSettings'
 import { KEYBOARD_LAYOUT, KEY_COUNT, MIDI_MIN, WHITE_KEY_LENGTH } from '../keyboard/layout'
 
 const VERTEX_SHADER = /* glsl */ `
@@ -134,13 +135,10 @@ export function LandingFlashes() {
   }, [])
   useEffect(() => () => material.dispose(), [material])
 
-  useEffect(() => {
-    material.uniforms.uHaloWidth.value = settings.flashHaloWidth
-  }, [material, settings.flashHaloWidth])
-
-  useEffect(() => {
-    material.uniforms.uBrightness.value = settings.flashBrightness
-  }, [material, settings.flashBrightness])
+  // uHaloWidth / uBrightness are animatable — pushed per-frame from the
+  // pin-resolved settings inside useFrame instead of via these effects,
+  // so they follow pins + animate under the export advance() loop.
+  // Zero pins ⇒ identical written values.
 
   // Press / release tracking. The flash snaps to its sustain level on
   // note-on (no fade-in) and snaps back to 0 once the key is released
@@ -151,7 +149,9 @@ export function LandingFlashes() {
       if (idx < 0 || idx >= KEY_COUNT) return
       if (ev.type === 'on') {
         heldCount[idx]++
-        const base = useStore.getState().settings.flashIntensity
+        // Pin-resolved flashIntensity at the instant of note-on so the
+        // sustain level tracks any active automation.
+        const base = getResolvedSettings().flashIntensity
         const sustain = base * (0.7 + ev.velocity * 0.3)
         if (sustainLevels[idx] < sustain) sustainLevels[idx] = sustain
         // Instant on — no rise time. Also extend the minimum-visible window.
@@ -167,32 +167,27 @@ export function LandingFlashes() {
     return off
   }, [heldCount, sustainLevels, heldUntil, lastTrack, intensities, intensityAttr])
 
-  // Refresh per-instance transforms when size / width settings change.
-  // `flashSize` is the uniform scale; `flashWidth` is an extra horizontal
-  // multiplier so the user can stretch the flash sideways without changing
-  // the height.
+  // Attribute wiring only. The per-instance transforms used to be
+  // rebuilt here on flashSize / flashWidth change, but those are
+  // animatable — the rebuild now runs inside useFrame (guarded so it
+  // only fires when the resolved size/width actually changes) so pins
+  // animate and the export advance() loop picks the values up.
   useEffect(() => {
     const mesh = meshRef.current
     if (!mesh) return
     mesh.geometry.setAttribute('instanceIntensity', intensityAttr)
     mesh.geometry.setAttribute('instanceTint', tintAttr)
-    for (let i = 0; i < KEY_COUNT; i++) {
-      const k = KEYBOARD_LAYOUT.keys[i]
-      const baseScale = k.width * BASE_PLANE_SCALE * settings.flashSize
-      const planeWidth = baseScale * settings.flashWidth
-      const planeHeight = baseScale
-      dummy.position.set(k.x, WHITE_KEY_LENGTH, 0.105)
-      dummy.scale.set(planeWidth, planeHeight, 1)
-      dummy.updateMatrix()
-      mesh.setMatrixAt(i, dummy.matrix)
-    }
-    mesh.instanceMatrix.needsUpdate = true
     mesh.count = KEY_COUNT
     return () => {
       mesh.geometry.deleteAttribute('instanceIntensity')
       mesh.geometry.deleteAttribute('instanceTint')
     }
-  }, [intensityAttr, tintAttr, dummy, settings.flashSize, settings.flashWidth])
+  }, [intensityAttr, tintAttr])
+  // Last applied size/width so the per-frame matrix rebuild is skipped
+  // when nothing changed (zero-pin steady state ⇒ rebuilt exactly once).
+  const lastFlashSize = useRef<number>(NaN)
+  const lastFlashWidth = useRef<number>(NaN)
+  const groupRef = useRef<THREE.Group>(null)
 
   // Scratch THREE.Color reused inside the per-frame tint resolver to
   // parse hex strings without allocating.
@@ -200,6 +195,41 @@ export function LandingFlashes() {
 
   useFrame(() => {
     const nowSec = now()
+    const rs = getResolvedSettings()
+
+    // Pin-resolved global uniforms (formerly per-field useEffects).
+    material.uniforms.uHaloWidth.value = rs.flashHaloWidth
+    material.uniforms.uBrightness.value = rs.flashBrightness
+
+    // Pin-resolved group placement (keyboardY is non-animatable but the
+    // resolver passes it straight through, so this is correct with or
+    // without pins; zero pins ⇒ same Y the JSX prop sets).
+    if (groupRef.current) groupRef.current.position.y = rs.keyboardY
+
+    // Rebuild the per-instance scale matrices only when the resolved
+    // flashSize / flashWidth changed. With zero pins these are constant,
+    // so this runs exactly once (parity with the old mount-time effect).
+    const mesh = meshRef.current
+    if (
+      mesh &&
+      (rs.flashSize !== lastFlashSize.current ||
+        rs.flashWidth !== lastFlashWidth.current)
+    ) {
+      lastFlashSize.current = rs.flashSize
+      lastFlashWidth.current = rs.flashWidth
+      for (let i = 0; i < KEY_COUNT; i++) {
+        const k = KEYBOARD_LAYOUT.keys[i]
+        const baseScale = k.width * BASE_PLANE_SCALE * rs.flashSize
+        const planeWidth = baseScale * rs.flashWidth
+        const planeHeight = baseScale
+        dummy.position.set(k.x, WHITE_KEY_LENGTH, 0.105)
+        dummy.scale.set(planeWidth, planeHeight, 1)
+        dummy.updateMatrix()
+        mesh.setMatrixAt(i, dummy.matrix)
+      }
+      mesh.instanceMatrix.needsUpdate = true
+    }
+
     let dirty = false
     for (let i = 0; i < KEY_COUNT; i++) {
       if (intensities[i] === 0) continue
@@ -215,14 +245,15 @@ export function LandingFlashes() {
 
     // Per-track RGB cache for this frame. Only keys with intensity > 0
     // get a fresh tint write — saves cost when the keyboard is idle.
+    // Colours are pin-resolved; flashFollowNote is non-animatable.
     const fallbackHex = settings.flashFollowNote
-      ? settings.noteColor
-      : settings.flashColor
+      ? rs.noteColor
+      : rs.flashColor
     tmpColor.set(fallbackHex)
     const defaultR = tmpColor.r
     const defaultG = tmpColor.g
     const defaultB = tmpColor.b
-    const trackColors = settings.trackColors
+    const trackColors = rs.trackColors
     const trackRgbCache = new Map<number, readonly [number, number, number]>()
     const resolveTint = (
       trackIdx: number,
@@ -258,7 +289,7 @@ export function LandingFlashes() {
   })
 
   return (
-    <group position={[0, settings.keyboardY, 0]}>
+    <group ref={groupRef} position={[0, settings.keyboardY, 0]}>
       <instancedMesh
         ref={meshRef}
         args={[undefined, undefined, KEY_COUNT]}
