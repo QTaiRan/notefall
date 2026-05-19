@@ -25,6 +25,7 @@ import {
   VolumeMuteIcon,
 } from './icons'
 import { SettingsPinLane, PIN_LANE_HEIGHT } from './SettingsPinLane'
+import { resolveSettingsAt } from '../midi/settingsKeyframes'
 
 /**
  * Multi-row timeline that replaces the legacy single-slider seek bar.
@@ -1358,8 +1359,8 @@ export function Timeline() {
 
   const song = useStore((s) => s.song)
   const transport = useStore((s) => s.transport)
-  const noteColor = useStore((s) => s.settings.noteColor)
-  const trackColors = useStore((s) => s.settings.trackColors)
+  const baseNoteColor = useStore((s) => s.settings.noteColor)
+  const baseTrackColors = useStore((s) => s.settings.trackColors)
   const peaks = useUserAudio((s) => s.peaks)
   const audioFileName = useUserAudio((s) => s.fileName)
   const audioLoading = useUserAudio((s) => s.loading)
@@ -1449,6 +1450,44 @@ export function Timeline() {
   // strip converts to the editor's display-time x-axis itself.
   const settingsKeyframes = useStore((s) => s.settings.settingsKeyframes)
   const editingKeyframeTime = useStore((s) => s.editingKeyframeTime)
+
+  // Colour the timeline MIDI clip with the *resolved* (pin-animated)
+  // colour at the playhead — the same colour the viewport draws —
+  // instead of reading the base settings directly. The pin-edit
+  // indirection mirrors animatable patches into the base settings, so
+  // a bare `s.settings.noteColor` read would leave the clip stuck on
+  // whatever colour the last pin edit wrote. `currentTime` (the
+  // display-time playhead hook) re-renders this as the head moves; the
+  // resolver itself reads the TL_audio playhead. With NO pins the
+  // resolver returns `base` by reference, so the clip shows the plain
+  // base colour exactly as before (zero behaviour change). The ref
+  // keeps the `trackColors` object identity stable while the colour is
+  // unchanged so `NotesCanvas` only repaints when the colour actually
+  // moves, not on every playhead tick.
+  const resolvedClipColorRef = useRef<{
+    key: string
+    noteColor: string
+    trackColors: Record<string, string>
+  }>({ key: '', noteColor: baseNoteColor, trackColors: baseTrackColors })
+  let noteColor = baseNoteColor
+  let trackColors = baseTrackColors
+  if (settingsKeyframes.length > 0) {
+    const r = resolveSettingsAt(
+      useStore.getState().settings,
+      settingsKeyframes,
+      audioEngine.currentSongTime(),
+    )
+    const key = r.noteColor + '|' + JSON.stringify(r.trackColors)
+    if (key !== resolvedClipColorRef.current.key) {
+      resolvedClipColorRef.current = {
+        key,
+        noteColor: r.noteColor,
+        trackColors: r.trackColors,
+      }
+    }
+    noteColor = resolvedClipColorRef.current.noteColor
+    trackColors = resolvedClipColorRef.current.trackColors
+  }
   // Drop a pin at the live playhead (TL_audio = currentSongTime — the
   // same axis a pin's `time` lives on). addKeyframe captures the
   // resolved look there + selects the new pin (one undo entry).
