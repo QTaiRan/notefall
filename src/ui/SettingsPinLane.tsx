@@ -177,13 +177,38 @@ export function SettingsPinLane({
       useStore.getState().removeKeyframe(time)
     }
 
+  // Left-click on empty lane space → add a pin at the clicked time.
+  // The diamond markers stopPropagation their own pointerdown, so this
+  // only fires for clicks that miss every marker — no double-create and
+  // no interference with select / drag. `addKeyframe` captures the
+  // resolved look at that time and selects the new pin (one undo
+  // entry); seeking makes the viewport / Inspector jump to it, matching
+  // the click-a-pin behaviour.
+  const onLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || dragRef.current) return
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const rect = wrap.getBoundingClientRect()
+    const localX = e.clientX - rect.left
+    const displayT = Math.max(0, clampedScroll + localX / pxPerSec)
+    const cappedDisplay =
+      totalDuration > 0 ? Math.min(totalDuration, displayT) : displayT
+    const audioT = Math.max(
+      0,
+      displayToAudio(cappedDisplay, speedMap, midiOffsetSec),
+    )
+    useStore.getState().addKeyframe(audioT)
+    seekAudio(audioT)
+  }
+
   return (
     <div
       ref={wrapRef}
+      onPointerDown={onLanePointerDown}
       style={{ height: laneHeight, touchAction: 'none' }}
-      className="relative overflow-hidden rounded bg-neutral-900/40"
+      className="relative cursor-copy overflow-hidden rounded bg-neutral-900/40"
       aria-label="Settings pins"
-      title="Pins capture the visual settings at a point in time — the scene morphs between consecutive pins. Click to select + seek · drag to move · right-click to delete."
+      title="Pins capture the visual settings at a point in time — the scene morphs between consecutive pins. Click empty space to add a pin · click a pin to select + seek · drag to move · right-click to delete."
     >
       {keyframes.map((kf, i) => {
         const displayT = audioToDisplay(kf.time, speedMap, midiOffsetSec)
