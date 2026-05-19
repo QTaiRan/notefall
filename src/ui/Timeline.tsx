@@ -2183,7 +2183,7 @@ export function Timeline() {
                 disabled={!song}
                 aria-label="Add pin at playhead"
                 title="Add a pin at the playhead (P)"
-                className="flex h-3.5 w-3.5 items-center justify-center rounded bg-amber-500/20 text-[11px] leading-none text-amber-200 outline-none hover:bg-amber-500/35 hover:text-amber-100 disabled:opacity-40"
+                className="flex h-3.5 w-3.5 items-center justify-center rounded bg-sky-500/20 text-[11px] leading-none text-sky-200 outline-none hover:bg-sky-500/35 hover:text-sky-100 disabled:opacity-40"
               >
                 +
               </button>

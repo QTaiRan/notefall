@@ -376,13 +376,20 @@ function PinEditingBanner() {
     editingTime !== null
       ? keyframes.findIndex((p) => Math.abs(p.time - editingTime) < 1e-6)
       : -1
-  // Head before the first pin → editing the separate base default look.
+  // Understated status strip — same neutral divider as the rest of
+  // the Inspector chrome, faint sky wash, sky diamond echoing the pin
+  // marker, mono time echoing the timeline readouts.
   if (idx < 0) {
+    // Head before the first pin → editing the separate base default.
     return (
-      <div className="flex items-center gap-2 border-b border-sky-500/30 bg-sky-500/10 px-3 py-1.5">
-        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-sky-300" />
-        <span className="flex-1 truncate text-[11px] text-sky-200">
-          Editing default look (before the first pin)
+      <div className="flex items-center gap-2 border-b border-neutral-800 bg-sky-500/[0.04] px-3 py-1.5">
+        <span
+          aria-hidden
+          className="h-[7px] w-[7px] shrink-0 rotate-45 rounded-[1px] ring-1 ring-neutral-500"
+        />
+        <span className="flex-1 truncate text-[11px] text-neutral-400">
+          Editing <span className="text-neutral-300">default look</span> —
+          before the first pin
         </span>
       </div>
     )
@@ -392,13 +399,17 @@ function PinEditingBanner() {
   const r = s - m * 60
   const stamp = `${m}:${r.toFixed(2).padStart(5, '0')}`
   return (
-    <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5">
+    <div className="flex items-center gap-2 border-b border-neutral-800 bg-sky-500/[0.06] px-3 py-1.5">
       <span
         aria-hidden
-        className="h-2 w-2 shrink-0 rotate-45 rounded-[1px] bg-amber-300"
+        className="h-[7px] w-[7px] shrink-0 rotate-45 rounded-[1px] bg-sky-300"
       />
-      <span className="flex-1 truncate text-[11px] text-amber-200">
-        Editing pin {idx + 1}/{keyframes.length} @ {stamp}
+      <span className="flex-1 truncate text-[11px] text-neutral-300">
+        Editing pin{' '}
+        <span className="font-mono text-sky-300">
+          {idx + 1}/{keyframes.length}
+        </span>{' '}
+        <span className="font-mono text-[10px] text-neutral-500">{stamp}</span>
       </span>
     </div>
   )

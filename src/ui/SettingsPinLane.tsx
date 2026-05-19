@@ -317,13 +317,16 @@ export function SettingsPinLane({
             }
             style={{ left: x, width: 12, height: 12, touchAction: 'none' }}
           >
-            {/* Diamond marker — a rotated square. Selected pin glows
-                amber so it's distinct from the sky-toned speed lane. */}
+            {/* Diamond marker — a rotated square. Sky-toned to match
+                the rest of the timeline chrome; the DIAMOND shape (vs
+                the speed lane's round dots) is what distinguishes it.
+                The targeted pin brightens toward white, mirroring the
+                speed lane's selected-breakpoint treatment. */}
             <div
               className={
                 selected
-                  ? 'h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-amber-300 ring-2 ring-amber-300/40'
-                  : 'h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-amber-400/70 ring-1 ring-amber-300/20 hover:bg-amber-300'
+                  ? 'h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-white ring-2 ring-sky-300/40'
+                  : 'h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-sky-300/80 ring-1 ring-sky-300/20 hover:bg-white'
               }
               style={{ position: 'absolute', left: '50%', top: '50%' }}
             />
