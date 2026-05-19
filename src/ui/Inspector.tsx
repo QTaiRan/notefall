@@ -361,6 +361,37 @@ function PreDelayRow() {
   )
 }
 
+// Banner shown while a timeline pin is selected — every Inspector
+// control then edits THAT pin's snapshot (the store stamps animatable
+// patches into the pin transparently). Makes the "you're editing a
+// pin, not the base look" mode explicit + offers a one-click exit.
+function PinEditingBanner() {
+  const editingTime = useStore((st) => st.editingKeyframeTime)
+  if (editingTime === null) return null
+  const s = Math.max(0, editingTime)
+  const m = Math.floor(s / 60)
+  const r = s - m * 60
+  const stamp = `${m}:${r.toFixed(2).padStart(5, '0')}`
+  return (
+    <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5">
+      <span
+        aria-hidden
+        className="h-2 w-2 shrink-0 rotate-45 rounded-[1px] bg-amber-300"
+      />
+      <span className="flex-1 truncate text-[11px] text-amber-200">
+        ピン編集中 @ {stamp}
+      </span>
+      <button
+        type="button"
+        onClick={() => useStore.getState().selectKeyframe(null)}
+        className="shrink-0 rounded bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-100 outline-none hover:bg-amber-500/35"
+      >
+        解除
+      </button>
+    </div>
+  )
+}
+
 export function Inspector() {
   const reset = useStore((st) => st.resetSettings)
   const [query, setQuery] = useState('')
@@ -421,6 +452,7 @@ export function Inspector() {
           </Tooltip>
         </TooltipTrigger>
       </div>
+      <PinEditingBanner />
       <SearchProvider query={query}>
       <div className="scroll-thin flex-1 overflow-y-auto px-3 pb-6">
         <Section title="Camera">
