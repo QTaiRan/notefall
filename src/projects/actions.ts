@@ -1,3 +1,4 @@
+import i18n from '../i18n'
 import { audioEngine } from '../audio/engine'
 import { parseMidi } from '../midi/parse'
 import { serializeMidi } from '../midi/serialize'
@@ -54,7 +55,7 @@ export type ActionResult =
 
 function describeError(e: unknown): string {
   if (e instanceof Error) return e.message
-  return 'Something went wrong'
+  return i18n.t('dialogs:actions.somethingWentWrong')
 }
 
 function suggestedFilename(): string {
@@ -115,10 +116,10 @@ function buildProjectFromState(name: string): Project {
 async function confirmDiscardIfDirty(messagePrefix: string, confirmLabel: string): Promise<boolean> {
   if (!useStore.getState().dirty) return true
   return showConfirm({
-    title: 'Discard unsaved changes?',
-    message: `${messagePrefix} Unsaved edits will be lost.`,
+    title: i18n.t('dialogs:actions.discardTitle'),
+    message: i18n.t('dialogs:actions.discardMessage', { prefix: messagePrefix }),
     confirmLabel,
-    cancelLabel: 'Cancel',
+    cancelLabel: i18n.t('dialogs:actions.cancel'),
     destructive: true,
   })
 }
@@ -148,8 +149,11 @@ async function applyOpenedMidi(
     track('error_surfaced', { context: 'midi_parse' })
     return {
       kind: 'error',
-      title: 'Could not load MIDI',
-      message: `"${name}" could not be parsed.\n\n${describeError(e)}`,
+      title: i18n.t('dialogs:actions.couldNotLoadMidiTitle'),
+      message: i18n.t('dialogs:actions.couldNotLoadMidiMessage', {
+        name,
+        detail: describeError(e),
+      }),
     }
   }
   // Seed projectName from the MIDI filename (minus extension) so a
@@ -193,7 +197,10 @@ async function applyOpenedProject(
       song = await parseMidi(project.songMidi, project.name)
     } catch (e) {
       track('error_surfaced', { context: 'midi_parse' })
-      return { kind: 'error', message: `MIDI parse failed: ${describeError(e)}` }
+      return {
+        kind: 'error',
+        message: i18n.t('dialogs:actions.midiParseFailed', { detail: describeError(e) }),
+      }
     }
   }
 
@@ -248,8 +255,8 @@ async function applyOpenedProject(
  */
 export async function openProject(): Promise<ActionResult> {
   const proceed = await confirmDiscardIfDirty(
-    'Opening a file will replace the current session.',
-    'Discard & Open',
+    i18n.t('dialogs:actions.openReplace'),
+    i18n.t('dialogs:actions.discardAndOpen'),
   )
   if (!proceed) return { kind: 'cancelled' }
 
@@ -277,8 +284,8 @@ export async function openProject(): Promise<ActionResult> {
  */
 export async function openProjectFromFile(file: File): Promise<ActionResult> {
   const proceed = await confirmDiscardIfDirty(
-    `Opening "${file.name}" will replace the current session.`,
-    'Discard & Open',
+    i18n.t('dialogs:actions.openReplaceNamed', { name: file.name }),
+    i18n.t('dialogs:actions.discardAndOpen'),
   )
   if (!proceed) return { kind: 'cancelled' }
 
@@ -296,7 +303,7 @@ export async function openProjectFromFile(file: File): Promise<ActionResult> {
   }
   return {
     kind: 'error',
-    message: `Unsupported file type: "${file.name}". Drop a .nfz or .mid/.midi file.`,
+    message: i18n.t('dialogs:actions.unsupportedFileType', { name: file.name }),
   }
 }
 
@@ -309,8 +316,8 @@ export async function openProjectFromFile(file: File): Promise<ActionResult> {
  */
 export async function openRecent(entry: RecentEntry): Promise<ActionResult> {
   const proceed = await confirmDiscardIfDirty(
-    `Opening "${entry.name}" will replace the current session.`,
-    'Discard & Open',
+    i18n.t('dialogs:actions.openReplaceNamed', { name: entry.name }),
+    i18n.t('dialogs:actions.discardAndOpen'),
   )
   if (!proceed) return { kind: 'cancelled' }
 
@@ -320,7 +327,7 @@ export async function openRecent(entry: RecentEntry): Promise<ActionResult> {
     track('error_surfaced', { context: 'project_open' })
     return {
       kind: 'error',
-      message: `Could not open "${entry.name}". The file may have been moved, deleted, or permission denied.`,
+      message: i18n.t('dialogs:actions.couldNotOpenNamed', { name: entry.name }),
     }
   }
 
@@ -338,8 +345,8 @@ export async function openRecent(entry: RecentEntry): Promise<ActionResult> {
  */
 export async function loadDemoProject(label: string, url: string): Promise<ActionResult> {
   const proceed = await confirmDiscardIfDirty(
-    `Loading the "${label}" demo will replace the current session.`,
-    'Discard & Load',
+    i18n.t('dialogs:actions.loadDemoReplace', { label }),
+    i18n.t('dialogs:actions.discardAndLoad'),
   )
   if (!proceed) return { kind: 'cancelled' }
 
@@ -350,7 +357,10 @@ export async function loadDemoProject(label: string, url: string): Promise<Actio
     buf = await res.arrayBuffer()
   } catch (e) {
     track('error_surfaced', { context: 'demo_load' })
-    return { kind: 'error', message: `Could not load demo: ${describeError(e)}` }
+    return {
+      kind: 'error',
+      message: i18n.t('dialogs:actions.couldNotLoadDemo', { detail: describeError(e) }),
+    }
   }
   track('demo_loaded', { demo_label: label })
   return applyOpenedProject(buf, null, 'demo')
@@ -416,10 +426,10 @@ export async function saveProjectAs(): Promise<ActionResult> {
 export async function newProject(): Promise<ActionResult> {
   if (useStore.getState().dirty) {
     const ok = await showConfirm({
-      title: 'Discard unsaved changes?',
-      message: 'Starting a new project will discard the current session. Unsaved edits will be lost.',
-      confirmLabel: 'Discard & New',
-      cancelLabel: 'Cancel',
+      title: i18n.t('dialogs:actions.newDiscardTitle'),
+      message: i18n.t('dialogs:actions.newDiscardMessage'),
+      confirmLabel: i18n.t('dialogs:actions.discardAndNew'),
+      cancelLabel: i18n.t('dialogs:actions.cancel'),
       destructive: true,
     })
     if (!ok) return { kind: 'cancelled' }
@@ -454,9 +464,8 @@ export async function importUserAudio(file: File): Promise<ActionResult> {
   if (!useStore.getState().song) {
     return {
       kind: 'error',
-      title: 'Load a MIDI file first',
-      message:
-        'Audio can only be loaded as accompaniment for a MIDI track. Open or record a MIDI file before importing audio.',
+      title: i18n.t('dialogs:actions.loadMidiFirstTitle'),
+      message: i18n.t('dialogs:actions.loadMidiFirstMessage'),
     }
   }
   try {
@@ -465,8 +474,11 @@ export async function importUserAudio(file: File): Promise<ActionResult> {
     track('error_surfaced', { context: 'import_audio' })
     return {
       kind: 'error',
-      title: 'Could not load audio',
-      message: `"${file.name}" could not be decoded.\n\n${describeError(e)}`,
+      title: i18n.t('dialogs:actions.couldNotLoadAudioTitle'),
+      message: i18n.t('dialogs:actions.couldNotLoadAudioMessage', {
+        name: file.name,
+        detail: describeError(e),
+      }),
     }
   }
   track('custom_audio_imported')

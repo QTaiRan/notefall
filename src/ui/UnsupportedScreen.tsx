@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 import { MonitorIcon } from './icons'
 
 /**
@@ -6,6 +8,7 @@ import { MonitorIcon } from './icons'
  * usable, so smaller devices see this page instead of a broken layout.
  */
 export function UnsupportedScreen() {
+  const { t } = useTranslation('screens')
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-neutral-950 px-6 text-center text-neutral-200">
       <span className="flex items-baseline gap-1.5">
@@ -15,10 +18,9 @@ export function UnsupportedScreen() {
 
       <MonitorIcon className="h-10 w-10 text-neutral-600" />
 
-      <h1 className="text-base font-medium">This device is not supported</h1>
+      <h1 className="text-base font-medium">{t('unsupported.title')}</h1>
       <p className="max-w-xs text-xs leading-relaxed text-neutral-400">
-        Please open notefall on a desktop or tablet in landscape orientation —
-        a wider screen is required.
+        {t('unsupported.body')}
       </p>
     </div>
   )

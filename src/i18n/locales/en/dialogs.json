@@ -1,0 +1,87 @@
+{
+  "confirm": {
+    "defaultConfirm": "OK",
+    "defaultCancel": "Cancel"
+  },
+  "alert": {
+    "acknowledge": "OK"
+  },
+  "export": {
+    "ariaLabel": "Export settings",
+    "title": "Export",
+    "unsupported": "Video export is unavailable in this browser. Audio export still works.",
+    "format": {
+      "label": "Format",
+      "videoAudio": "Video + audio (MP4)",
+      "videoOnly": "Video only (MP4, silent)",
+      "audioOnly": "Audio only (WAV)"
+    },
+    "resolution": "Resolution",
+    "fps": "Frame rate",
+    "fps30": "30 fps",
+    "fps60": "60 fps",
+    "quality": "Quality",
+    "bitrateNote": "Video bitrate {{mbps}} Mbps. High uses 1.5× the bitrate for cleaner edges and bloom; everything else is the same.",
+    "estimatedSize": "Estimated size",
+    "estimatedSizeValue": "~{{mb}} MB",
+    "playSoundOnComplete": "Play sound when done",
+    "test": "Test",
+    "cancel": "Cancel",
+    "submit": "Export"
+  },
+  "progress": {
+    "note": "This may take a moment. Don't close the tab.",
+    "cancel": "Cancel",
+    "eta": "{{eta}} remaining",
+    "etaSeconds": "{{count}} sec",
+    "etaMinutes": "{{min}} min {{sec}} sec"
+  },
+  "drop": {
+    "couldNotOpenProjectTitle": "Could not open project",
+    "couldNotOpenProjectMessage": "\"{{name}}\" could not be loaded.\n\n{{detail}}",
+    "couldNotLoadMidiTitle": "Could not load MIDI",
+    "couldNotLoadMidiMessage": "\"{{name}}\" could not be parsed.\n\n{{detail}}",
+    "couldNotLoadAudioTitle": "Could not load audio",
+    "unsupportedTitle": "Unsupported file type",
+    "unsupportedMessage": "\"{{name}}\" is not a supported format. Drop a .nfz project, .mid / .midi, or .mp3 / .wav audio file.",
+    "indicator": "Drop to load (.mid / .midi / .nfz / .mp3 / .wav)"
+  },
+  "noteMenu": {
+    "close": "Close",
+    "deleteOne": "Delete note",
+    "deleteMany": "Delete {{count}} notes",
+    "notesSelected": "{{count}} notes selected",
+    "velocity": "Velocity"
+  },
+  "fastForward": {
+    "rate": "2x"
+  },
+  "shortcut": {
+    "couldNotSaveTitle": "Could not save project",
+    "couldNotOpenFileTitle": "Could not open file"
+  },
+  "actions": {
+    "discardTitle": "Discard unsaved changes?",
+    "discardMessage": "{{prefix}} Unsaved edits will be lost.",
+    "cancel": "Cancel",
+    "discardAndOpen": "Discard & Open",
+    "discardAndLoad": "Discard & Load",
+    "discardAndNew": "Discard & New",
+    "openReplace": "Opening a file will replace the current session.",
+    "openReplaceNamed": "Opening \"{{name}}\" will replace the current session.",
+    "loadDemoReplace": "Loading the \"{{label}}\" demo will replace the current session.",
+    "newDiscardTitle": "Discard unsaved changes?",
+    "newDiscardMessage": "Starting a new project will discard the current session. Unsaved edits will be lost.",
+    "couldNotLoadMidiTitle": "Could not load MIDI",
+    "couldNotLoadMidiMessage": "\"{{name}}\" could not be parsed.\n\n{{detail}}",
+    "midiParseFailed": "MIDI parse failed: {{detail}}",
+    "couldNotOpenNamed": "Could not open \"{{name}}\". The file may have been moved, deleted, or permission denied.",
+    "couldNotLoadDemo": "Could not load demo: {{detail}}",
+    "unsupportedFileType": "Unsupported file type: \"{{name}}\". Drop a .nfz or .mid/.midi file.",
+    "loadMidiFirstTitle": "Load a MIDI file first",
+    "loadMidiFirstMessage": "Audio can only be loaded as accompaniment for a MIDI track. Open or record a MIDI file before importing audio.",
+    "couldNotLoadAudioTitle": "Could not load audio",
+    "couldNotLoadAudioMessage": "\"{{name}}\" could not be decoded.\n\n{{detail}}",
+    "somethingWentWrong": "Something went wrong"
+  }
+}

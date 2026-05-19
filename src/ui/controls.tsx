@@ -32,6 +32,7 @@ import {
   Dialog,
 } from 'react-aria-components'
 import type { Key } from 'react-aria-components'
+import { useTranslation } from 'react-i18next'
 import { defaultSettings, useStore, type Settings } from '../store'
 import { isAnimatableKey } from '../midi/settingsKeyframes'
 
@@ -157,6 +158,7 @@ function SliderContextMenu({
   onChange: (v: number) => void
   onClose: () => void
 }) {
+  const { t } = useTranslation('inspector')
   // Two-step UX: the menu first shows action items; clicking "Enter
   // Value…" swaps the body for the numeric input. Keeps the resting menu
   // visually clean while still surfacing the input affordance.
@@ -280,7 +282,7 @@ function SliderContextMenu({
                 className={itemClass}
               >
                 <span>
-                  Reset to default
+                  {t('reset.resetToDefault')}
                   {defaultLabel !== undefined && (
                     <span className="ml-1 text-[10px] tabular-nums text-neutral-500">
                       ({defaultLabel})
@@ -532,6 +534,7 @@ type SwitchRowProps = {
 }
 
 export function SwitchRow({ label, value, onChange, defaultValue }: SwitchRowProps) {
+  const { t } = useTranslation('inspector')
   const q = useSearchQuery()
   if (!rowMatchesQuery(label, q)) return null
   return (
@@ -555,7 +558,11 @@ export function SwitchRow({ label, value, onChange, defaultValue }: SwitchRowPro
               }
             : undefined
         }
-        title={defaultValue !== undefined ? 'Double-click to reset' : undefined}
+        title={
+          defaultValue !== undefined
+            ? t('reset.doubleClickReset')
+            : undefined
+        }
       >
         {label}
       </span>
@@ -599,6 +606,7 @@ export function ColorRow({
   onReset,
   isModified: isModifiedOverride,
 }: ColorRowProps) {
+  const { t } = useTranslation('inspector')
   const reset =
     onReset !== undefined
       ? () => commitAtomic(onReset)
@@ -623,7 +631,7 @@ export function ColorRow({
       <span
         className={`text-neutral-400 select-none ${reset ? 'cursor-pointer' : ''}`}
         onDoubleClick={reset}
-        title={reset ? 'Double-click to reset' : undefined}
+        title={reset ? t('reset.doubleClickReset') : undefined}
       >
         {label}
       </span>
@@ -632,8 +640,8 @@ export function ColorRow({
           <button
             type="button"
             onClick={reset}
-            aria-label={`Reset ${label} to default`}
-            title="Reset to default"
+            aria-label={t('reset.resetRowToDefault', { label })}
+            title={t('reset.resetToDefault')}
             className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 outline-none hover:bg-neutral-800 hover:text-neutral-200 focus-visible:ring-1 focus-visible:ring-sky-400"
           >
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -669,7 +677,7 @@ export function ColorRow({
           }}
         >
           <Button
-            aria-label={`Edit ${label} color`}
+            aria-label={t('color.editAria', { label })}
             className="flex items-center gap-2 rounded border border-neutral-700 bg-neutral-900 px-1.5 py-1 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
           >
             <ColorSwatch className="h-4 w-4 rounded ring-1 ring-neutral-700" />
@@ -716,6 +724,7 @@ type SelectRowProps<T extends string> = {
 }
 
 export function SelectRow<T extends string>({ label, value, options, onChange, defaultValue }: SelectRowProps<T>) {
+  const { t } = useTranslation('inspector')
   const reset =
     defaultValue !== undefined
       ? () => commitAtomic(() => onChange(defaultValue))
@@ -727,7 +736,7 @@ export function SelectRow<T extends string>({ label, value, options, onChange, d
       <span
         className={`text-neutral-400 select-none ${reset ? 'cursor-pointer' : ''}`}
         onDoubleClick={reset}
-        title={reset ? 'Double-click to reset' : undefined}
+        title={reset ? t('reset.doubleClickReset') : undefined}
       >
         {label}
       </span>

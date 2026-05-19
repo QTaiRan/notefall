@@ -1,0 +1,95 @@
+{
+  "file": {
+    "menuButton": "File",
+    "menuLabel": "File",
+    "new": "New",
+    "open": "Open…",
+    "openRecent": "Open Recent",
+    "openRecentLabel": "Open Recent",
+    "clearRecent": "Clear Recent",
+    "save": "Save",
+    "saveAs": "Save As…",
+    "openAudio": "Open Audio…",
+    "saveSongAsMidi": "Save Song as MIDI…",
+    "export": "Export…",
+    "demoSongs": "Demo Songs",
+    "demoSongsLabel": "Demo Songs"
+  },
+  "midi": {
+    "button": "MIDI Input",
+    "inputDevices": "Input devices",
+    "noDevices": "No MIDI devices detected. Plug in a USB MIDI device and reopen.",
+    "disconnect": "Disconnect",
+    "connect": "Connect"
+  },
+  "record": {
+    "stop": "Stop recording",
+    "cancelCountIn": "Cancel count-in",
+    "start": "Start recording",
+    "label": "Record",
+    "disableCountIn": "Disable count-in",
+    "enableCountIn": "Enable count-in"
+  },
+  "recordings": {
+    "showWithNew": "Show recordings ({{count}} new)",
+    "show": "Show recordings",
+    "unread": "Unread",
+    "heading": "Recordings",
+    "clearAll": "Clear all",
+    "empty": "No recordings yet. Press the Record button to capture your input.",
+    "clickToRename": "Click to rename",
+    "pause": "Pause playback",
+    "loadAndPlay": "Load and play",
+    "saveAsMid": "Save as .mid",
+    "confirmDelete": "Confirm delete recording",
+    "delete": "Delete recording"
+  },
+  "toast": {
+    "emptyRecording": "No notes captured — recording was empty"
+  },
+  "help": {
+    "aria": "Help and feedback",
+    "reportBug": "Report a bug…",
+    "requestFeature": "Request a feature…",
+    "viewOnGitHub": "View on GitHub"
+  },
+  "analytics": {
+    "label": "Help improve notefall",
+    "caption": "Anonymous usage only — never your music or files."
+  },
+  "badge": {
+    "unsaved": "Unsaved",
+    "unsavedAria": "Unsaved changes"
+  },
+  "projectName": {
+    "aria": "Project name",
+    "rename": "Rename project",
+    "untitled": "Untitled",
+    "noFile": "No file loaded"
+  },
+  "export": {
+    "titleAudio": "Exporting audio",
+    "titleVideo": "Exporting video",
+    "phasePreparing": "Preparing",
+    "phaseLoadingSamples": "Loading samples",
+    "phaseRendering": "Rendering",
+    "phaseRenderingAudio": "Rendering audio",
+    "phaseFinalizing": "Finalizing"
+  },
+  "error": {
+    "couldNotLoadDemo": "Could not load demo",
+    "couldNotOpenFile": "Could not open file",
+    "couldNotSaveProject": "Could not save project",
+    "couldNotLoadAudio": "Could not load audio",
+    "couldNotOpenProject": "Could not open project",
+    "couldNotExportAudio": "Could not export audio",
+    "couldNotExportVideo": "Could not export video",
+    "videoNotSupportedTitle": "Video export not supported",
+    "videoNotSupportedMessage": "Your browser is missing the WebCodecs API. Use Chrome, Edge, or Safari 16.4+ to export video.",
+    "videoNotSupportedShort": "Your browser is missing the WebCodecs API."
+  },
+  "language": {
+    "label": "Language",
+    "aria": "Change language"
+  }
+}

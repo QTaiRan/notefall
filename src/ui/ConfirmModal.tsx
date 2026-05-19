@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button, Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components'
 import {
   dismissPending,
@@ -27,6 +28,7 @@ import {
  * this requires a response.
  */
 export function ConfirmModal() {
+  const { t } = useTranslation('dialogs')
   const pending = useSyncExternalStore(subscribePending, getPending, getPending)
 
   const isError = pending?.kind === 'alert' && pending.options.tone === 'error'
@@ -68,7 +70,7 @@ export function ConfirmModal() {
                   onPress={() => resolveConfirm(false)}
                   className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
                 >
-                  {pending.options.cancelLabel ?? 'Cancel'}
+                  {pending.options.cancelLabel ?? t('confirm.defaultCancel')}
                 </Button>
                 <Button
                   onPress={() => resolveConfirm(true)}
@@ -78,7 +80,7 @@ export function ConfirmModal() {
                       : 'rounded border border-sky-500/60 bg-sky-500/15 px-3 py-1.5 text-xs text-sky-200 outline-none hover:bg-sky-500/25 focus-visible:border-sky-300'
                   }
                 >
-                  {pending.options.confirmLabel ?? 'OK'}
+                  {pending.options.confirmLabel ?? t('confirm.defaultConfirm')}
                 </Button>
               </div>
             </>
@@ -110,7 +112,7 @@ export function ConfirmModal() {
                       : 'rounded border border-sky-500/60 bg-sky-500/15 px-3 py-1.5 text-xs text-sky-200 outline-none hover:bg-sky-500/25 focus-visible:border-sky-300'
                   }
                 >
-                  {pending.options.okLabel ?? 'OK'}
+                  {pending.options.okLabel ?? t('alert.acknowledge')}
                 </Button>
               </div>
             </>

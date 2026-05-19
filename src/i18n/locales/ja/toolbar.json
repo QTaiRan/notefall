@@ -1,0 +1,95 @@
+{
+  "file": {
+    "menuButton": "ファイル",
+    "menuLabel": "ファイル",
+    "new": "新規",
+    "open": "開く…",
+    "openRecent": "最近使ったファイル",
+    "openRecentLabel": "最近使ったファイル",
+    "clearRecent": "履歴を消去",
+    "save": "保存",
+    "saveAs": "名前を付けて保存…",
+    "openAudio": "オーディオを開く…",
+    "saveSongAsMidi": "MIDIとして保存…",
+    "export": "書き出し…",
+    "demoSongs": "デモ曲",
+    "demoSongsLabel": "デモ曲"
+  },
+  "midi": {
+    "button": "MIDI入力",
+    "inputDevices": "入力デバイス",
+    "noDevices": "MIDIデバイスが見つかりません。USB MIDIデバイスを接続してから開き直してください。",
+    "disconnect": "切断",
+    "connect": "接続"
+  },
+  "record": {
+    "stop": "録音を停止",
+    "cancelCountIn": "カウントインをキャンセル",
+    "start": "録音を開始",
+    "label": "録音",
+    "disableCountIn": "カウントインを無効化",
+    "enableCountIn": "カウントインを有効化"
+  },
+  "recordings": {
+    "showWithNew": "録音を表示（新着{{count}}件）",
+    "show": "録音を表示",
+    "unread": "未読",
+    "heading": "録音",
+    "clearAll": "すべて消去",
+    "empty": "録音はまだありません。録音ボタンを押して演奏をキャプチャしてください。",
+    "clickToRename": "クリックして名前を変更",
+    "pause": "再生を一時停止",
+    "loadAndPlay": "読み込んで再生",
+    "saveAsMid": ".mid として保存",
+    "confirmDelete": "録音の削除を確定",
+    "delete": "録音を削除"
+  },
+  "toast": {
+    "emptyRecording": "ノートがありません — 録音は空でした"
+  },
+  "help": {
+    "aria": "ヘルプとフィードバック",
+    "reportBug": "バグを報告…",
+    "requestFeature": "機能をリクエスト…",
+    "viewOnGitHub": "GitHubで見る"
+  },
+  "analytics": {
+    "label": "notefall の改善に協力する",
+    "caption": "匿名の利用状況のみ — 楽曲やファイルは送信されません。"
+  },
+  "badge": {
+    "unsaved": "未保存",
+    "unsavedAria": "未保存の変更"
+  },
+  "projectName": {
+    "aria": "プロジェクト名",
+    "rename": "プロジェクト名を変更",
+    "untitled": "無題",
+    "noFile": "ファイル未選択"
+  },
+  "export": {
+    "titleAudio": "オーディオを書き出し中",
+    "titleVideo": "ビデオを書き出し中",
+    "phasePreparing": "準備中",
+    "phaseLoadingSamples": "サンプルを読み込み中",
+    "phaseRendering": "レンダリング中",
+    "phaseRenderingAudio": "オーディオをレンダリング中",
+    "phaseFinalizing": "仕上げ中"
+  },
+  "error": {
+    "couldNotLoadDemo": "デモを読み込めませんでした",
+    "couldNotOpenFile": "ファイルを開けませんでした",
+    "couldNotSaveProject": "プロジェクトを保存できませんでした",
+    "couldNotLoadAudio": "オーディオを読み込めませんでした",
+    "couldNotOpenProject": "プロジェクトを開けませんでした",
+    "couldNotExportAudio": "オーディオを書き出せませんでした",
+    "couldNotExportVideo": "ビデオを書き出せませんでした",
+    "videoNotSupportedTitle": "ビデオの書き出しに対応していません",
+    "videoNotSupportedMessage": "お使いのブラウザは WebCodecs API に対応していません。ビデオを書き出すには Chrome、Edge、または Safari 16.4 以降をご利用ください。",
+    "videoNotSupportedShort": "お使いのブラウザは WebCodecs API に対応していません。"
+  },
+  "language": {
+    "label": "言語",
+    "aria": "言語を変更"
+  }
+}

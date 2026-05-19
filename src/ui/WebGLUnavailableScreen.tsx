@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 import { MonitorIcon } from './icons'
 
 /**
@@ -13,6 +15,7 @@ import { MonitorIcon } from './icons'
  * that can't show the result.
  */
 export function WebGLUnavailableScreen() {
+  const { t } = useTranslation('screens')
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-neutral-950 px-6 text-center text-neutral-200">
       <span className="flex items-baseline gap-1.5">
@@ -22,34 +25,33 @@ export function WebGLUnavailableScreen() {
 
       <MonitorIcon className="h-10 w-10 text-amber-400/80" />
 
-      <h1 className="text-base font-medium">Hardware acceleration is required</h1>
+      <h1 className="text-base font-medium">{t('webgl.title')}</h1>
       <p className="max-w-sm text-xs leading-relaxed text-neutral-400">
-        notefall renders the falling notes with WebGL, which needs your
-        browser's hardware acceleration to be on.
+        {t('webgl.body')}
       </p>
 
       <div className="mt-2 flex max-w-sm flex-col gap-1 rounded-md border border-neutral-800 bg-neutral-900/60 px-4 py-3 text-left text-[11px] leading-relaxed text-neutral-300">
-        <p className="font-medium text-neutral-100">How to enable it</p>
+        <p className="font-medium text-neutral-100">{t('webgl.howToTitle')}</p>
         <p className="text-neutral-400">
-          <span className="text-neutral-200">Chrome / Edge:</span> Settings →
+          <span className="text-neutral-200">{t('webgl.chromeLabel')}</span> Settings →
           System → enable{' '}
           <span className="font-mono text-neutral-200">
-            Use graphics acceleration when available
+            {t('webgl.chromeSetting')}
           </span>
           , then restart the browser.
         </p>
         <p className="text-neutral-400">
-          <span className="text-neutral-200">Firefox:</span> Settings →
+          <span className="text-neutral-200">{t('webgl.firefoxLabel')}</span> Settings →
           General → Performance → enable{' '}
           <span className="font-mono text-neutral-200">
-            Use recommended performance settings
+            {t('webgl.firefoxSetting')}
           </span>
           .
         </p>
         <p className="text-neutral-400">
-          <span className="text-neutral-200">Safari:</span> Develop menu →
+          <span className="text-neutral-200">{t('webgl.safariLabel')}</span> Develop menu →
           enable{' '}
-          <span className="font-mono text-neutral-200">WebGL</span> (if shown).
+          <span className="font-mono text-neutral-200">{t('webgl.safariSetting')}</span> (if shown).
         </p>
       </div>
 
@@ -58,7 +60,7 @@ export function WebGLUnavailableScreen() {
         onClick={() => window.location.reload()}
         className="mt-1 rounded border border-sky-500/60 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-200 outline-none hover:bg-sky-500/20 focus-visible:border-sky-300"
       >
-        Reload page
+        {t('webgl.reload')}
       </button>
     </div>
   )

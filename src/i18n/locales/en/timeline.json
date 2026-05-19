@@ -1,0 +1,100 @@
+{
+  "editor": {
+    "show": "Show timeline editor",
+    "hide": "Hide timeline editor",
+    "title": "Timeline editor",
+    "resizeLanes": "Drag to resize lanes",
+    "resizeAria": "Resize timeline editor"
+  },
+  "follow": {
+    "stop": "Stop following playhead",
+    "start": "Follow playhead during playback",
+    "label": "Follow"
+  },
+  "empty": {
+    "prompt": "No song loaded — drop a .mid / .nfz file or pick a quick action",
+    "openFile": "Open file…",
+    "record": "Record",
+    "demoSongs": "Demo songs",
+    "demoSongsAria": "Demo songs"
+  },
+  "error": {
+    "couldNotOpenProjectTitle": "Could not open project",
+    "couldNotLoadDemoTitle": "Could not load demo"
+  },
+  "lane": {
+    "midi": "MIDI",
+    "speed": "Speed",
+    "audio": "Audio",
+    "pins": "Pins",
+    "pinsLabel": "pins",
+    "speedLabel": "speed",
+    "options": "Lane options",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "resizeLanes": "Drag to resize lanes",
+    "decoding": "Decoding…"
+  },
+  "context": {
+    "volume": "Volume",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "resetToUnity": "Reset to 0 dB",
+    "removeAudio": "Remove audio"
+  },
+  "speed": {
+    "automationAria": "MIDI speed automation",
+    "automationTitle": "Click to add a breakpoint · drag to move · right-click to delete · scroll over midpoint to adjust curve",
+    "breakpointTitle": "{{value}}× at {{time}}s — double-click to reset · right-click to delete",
+    "curveTitle": "curve {{curvature}} — drag or scroll to bend · right-click to straighten"
+  },
+  "trim": {
+    "drag": "Drag to trim",
+    "midiHead": "Trim MIDI head",
+    "midiTail": "Trim MIDI tail",
+    "audioHead": "Trim audio head",
+    "audioTail": "Trim audio tail"
+  },
+  "pin": {
+    "addAtPlayheadAria": "Add pin at playhead",
+    "addAtPlayheadTitle": "Add a pin at the playhead (P)",
+    "laneAria": "Settings pins",
+    "laneTitle": "Pins capture the visual settings at a point in time — the scene morphs between consecutive pins. Click empty space to add a pin · click a pin to select + seek · drag to move · right-drag to erase.",
+    "markerTitle": "Pin @ {{time}} — click to select + seek · drag to move · right-drag to erase"
+  },
+  "ruler": {
+    "seekAria": "Ruler — click to seek within view",
+    "seekTitle": "Drag to seek · double-click to fit",
+    "resetZoomAria": "Reset zoom",
+    "resetZoomTitle": "Reset zoom"
+  },
+  "clip": {
+    "syncTitle": "Drag to sync — offset {{offset}}s"
+  },
+  "minimap": {
+    "panAria": "Minimap — drag to pan",
+    "panTitle": "Drag to pan visible range",
+    "zoomToEnable": "Zoom in to enable panning",
+    "resizeFromLeft": "Resize visible range from left",
+    "resizeFromRight": "Resize visible range from right"
+  },
+  "velocityCurve": {
+    "label": "Velocity Curve"
+  },
+  "transport": {
+    "rewindToStart": "Rewind to start",
+    "rewind10": "Rewind 10 seconds",
+    "forward10": "Forward 10 seconds",
+    "play": "Play",
+    "pause": "Pause",
+    "enableLoop": "Enable loop",
+    "disableLoop": "Disable loop",
+    "volume": "Volume",
+    "speed": "Speed",
+    "playbackSpeed": "Playback speed",
+    "resetCameraView": "Reset camera view",
+    "enterFullscreen": "Enter fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "seek": "Seek"
+  }
+}

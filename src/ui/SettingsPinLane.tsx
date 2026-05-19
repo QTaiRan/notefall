@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { audioEngine } from '../audio/engine'
 import { useStore } from '../store'
 import { midiToTimeline, timelineToMidi, type SpeedMap } from '../midi/speedMap'
@@ -84,6 +85,7 @@ export function SettingsPinLane({
   midiOffsetSec: number
   totalDuration: number
 }) {
+  const { t } = useTranslation('timeline')
   const wrapRef = useRef<HTMLDivElement | null>(null)
 
   // Drag a pin: bracket the whole gesture with begin/endSettingsEdit
@@ -288,8 +290,8 @@ export function SettingsPinLane({
         cursor: erasing ? 'not-allowed' : undefined,
       }}
       className="relative cursor-crosshair overflow-hidden rounded bg-neutral-900/40"
-      aria-label="Settings pins"
-      title="Pins capture the visual settings at a point in time — the scene morphs between consecutive pins. Click empty space to add a pin · click a pin to select + seek · drag to move · right-drag to erase."
+      aria-label={t('pin.laneAria')}
+      title={t('pin.laneTitle')}
     >
       {keyframes.map((kf, i) => {
         const displayT = audioToDisplay(kf.time, speedMap, midiOffsetSec)
@@ -304,7 +306,7 @@ export function SettingsPinLane({
             onPointerMove={onPinPointerMove}
             onPointerUp={onPinPointerUp}
             onPointerCancel={onPinPointerUp}
-            title={`Pin @ ${fmtTime(kf.time)} — click to select + seek · drag to move · right-drag to erase`}
+            title={t('pin.markerTitle', { time: fmtTime(kf.time) })}
             className={
               // Note-editor parity: a pin behaves like a note body, so
               // hover/drag shows the four-way `move` cursor. While an
@@ -339,7 +341,7 @@ export function SettingsPinLane({
         aria-hidden
         className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 font-mono text-[9px] text-neutral-500"
       >
-        pins
+        {t('lane.pinsLabel')}
       </div>
     </div>
   )

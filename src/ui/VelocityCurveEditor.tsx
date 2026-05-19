@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
 import { rowMatchesQuery, useSearchQuery } from './controls'
 import {
@@ -66,6 +67,7 @@ function applyHandleDrag(
 }
 
 export function VelocityCurveEditor() {
+  const { t } = useTranslation('timeline')
   const curve = useStore((s) => s.settings.velocityCurve)
   const update = useStore((s) => s.updateSettings)
   const begin = useStore((s) => s.beginSettingsEdit)
@@ -170,7 +172,7 @@ export function VelocityCurveEditor() {
   return (
     <div data-search-label="Velocity Curve" className="flex flex-col gap-2 py-1">
       <div className="flex items-center text-xs select-none">
-        <span id={labelId} className="text-neutral-400">Velocity Curve</span>
+        <span id={labelId} className="text-neutral-400">{t('velocityCurve.label')}</span>
       </div>
       <svg
         ref={svgRef}

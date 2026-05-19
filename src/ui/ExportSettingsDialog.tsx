@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Button,
   Checkbox,
@@ -73,6 +74,7 @@ export function ExportSettingsDialog({
   videoExportSupported: boolean
   defaults: ExportSettingsValues
 }) {
+  const { t } = useTranslation('dialogs')
   const [format, setFormat] = useState<ExportFormat>(defaults.format)
   const [resolution, setResolution] = useState<VideoResolutionId>(defaults.resolution)
   const [fps, setFps] = useState<VideoFps>(defaults.fps)
@@ -141,16 +143,16 @@ export function ExportSettingsDialog({
       <Modal className="outline-none data-[entering]:animate-in data-[entering]:zoom-in-95 data-[entering]:duration-150">
         <Dialog
           role="dialog"
-          aria-label="Export settings"
+          aria-label={t('export.ariaLabel')}
           className="flex w-96 flex-col gap-4 rounded-md bg-black/55 p-5 shadow-lg ring-1 ring-white/10 backdrop-blur-md outline-none"
         >
           <Heading slot="title" className="text-sm font-medium text-neutral-100">
-            Export
+            {t('export.title')}
           </Heading>
 
           {!videoExportSupported && (
             <p className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-200">
-              Video export is unavailable in this browser. Audio export still works.
+              {t('export.unsupported')}
             </p>
           )}
 
@@ -160,15 +162,15 @@ export function ExportSettingsDialog({
             className="flex flex-col gap-1.5"
           >
             <Label className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-              Format
+              {t('export.format.label')}
             </Label>
             <FormatRadio value="video-audio" disabled={!videoExportSupported}>
-              Video + audio (MP4)
+              {t('export.format.videoAudio')}
             </FormatRadio>
             <FormatRadio value="video-only" disabled={!videoExportSupported}>
-              Video only (MP4, silent)
+              {t('export.format.videoOnly')}
             </FormatRadio>
-            <FormatRadio value="audio-only">Audio only (WAV)</FormatRadio>
+            <FormatRadio value="audio-only">{t('export.format.audioOnly')}</FormatRadio>
           </RadioGroup>
 
           {showVideoOptions && (
@@ -179,7 +181,7 @@ export function ExportSettingsDialog({
                 className="flex flex-col gap-1.5"
               >
                 <Label className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Resolution
+                  {t('export.resolution')}
                 </Label>
                 <div className="flex gap-1.5">
                   {(Object.keys(VIDEO_RESOLUTIONS) as VideoResolutionId[]).map((id) => (
@@ -196,11 +198,11 @@ export function ExportSettingsDialog({
                 className="flex flex-col gap-1.5"
               >
                 <Label className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Frame rate
+                  {t('export.fps')}
                 </Label>
                 <div className="flex gap-1.5">
-                  <SegmentRadio value="30">30 fps</SegmentRadio>
-                  <SegmentRadio value="60">60 fps</SegmentRadio>
+                  <SegmentRadio value="30">{t('export.fps30')}</SegmentRadio>
+                  <SegmentRadio value="60">{t('export.fps60')}</SegmentRadio>
                 </div>
               </RadioGroup>
 
@@ -210,7 +212,7 @@ export function ExportSettingsDialog({
                 className="flex flex-col gap-1.5"
               >
                 <Label className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Quality
+                  {t('export.quality')}
                 </Label>
                 <div className="flex gap-1.5">
                   {(Object.keys(VIDEO_QUALITIES) as VideoQualityId[]).map((id) => (
@@ -220,9 +222,9 @@ export function ExportSettingsDialog({
                   ))}
                 </div>
                 <p className="text-[10px] text-neutral-500">
-                  Video bitrate {(computeVideoBitrateKbps(resolution, fps, quality) / 1000).toFixed(1)} Mbps.
-                  High uses 1.5× the bitrate for cleaner edges and bloom; everything else is the
-                  same.
+                  {t('export.bitrateNote', {
+                    mbps: (computeVideoBitrateKbps(resolution, fps, quality) / 1000).toFixed(1),
+                  })}
                 </p>
               </RadioGroup>
             </>
@@ -230,8 +232,10 @@ export function ExportSettingsDialog({
 
           <div className="flex flex-col gap-2 border-t border-neutral-800 pt-3">
             <div className="flex items-baseline justify-between text-[11px] text-neutral-400">
-              <span>Estimated size</span>
-              <span className="font-mono tabular-nums text-neutral-200">~{estimatedMb} MB</span>
+              <span>{t('export.estimatedSize')}</span>
+              <span className="font-mono tabular-nums text-neutral-200">
+                {t('export.estimatedSizeValue', { mb: estimatedMb })}
+              </span>
             </div>
             <div className="flex items-center justify-between gap-2">
               <Checkbox
@@ -261,7 +265,7 @@ export function ExportSettingsDialog({
                         </svg>
                       )}
                     </span>
-                    <span>Play sound when done</span>
+                    <span>{t('export.playSoundOnComplete')}</span>
                   </>
                 )}
               </Checkbox>
@@ -274,7 +278,7 @@ export function ExportSettingsDialog({
                 onPress={() => playExportCompleteChime()}
                 className="rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-[10px] text-neutral-300 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
               >
-                Test
+                {t('export.test')}
               </Button>
             </div>
           </div>
@@ -284,13 +288,13 @@ export function ExportSettingsDialog({
               onPress={onClose}
               className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
             >
-              Cancel
+              {t('export.cancel')}
             </Button>
             <Button
               onPress={handleExport}
               className="rounded border border-sky-500/60 bg-sky-500/15 px-3 py-1.5 text-xs text-sky-200 outline-none hover:bg-sky-500/25 focus-visible:border-sky-300"
             >
-              Export
+              {t('export.submit')}
             </Button>
           </div>
         </Dialog>

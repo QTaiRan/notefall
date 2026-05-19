@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Button,
   Menu,
@@ -28,6 +29,7 @@ import {
  * section header.
  */
 function FollowPlayheadToggle() {
+  const { t } = useTranslation('timeline')
   const follow = useStore((s) => s.settings.followPlayhead)
   const updateSettings = useStore((s) => s.updateSettings)
   return (
@@ -41,8 +43,8 @@ function FollowPlayheadToggle() {
       aria-pressed={follow}
       title={
         follow
-          ? 'Stop following playhead'
-          : 'Follow playhead during playback'
+          ? t('follow.stop')
+          : t('follow.start')
       }
       className={`flex h-6 items-center gap-1 rounded px-2 text-[10px] font-medium outline-none transition-colors ${
         follow
@@ -51,7 +53,7 @@ function FollowPlayheadToggle() {
       }`}
     >
       <CrosshairIcon className="h-3 w-3" />
-      <span>Follow</span>
+      <span>{t('follow.label')}</span>
     </button>
   )
 }
@@ -64,6 +66,7 @@ function FollowPlayheadToggle() {
  * so behaviour (dirty confirms, audio init, etc.) stays consistent.
  */
 function EmptyState() {
+  const { t } = useTranslation('timeline')
   const [demoNames, setDemoNames] = useState<Map<string, string>>(new Map())
   useEffect(() => {
     let cancelled = false
@@ -80,7 +83,7 @@ function EmptyState() {
     const result = await openProject()
     if (result.kind === 'error') {
       void showAlert({
-        title: 'Could not open project',
+        title: t('error.couldNotOpenProjectTitle'),
         message: result.message,
         tone: 'error',
       })
@@ -93,7 +96,7 @@ function EmptyState() {
     const result = await loadDemoProject(label, url)
     if (result.kind === 'error') {
       void showAlert({
-        title: 'Could not load demo',
+        title: t('error.couldNotLoadDemoTitle'),
         message: result.message,
         tone: 'error',
       })
@@ -114,7 +117,7 @@ function EmptyState() {
       style={{ height: 92 }}
     >
       <span className="text-[11px] text-neutral-500">
-        No song loaded — drop a .mid / .nfz file or pick a quick action
+        {t('empty.prompt')}
       </span>
       <div className="flex items-center gap-2">
         <button
@@ -122,22 +125,22 @@ function EmptyState() {
           onClick={() => void onOpen()}
           className={buttonClass}
         >
-          Open file…
+          {t('empty.openFile')}
         </button>
         <button type="button" onClick={onRecord} className={buttonClass}>
           <RecordIcon className="h-3.5 w-3.5 text-rose-400" />
-          Record
+          {t('empty.record')}
         </button>
         {DEMOS.length > 0 && (
           <MenuTrigger>
             <Button className={buttonClass}>
               <PlaylistIcon className="h-3.5 w-3.5 text-neutral-400" />
-              <span>Demo songs</span>
+              <span>{t('empty.demoSongs')}</span>
               <span className="text-neutral-500">▾</span>
             </Button>
             <Popover className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150">
               <Menu
-                aria-label="Demo songs"
+                aria-label={t('empty.demoSongsAria')}
                 className="flex w-64 flex-col gap-0.5 outline-none"
               >
                 {DEMOS.map((demo) => {
@@ -190,6 +193,7 @@ function EmptyState() {
  * editor growth, giving a "the handle follows my cursor" feel.
  */
 function TimelineResizeHandle() {
+  const { t } = useTranslation('timeline')
   const laneScale = useStore((s) => s.settings.timelineLaneScale)
   const updateSettings = useStore((s) => s.updateSettings)
   const dragRef = useRef<{ startY: number; startScale: number } | null>(null)
@@ -233,8 +237,8 @@ function TimelineResizeHandle() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      title="Drag to resize lanes"
-      aria-label="Resize timeline editor"
+      title={t('editor.resizeLanes')}
+      aria-label={t('editor.resizeAria')}
       style={{ touchAction: 'none' }}
       className="absolute inset-x-0 top-0 z-10 h-1 cursor-ns-resize bg-transparent transition-colors hover:bg-sky-500/40"
     />
@@ -242,6 +246,7 @@ function TimelineResizeHandle() {
 }
 
 export function TimelineEditor() {
+  const { t } = useTranslation('timeline')
   const song = useStore((s) => s.song)
   const open = useStore((s) => s.settings.timelineEditorOpen)
   const updateSettings = useStore((s) => s.updateSettings)
@@ -276,7 +281,7 @@ export function TimelineEditor() {
           type="button"
           onClick={toggle}
           aria-expanded={open}
-          aria-label={open ? 'Hide timeline editor' : 'Show timeline editor'}
+          aria-label={open ? t('editor.hide') : t('editor.show')}
           className="group flex w-full items-center justify-center gap-2 py-2 text-xs font-medium text-neutral-300 outline-none transition-colors hover:text-neutral-100 focus-visible:text-neutral-100"
         >
           <span
@@ -287,7 +292,7 @@ export function TimelineEditor() {
           >
             <ChevronUpIcon className="h-3.5 w-3.5" />
           </span>
-          <span>Timeline editor</span>
+          <span>{t('editor.title')}</span>
         </button>
         {open && song && (
           <div className="absolute right-3 top-1/2 -translate-y-1/2">

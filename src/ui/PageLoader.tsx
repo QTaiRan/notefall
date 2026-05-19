@@ -13,7 +13,10 @@
  * renders, and the heavy 60 MB sampler load is deferred to first interaction
  * (where LoadingOverlay shows its real progress).
  */
+import { useTranslation } from 'react-i18next'
+
 export function PageLoader({ visible }: { visible: boolean }) {
+  const { t } = useTranslation('screens')
   return (
     <div
       className={`fixed inset-0 z-[100] flex items-center justify-center bg-neutral-950 transition-opacity duration-500 ${
@@ -23,7 +26,7 @@ export function PageLoader({ visible }: { visible: boolean }) {
     >
       <div className="flex flex-col items-center gap-4">
         <div className="text-[10px] font-medium uppercase tracking-[0.4em] text-neutral-600">
-          Loading
+          {t('pageLoader.loading')}
         </div>
         {/* Indeterminate progress bar: a short pill slides across the track
             on a loop. The eased curve gives it a slight pause at the edges

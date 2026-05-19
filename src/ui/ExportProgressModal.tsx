@@ -1,4 +1,6 @@
+import { useTranslation } from 'react-i18next'
 import { Button, Dialog, Heading, Modal, ModalOverlay, ProgressBar } from 'react-aria-components'
+import type { TFunction } from 'i18next'
 
 export type ExportProgressState = {
   /** Modal title — e.g. "Exporting audio", "Exporting video". */
@@ -16,12 +18,12 @@ export type ExportProgressState = {
 } | null
 
 /** Format an ETA in seconds as either `"12 sec"` or `"2 min 14 sec"`. */
-function formatEta(seconds: number): string {
+function formatEta(seconds: number, t: TFunction<'dialogs'>): string {
   const total = Math.max(0, Math.round(seconds))
-  if (total < 60) return `${total} sec`
+  if (total < 60) return t('progress.etaSeconds', { count: total })
   const min = Math.floor(total / 60)
   const sec = total % 60
-  return `${min} min ${sec} sec`
+  return t('progress.etaMinutes', { min, sec })
 }
 
 /**
@@ -43,6 +45,7 @@ export function ExportProgressModal({
   state: ExportProgressState
   onCancel: () => void
 }) {
+  const { t } = useTranslation('dialogs')
   // Display percent floored, not rounded — a 99% display followed by
   // the modal vanishing reads better than "100% then disappear".
   const pct = state ? Math.max(0, Math.min(100, Math.floor(state.progress * 100))) : 0
@@ -64,7 +67,7 @@ export function ExportProgressModal({
               {state?.title ?? ''}
             </Heading>
             <p className="text-[11px] leading-relaxed text-neutral-400">
-              This may take a moment. Don&apos;t close the tab.
+              {t('progress.note')}
             </p>
           </div>
           <ProgressBar
@@ -87,7 +90,9 @@ export function ExportProgressModal({
               />
             </div>
             <div className="flex items-baseline justify-end text-[10px] tabular-nums text-neutral-500">
-              {state?.etaSeconds != null ? `${formatEta(state.etaSeconds)} remaining` : ' '}
+              {state?.etaSeconds != null
+                ? t('progress.eta', { eta: formatEta(state.etaSeconds, t) })
+                : ' '}
             </div>
           </ProgressBar>
           <div className="flex justify-end">
@@ -96,7 +101,7 @@ export function ExportProgressModal({
               onPress={onCancel}
               className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
             >
-              Cancel
+              {t('progress.cancel')}
             </Button>
           </div>
         </Dialog>

@@ -1,0 +1,25 @@
+{
+  "unsupported": {
+    "title": "This device is not supported",
+    "body": "Please open notefall on a desktop or tablet in landscape orientation — a wider screen is required."
+  },
+  "webgl": {
+    "title": "Hardware acceleration is required",
+    "body": "notefall renders the falling notes with WebGL, which needs your browser's hardware acceleration to be on.",
+    "howToTitle": "How to enable it",
+    "chromeLabel": "Chrome / Edge:",
+    "chromeSetting": "Use graphics acceleration when available",
+    "firefoxLabel": "Firefox:",
+    "firefoxSetting": "Use recommended performance settings",
+    "safariLabel": "Safari:",
+    "safariSetting": "WebGL",
+    "reload": "Reload page"
+  },
+  "pageLoader": {
+    "loading": "Loading"
+  },
+  "loading": {
+    "title": "Loading piano samples",
+    "note": "The first load fetches ~77MB of high-quality samples; subsequent sessions are cached."
+  }
+}

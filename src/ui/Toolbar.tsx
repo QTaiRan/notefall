@@ -10,7 +10,9 @@ import {
   SubmenuTrigger,
   Switch,
 } from 'react-aria-components'
+import { useTranslation } from 'react-i18next'
 import { useStore, useSettingsSlice } from '../store'
+import { LanguageSwitcher } from './LanguageSwitcher'
 
 const TOOLBAR_KEYS = [
   'userAudioOffsetSec',
@@ -181,6 +183,7 @@ function fmtCreatedAt(epochMs: number): string {
 }
 
 export function Toolbar() {
+  const { t } = useTranslation('toolbar')
   const song = useStore((s) => s.song)
   const settings = useSettingsSlice(TOOLBAR_KEYS)
   const setSong = useStore((s) => s.setSong)
@@ -313,7 +316,7 @@ export function Toolbar() {
     if (result.kind === 'ok') setActiveRecordingId(null)
     else if (result.kind === 'error') {
       void showAlert({
-        title: 'Could not load demo',
+        title: t('error.couldNotLoadDemo'),
         message: result.message,
         tone: 'error',
       })
@@ -405,16 +408,16 @@ export function Toolbar() {
   }
   const onOpenProject = async () => {
     const result = await openProject()
-    if (result.kind === 'error') reportError(result.title ?? 'Could not open file', result.message)
+    if (result.kind === 'error') reportError(result.title ?? t('error.couldNotOpenFile'), result.message)
     else if (result.kind === 'ok') setActiveRecordingId(null)
   }
   const onSaveProject = async () => {
     const result = await saveProject()
-    if (result.kind === 'error') reportError('Could not save project', result.message)
+    if (result.kind === 'error') reportError(t('error.couldNotSaveProject'), result.message)
   }
   const onSaveProjectAs = async () => {
     const result = await saveProjectAs()
-    if (result.kind === 'error') reportError('Could not save project', result.message)
+    if (result.kind === 'error') reportError(t('error.couldNotSaveProject'), result.message)
   }
   const onImportAudio = async () => {
     const file = await pickFile(
@@ -423,7 +426,7 @@ export function Toolbar() {
     if (!file) return
     const result = await importUserAudio(file)
     if (result.kind === 'error') {
-      reportError(result.title ?? 'Could not load audio', result.message)
+      reportError(result.title ?? t('error.couldNotLoadAudio'), result.message)
     }
   }
   // Export the currently loaded song as a single-track Standard MIDI
@@ -533,8 +536,8 @@ export function Toolbar() {
     exportRateWindowRef.current = []
 
     const isAudioOnly = values.format === 'audio-only'
-    const title = isAudioOnly ? 'Exporting audio' : 'Exporting video'
-    setExportState({ title, phaseLabel: 'Preparing', progress: 0, etaSeconds: null })
+    const title = isAudioOnly ? t('export.titleAudio') : t('export.titleVideo')
+    setExportState({ title, phaseLabel: t('export.phasePreparing'), progress: 0, etaSeconds: null })
 
     const exportFormat = isAudioOnly
       ? 'wav'
@@ -584,15 +587,15 @@ export function Toolbar() {
           onProgress: (p) => {
             if (p.phase === 'loading') {
               const fraction = p.total > 0 ? p.loaded / p.total : 0
-              updateExportProgress(title, 'Loading samples', fraction)
+              updateExportProgress(title, t('export.phaseLoadingSamples'), fraction)
             } else if (p.phase === 'rendering') {
-              updateExportProgress(title, 'Rendering audio', p.progress)
+              updateExportProgress(title, t('export.phaseRenderingAudio'), p.progress)
             }
           },
         })
         if (result.kind === 'error') {
           finishExport(abort.signal.aborted ? 'cancelled' : 'error')
-          reportError('Could not export audio', result.message)
+          reportError(t('error.couldNotExportAudio'), result.message)
         } else {
           finishExport('ok')
           if (result.kind === 'ok' && values.playSoundOnComplete) {
@@ -603,8 +606,8 @@ export function Toolbar() {
         if (!videoExportSupported) {
           finishExport('unsupported')
           reportError(
-            'Video export not supported',
-            'Your browser is missing the WebCodecs API. Use Chrome, Edge, or Safari 16.4+ to export video.',
+            t('error.videoNotSupportedTitle'),
+            t('error.videoNotSupportedMessage'),
           )
           return
         }
@@ -626,22 +629,22 @@ export function Toolbar() {
           signal: abort.signal,
           onProgress: (p) => {
             if (p.phase === 'preparing') {
-              updateExportProgress(title, 'Preparing', 0)
+              updateExportProgress(title, t('export.phasePreparing'), 0)
             } else if (p.phase === 'rendering') {
-              updateExportProgress(title, 'Rendering', p.progress)
+              updateExportProgress(title, t('export.phaseRendering'), p.progress)
             } else if (p.phase === 'finalizing') {
-              updateExportProgress(title, 'Finalizing', 1)
+              updateExportProgress(title, t('export.phaseFinalizing'), 1)
             }
           },
         })
         if (result.kind === 'error') {
           finishExport(abort.signal.aborted ? 'cancelled' : 'error')
-          reportError('Could not export video', result.message)
+          reportError(t('error.couldNotExportVideo'), result.message)
         } else if (result.kind === 'unsupported') {
           finishExport('unsupported')
           reportError(
-            'Video export not supported',
-            'Your browser is missing the WebCodecs API.',
+            t('error.videoNotSupportedTitle'),
+            t('error.videoNotSupportedShort'),
           )
         } else {
           finishExport('ok')
@@ -664,7 +667,7 @@ export function Toolbar() {
   const recents = useSyncExternalStore(subscribeRecent, getRecent, getRecent)
   const onOpenRecent = async (entry: (typeof recents)[number]) => {
     const result = await openRecent(entry)
-    if (result.kind === 'error') reportError('Could not open project', result.message)
+    if (result.kind === 'error') reportError(t('error.couldNotOpenProject'), result.message)
     else if (result.kind === 'ok') setActiveRecordingId(null)
   }
 
@@ -716,35 +719,35 @@ export function Toolbar() {
             isDisabled={rec.state === 'recording'}
             className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500 data-[pressed]:bg-neutral-800 disabled:cursor-not-allowed disabled:border-neutral-800 disabled:bg-neutral-950 disabled:text-neutral-600 disabled:hover:border-neutral-800"
           >
-            File
+            {t('file.menuButton')}
           </Button>
           <Popover
             placement="bottom start"
             className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
           >
             <Menu
-              aria-label="File"
+              aria-label={t('file.menuLabel')}
               className="flex w-60 flex-col gap-0.5 outline-none"
             >
               <MenuItem
                 onAction={() => void onNewProject()}
-                textValue="New"
+                textValue={t('file.new')}
                 className={menuItemClass}
               >
-                <span>New</span>
+                <span>{t('file.new')}</span>
               </MenuItem>
               <MenuItem
                 onAction={() => void onOpenProject()}
-                textValue="Open"
+                textValue={t('file.open')}
                 className={menuItemClass}
               >
-                <span>Open…</span>
+                <span>{t('file.open')}</span>
                 <span className={menuShortcutClass}>{SHORTCUT_OPEN}</span>
               </MenuItem>
               {RECENT_AVAILABLE && recents.length > 0 && (
                 <SubmenuTrigger>
-                  <MenuItem className={menuItemClass} textValue="Open Recent">
-                    <span>Open Recent</span>
+                  <MenuItem className={menuItemClass} textValue={t('file.openRecent')}>
+                    <span>{t('file.openRecent')}</span>
                     <span className={menuShortcutClass}>▸</span>
                   </MenuItem>
                   <Popover
@@ -752,7 +755,7 @@ export function Toolbar() {
                     className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
                   >
                     <Menu
-                      aria-label="Open Recent"
+                      aria-label={t('file.openRecentLabel')}
                       className="flex w-64 flex-col gap-0.5 outline-none"
                     >
                       {recents.map((entry) => (
@@ -768,10 +771,10 @@ export function Toolbar() {
                       <Separator className="my-1 h-px bg-neutral-800" />
                       <MenuItem
                         onAction={() => clearAllRecent()}
-                        textValue="Clear Recent"
+                        textValue={t('file.clearRecent')}
                         className={menuItemClass}
                       >
-                        <span className="text-neutral-400">Clear Recent</span>
+                        <span className="text-neutral-400">{t('file.clearRecent')}</span>
                       </MenuItem>
                     </Menu>
                   </Popover>
@@ -779,53 +782,53 @@ export function Toolbar() {
               )}
               <MenuItem
                 onAction={() => void onSaveProject()}
-                textValue="Save"
+                textValue={t('file.save')}
                 className={menuItemClass}
               >
-                <span>Save</span>
+                <span>{t('file.save')}</span>
                 <span className={menuShortcutClass}>{SHORTCUT_SAVE}</span>
               </MenuItem>
               <MenuItem
                 onAction={() => void onSaveProjectAs()}
-                textValue="Save As"
+                textValue={t('file.saveAs')}
                 className={menuItemClass}
               >
-                <span>Save As…</span>
+                <span>{t('file.saveAs')}</span>
                 <span className={menuShortcutClass}>{SHORTCUT_SAVE_AS}</span>
               </MenuItem>
               <Separator className="my-1 h-px bg-neutral-800" />
               <MenuItem
                 onAction={() => void onImportAudio()}
-                textValue="Open Audio"
+                textValue={t('file.openAudio')}
                 isDisabled={!song}
                 className={menuItemClass}
               >
-                <span>Open Audio…</span>
+                <span>{t('file.openAudio')}</span>
               </MenuItem>
               <MenuItem
                 onAction={() => onSaveSongAsMidi()}
-                textValue="Save Song as MIDI"
+                textValue={t('file.saveSongAsMidi')}
                 isDisabled={!song}
                 className={menuItemClass}
               >
-                <span>Save Song as MIDI…</span>
+                <span>{t('file.saveSongAsMidi')}</span>
               </MenuItem>
               <Separator className="my-1 h-px bg-neutral-800" />
               <MenuItem
                 onAction={() => onOpenExportDialog()}
-                textValue="Export"
+                textValue={t('file.export')}
                 isDisabled={!song || exportState !== null}
                 className={menuItemClass}
               >
-                <span>Export…</span>
+                <span>{t('file.export')}</span>
               </MenuItem>
               {DEMOS.length > 0 && (
                 <Separator className="my-1 h-px bg-neutral-800" />
               )}
               {DEMOS.length > 0 && (
                 <SubmenuTrigger>
-                  <MenuItem className={menuItemClass} textValue="Demo Songs">
-                    <span>Demo Songs</span>
+                  <MenuItem className={menuItemClass} textValue={t('file.demoSongs')}>
+                    <span>{t('file.demoSongs')}</span>
                     <span className={menuShortcutClass}>▸</span>
                   </MenuItem>
                   <Popover
@@ -833,7 +836,7 @@ export function Toolbar() {
                     className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
                   >
                     <Menu
-                      aria-label="Demo Songs"
+                      aria-label={t('file.demoSongsLabel')}
                       className="flex w-64 flex-col gap-0.5 outline-none"
                     >
                       {DEMOS.map((demo) => {
@@ -873,7 +876,7 @@ export function Toolbar() {
                   midi.activeDeviceId ? 'bg-sky-400' : 'bg-neutral-600'
                 }`}
               />
-              MIDI Input
+              {t('midi.button')}
             </Button>
             <Popover
               placement="bottom start"
@@ -881,11 +884,11 @@ export function Toolbar() {
             >
               <Dialog className="flex w-64 flex-col gap-1 outline-none">
                 <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                  Input devices
+                  {t('midi.inputDevices')}
                 </div>
                 {midi.devices.length === 0 ? (
                   <div className="px-2 py-2 text-xs text-neutral-500">
-                    No MIDI devices detected. Plug in a USB MIDI device and reopen.
+                    {t('midi.noDevices')}
                   </div>
                 ) : (
                   midi.devices.map((d) => {
@@ -907,7 +910,7 @@ export function Toolbar() {
                           )}
                         </span>
                         <span className="text-[10px] text-neutral-500">
-                          {active ? 'Disconnect' : 'Connect'}
+                          {active ? t('midi.disconnect') : t('midi.connect')}
                         </span>
                       </Button>
                     )
@@ -926,10 +929,10 @@ export function Toolbar() {
             onPress={onToggleRecord}
             aria-label={
               rec.state === 'recording'
-                ? 'Stop recording'
+                ? t('record.stop')
                 : countInBeat > 0
-                  ? 'Cancel count-in'
-                  : 'Start recording'
+                  ? t('record.cancelCountIn')
+                  : t('record.start')
             }
             className={
               rec.state === 'recording' || countInBeat > 0
@@ -957,14 +960,14 @@ export function Toolbar() {
             ) : (
               <>
                 <RecordIcon className="h-3 w-3 text-rose-400" />
-                Record
+                {t('record.label')}
               </>
             )}
           </Button>
           <Button
             onPress={() => setCountInEnabled(!countInEnabled)}
             isDisabled={rec.state === 'recording' || countInBeat > 0}
-            aria-label={countInEnabled ? 'Disable count-in' : 'Enable count-in'}
+            aria-label={countInEnabled ? t('record.disableCountIn') : t('record.enableCountIn')}
             className={
               countInEnabled
                 ? 'flex items-center justify-center rounded border border-sky-500/60 bg-sky-500/10 px-2 py-1 text-sky-300 outline-none hover:bg-sky-500/20 focus-visible:border-sky-400 disabled:opacity-50'
@@ -986,8 +989,8 @@ export function Toolbar() {
             <Button
               aria-label={
                 rec.unreadCount > 0
-                  ? `Show recordings (${rec.unreadCount} new)`
-                  : 'Show recordings'
+                  ? t('recordings.showWithNew', { count: rec.unreadCount })
+                  : t('recordings.show')
               }
               className="relative flex items-center justify-center rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-200 outline-none hover:border-neutral-600 focus-visible:border-sky-500"
             >
@@ -1008,20 +1011,20 @@ export function Toolbar() {
               <Dialog className="flex w-80 flex-col gap-1 outline-none">
                 <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                    Recordings
+                    {t('recordings.heading')}
                   </span>
                   {rec.recordings.length > 0 && (
                     <Button
                       onPress={() => rec.clearAll()}
                       className="rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300"
                     >
-                      Clear all
+                      {t('recordings.clearAll')}
                     </Button>
                   )}
                 </div>
                 {rec.recordings.length === 0 ? (
                   <div className="px-2 py-4 text-center text-xs text-neutral-500">
-                    No recordings yet. Press the Record button to capture your input.
+                    {t('recordings.empty')}
                   </div>
                 ) : (
                   <div className="scroll-thin flex max-h-80 flex-col gap-1 overflow-y-auto">
@@ -1054,7 +1057,7 @@ export function Toolbar() {
                               horizontally when the dot is cleared on
                               popover close. */}
                           <span
-                            aria-label={r.read ? undefined : 'Unread'}
+                            aria-label={r.read ? undefined : t('recordings.unread')}
                             className={
                               'h-2 w-2 shrink-0 rounded-full ' +
                               (r.read ? 'bg-transparent' : 'bg-sky-400')
@@ -1103,7 +1106,7 @@ export function Toolbar() {
                                   'cursor-text truncate rounded px-0.5 hover:bg-neutral-700/40 ' +
                                   (isActive ? 'text-sky-200' : 'text-neutral-200')
                                 }
-                                title="Click to rename"
+                                title={t('recordings.clickToRename')}
                               >
                                 {r.name}
                               </span>
@@ -1123,7 +1126,7 @@ export function Toolbar() {
                                 void onLoadAndPlayRecording(r.id, r.name)
                               }
                             }}
-                            aria-label={isPlayingThis ? 'Pause playback' : 'Load and play'}
+                            aria-label={isPlayingThis ? t('recordings.pause') : t('recordings.loadAndPlay')}
                             className="flex h-6 w-6 items-center justify-center rounded text-sky-300 outline-none hover:bg-sky-500/20 focus-visible:ring-1 focus-visible:ring-sky-400"
                           >
                             {isPlayingThis ? (
@@ -1134,7 +1137,7 @@ export function Toolbar() {
                           </Button>
                           <Button
                             onPress={() => rec.download(r.id)}
-                            aria-label="Save as .mid"
+                            aria-label={t('recordings.saveAsMid')}
                             className="flex h-6 w-6 items-center justify-center rounded text-neutral-300 outline-none hover:bg-neutral-700 focus-visible:ring-1 focus-visible:ring-sky-400"
                           >
                             <DownloadIcon className="h-3.5 w-3.5" />
@@ -1143,8 +1146,8 @@ export function Toolbar() {
                             onPress={() => onDeleteRecording(r.id)}
                             aria-label={
                               confirmingDeleteId === r.id
-                                ? 'Confirm delete recording'
-                                : 'Delete recording'
+                                ? t('recordings.confirmDelete')
+                                : t('recordings.delete')
                             }
                             className={
                               confirmingDeleteId === r.id
@@ -1171,7 +1174,7 @@ export function Toolbar() {
               emptyToast ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            No notes captured — recording was empty
+            {t('toast.emptyRecording')}
           </div>
         </div>
 
@@ -1181,10 +1184,11 @@ export function Toolbar() {
             browser / viewport / FSA info so the maintainer doesn't
             have to ask. Last section, so only `pl-3` to mirror the
             previous border's 12px right side. */}
-        <div className="flex items-center border-l border-neutral-800 pl-3">
+        <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
+        <LanguageSwitcher />
         <DialogTrigger>
           <Button
-            aria-label="Help and feedback"
+            aria-label={t('help.aria')}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-neutral-800 text-xs font-semibold text-neutral-400 outline-none hover:border-neutral-600 hover:text-neutral-200 focus-visible:border-sky-500 data-[pressed]:bg-neutral-800"
           >
             ?
@@ -1194,7 +1198,7 @@ export function Toolbar() {
             className="rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl outline-none data-[entering]:animate-in data-[entering]:fade-in data-[entering]:duration-150"
           >
             <Dialog
-              aria-label="Help and feedback"
+              aria-label={t('help.aria')}
               className="flex w-56 flex-col gap-0.5 outline-none"
             >
               {({ close }) => (
@@ -1206,7 +1210,7 @@ export function Toolbar() {
                     }}
                     className={helpRowClass}
                   >
-                    <span>Report a bug…</span>
+                    <span>{t('help.reportBug')}</span>
                   </Button>
                   <Button
                     onPress={() => {
@@ -1215,7 +1219,7 @@ export function Toolbar() {
                     }}
                     className={helpRowClass}
                   >
-                    <span>Request a feature…</span>
+                    <span>{t('help.requestFeature')}</span>
                   </Button>
                   <Separator className="my-1 h-px border-0 bg-neutral-800" />
                   <Button
@@ -1225,7 +1229,7 @@ export function Toolbar() {
                     }}
                     className={helpRowClass}
                   >
-                    <span>View on GitHub</span>
+                    <span>{t('help.viewOnGitHub')}</span>
                   </Button>
                   <Separator className="my-1 h-px border-0 bg-neutral-800" />
                   {/* Privacy / telemetry preference — a real Switch
@@ -1240,10 +1244,10 @@ export function Toolbar() {
                   >
                     <span className="flex flex-col gap-0.5">
                       <span className="select-none text-neutral-200">
-                        Help improve notefall
+                        {t('analytics.label')}
                       </span>
                       <span className="text-[10px] leading-tight text-neutral-500">
-                        Anonymous usage only — never your music or files.
+                        {t('analytics.caption')}
                       </span>
                     </span>
                     <span className="relative inline-block h-4 w-7 shrink-0 rounded-full bg-neutral-700 transition group-data-[selected]:bg-sky-500">
@@ -1274,14 +1278,14 @@ export function Toolbar() {
             container shrinkage. */}
         {dirty && (
           <span
-            aria-label="Unsaved changes"
+            aria-label={t('badge.unsavedAria')}
             className="flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-amber-200"
           >
             <span className="relative flex h-1.5 w-1.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400/70" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
             </span>
-            Unsaved
+            {t('badge.unsaved')}
           </span>
         )}
         <ProjectNameField
@@ -1292,10 +1296,10 @@ export function Toolbar() {
               : song
                 ? song.name.replace(/\.midi?$/i, '')
                 : dirty
-                  ? 'Untitled'
+                  ? t('projectName.untitled')
                   : ''
           }
-          placeholder={!song && !currentFile && !dirty ? 'No file loaded' : 'Untitled'}
+          placeholder={!song && !currentFile && !dirty ? t('projectName.noFile') : t('projectName.untitled')}
           onCommit={setProjectName}
         />
 
@@ -1332,6 +1336,7 @@ function ProjectNameField({
   placeholder: string
   onCommit: (name: string) => void
 }) {
+  const { t } = useTranslation('toolbar')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -1381,7 +1386,7 @@ function ProjectNameField({
           e.stopPropagation()
         }}
         spellCheck={false}
-        aria-label="Project name"
+        aria-label={t('projectName.aria')}
         placeholder={placeholder}
         className="min-w-0 max-w-[24ch] truncate rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 text-xs text-neutral-100 outline-none focus:border-sky-500"
       />
@@ -1393,7 +1398,7 @@ function ProjectNameField({
       type="button"
       onClick={enterEdit}
       onFocus={enterEdit}
-      title="Rename project"
+      title={t('projectName.rename')}
       className={
         isFallback
           ? 'min-w-0 max-w-[24ch] cursor-text truncate rounded border border-transparent px-1.5 py-0.5 text-left italic outline-none hover:border-neutral-700 focus-visible:border-sky-500'

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Label,
   Slider,
@@ -140,6 +141,7 @@ function TransportFeedback() {
  * fresh session.
  */
 function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
+  const { t } = useTranslation("dialogs");
   const ctxMenu = useStore((s) => s.contextMenu);
   const setContextMenu = useStore((s) => s.setContextMenu);
   const selection = useStore((s) => s.selection);
@@ -313,8 +315,8 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
 
   const deleteLabel =
     selectedNotes.length === 1
-      ? "Delete note"
-      : `Delete ${selectedNotes.length} notes`;
+      ? t("noteMenu.deleteOne")
+      : t("noteMenu.deleteMany", { count: selectedNotes.length });
 
   return (
     <div
@@ -327,11 +329,11 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
         <div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
           {selectedNotes.length === 1
             ? midiToName(selectedNotes[0].midi + transpose)
-            : `${selectedNotes.length} notes selected`}
+            : t("noteMenu.notesSelected", { count: selectedNotes.length })}
         </div>
         <button
           type="button"
-          aria-label="Close"
+          aria-label={t("noteMenu.close")}
           onClick={closeMenu}
           className="-mr-1 -mt-1 flex h-5 w-5 items-center justify-center rounded text-neutral-400 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-sky-400"
         >
@@ -348,7 +350,7 @@ function NoteContextMenu({ wrapEl }: { wrapEl: HTMLElement | null }) {
         className="flex flex-col gap-1.5"
       >
         <div className="flex items-center justify-between text-xs select-none">
-          <Label className="text-neutral-300">Velocity</Label>
+          <Label className="text-neutral-300">{t("noteMenu.velocity")}</Label>
           <SliderOutput className="text-neutral-200 tabular-nums">
             {Math.round(avgVelocity * 127)}
           </SliderOutput>
@@ -410,6 +412,7 @@ function RangeSelectRect({ wrapEl }: { wrapEl: HTMLElement | null }) {
  * region keeps receiving events for the entire hold duration.
  */
 function FastForwardIndicator() {
+  const { t } = useTranslation("dialogs");
   const fastForward = useStore((s) => s.fastForward);
   return (
     <div
@@ -420,7 +423,7 @@ function FastForwardIndicator() {
     >
       <div className="flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1 text-xs font-semibold text-white shadow-lg ring-1 ring-white/15 backdrop-blur-sm">
         <FastForwardIcon className="h-3.5 w-3.5" />
-        <span className="tabular-nums">2x</span>
+        <span className="tabular-nums">{t("fastForward.rate")}</span>
       </div>
     </div>
   );

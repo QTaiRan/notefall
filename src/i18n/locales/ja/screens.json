@@ -1,0 +1,25 @@
+{
+  "unsupported": {
+    "title": "このデバイスはサポートされていません",
+    "body": "notefall はデスクトップ、または横向きのタブレットで開いてください。より広い画面が必要です。"
+  },
+  "webgl": {
+    "title": "ハードウェアアクセラレーションが必要です",
+    "body": "notefall は落ちてくるノートを WebGL で描画するため、ブラウザのハードウェアアクセラレーションを有効にする必要があります。",
+    "howToTitle": "有効にする方法",
+    "chromeLabel": "Chrome / Edge:",
+    "chromeSetting": "使用可能な場合はグラフィックアクセラレーションを使用する",
+    "firefoxLabel": "Firefox:",
+    "firefoxSetting": "推奨のパフォーマンス設定を使用する",
+    "safariLabel": "Safari:",
+    "safariSetting": "WebGL",
+    "reload": "ページを再読み込み"
+  },
+  "pageLoader": {
+    "loading": "読み込み中"
+  },
+  "loading": {
+    "title": "ピアノ音源を読み込み中",
+    "note": "初回読み込み時は約77MBの高音質サンプルを取得します。次回以降のセッションはキャッシュされます。"
+  }
+}

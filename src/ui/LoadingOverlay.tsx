@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 import { useStore } from '../store'
 
 /**
@@ -10,6 +12,7 @@ import { useStore } from '../store'
  * destructive canvas operations during load.
  */
 export function LoadingOverlay() {
+  const { t } = useTranslation('screens')
   const loadStatus = useStore((s) => s.loadStatus)
   if (loadStatus.state !== 'loading') return null
   const pct =
@@ -20,7 +23,7 @@ export function LoadingOverlay() {
       <div className="flex w-72 flex-col gap-3 rounded-md border border-sky-500/40 bg-black/55 px-5 py-4 shadow-lg backdrop-blur-md">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-neutral-100">
-            Loading piano samples
+            {t('loading.title')}
           </span>
           <span className="font-mono text-xs tabular-nums text-sky-300">
             {Math.round(pct)}%
@@ -33,7 +36,7 @@ export function LoadingOverlay() {
           />
         </div>
         <div className="text-[11px] text-neutral-500">
-          The first load fetches ~77MB of high-quality samples; subsequent sessions are cached.
+          {t('loading.note')}
         </div>
       </div>
     </div>

@@ -1,0 +1,100 @@
+{
+  "editor": {
+    "show": "タイムラインエディターを表示",
+    "hide": "タイムラインエディターを隠す",
+    "title": "タイムラインエディター",
+    "resizeLanes": "ドラッグでレーンの高さを変更",
+    "resizeAria": "タイムラインエディターの高さを変更"
+  },
+  "follow": {
+    "stop": "再生ヘッドの追従を停止",
+    "start": "再生中に再生ヘッドを追従",
+    "label": "追従"
+  },
+  "empty": {
+    "prompt": "曲が読み込まれていません — .mid / .nfz ファイルをドロップするか、以下から選んでください",
+    "openFile": "ファイルを開く…",
+    "record": "録音",
+    "demoSongs": "デモ曲",
+    "demoSongsAria": "デモ曲"
+  },
+  "error": {
+    "couldNotOpenProjectTitle": "プロジェクトを開けませんでした",
+    "couldNotLoadDemoTitle": "デモを読み込めませんでした"
+  },
+  "lane": {
+    "midi": "MIDI",
+    "speed": "速度",
+    "audio": "オーディオ",
+    "pins": "ピン",
+    "pinsLabel": "ピン",
+    "speedLabel": "速度",
+    "options": "レーンのオプション",
+    "mute": "ミュート",
+    "unmute": "ミュート解除",
+    "resizeLanes": "ドラッグでレーンの高さを変更",
+    "decoding": "デコード中…"
+  },
+  "context": {
+    "volume": "音量",
+    "mute": "ミュート",
+    "unmute": "ミュート解除",
+    "resetToUnity": "0 dB にリセット",
+    "removeAudio": "オーディオを削除"
+  },
+  "speed": {
+    "automationAria": "MIDI速度オートメーション",
+    "automationTitle": "クリックでブレークポイントを追加 · ドラッグで移動 · 右クリックで削除 · 中間点上でスクロールしてカーブを調整",
+    "breakpointTitle": "{{time}}秒で {{value}}× — ダブルクリックでリセット · 右クリックで削除",
+    "curveTitle": "カーブ {{curvature}} — ドラッグまたはスクロールで曲げる · 右クリックで直線に戻す"
+  },
+  "trim": {
+    "drag": "ドラッグでトリミング",
+    "midiHead": "MIDIの先頭をトリミング",
+    "midiTail": "MIDIの末尾をトリミング",
+    "audioHead": "オーディオの先頭をトリミング",
+    "audioTail": "オーディオの末尾をトリミング"
+  },
+  "pin": {
+    "addAtPlayheadAria": "再生ヘッドにピンを追加",
+    "addAtPlayheadTitle": "再生ヘッドにピンを追加（P）",
+    "laneAria": "設定ピン",
+    "laneTitle": "ピンはある時点のビジュアル設定をキャプチャします — シーンは連続するピンの間でモーフィングします。空きスペースをクリックでピンを追加 · ピンをクリックで選択＋シーク · ドラッグで移動 · 右ドラッグで消去。",
+    "markerTitle": "{{time}} のピン — クリックで選択＋シーク · ドラッグで移動 · 右ドラッグで消去"
+  },
+  "ruler": {
+    "seekAria": "ルーラー — クリックでビュー内をシーク",
+    "seekTitle": "ドラッグでシーク · ダブルクリックでフィット",
+    "resetZoomAria": "ズームをリセット",
+    "resetZoomTitle": "ズームをリセット"
+  },
+  "clip": {
+    "syncTitle": "ドラッグで同期 — オフセット {{offset}}秒"
+  },
+  "minimap": {
+    "panAria": "ミニマップ — ドラッグでパン",
+    "panTitle": "ドラッグで表示範囲をパン",
+    "zoomToEnable": "ズームインするとパンできます",
+    "resizeFromLeft": "表示範囲を左から変更",
+    "resizeFromRight": "表示範囲を右から変更"
+  },
+  "velocityCurve": {
+    "label": "ベロシティカーブ"
+  },
+  "transport": {
+    "rewindToStart": "先頭に巻き戻し",
+    "rewind10": "10秒戻す",
+    "forward10": "10秒進める",
+    "play": "再生",
+    "pause": "一時停止",
+    "enableLoop": "ループを有効化",
+    "disableLoop": "ループを無効化",
+    "volume": "音量",
+    "speed": "速度",
+    "playbackSpeed": "再生速度",
+    "resetCameraView": "カメラビューをリセット",
+    "enterFullscreen": "全画面表示にする",
+    "exitFullscreen": "全画面表示を解除",
+    "seek": "シーク"
+  }
+}

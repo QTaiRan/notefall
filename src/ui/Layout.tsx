@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { DropZone } from 'react-aria-components'
 import { Toolbar } from './Toolbar'
 import { Inspector } from './Inspector'
@@ -63,6 +64,7 @@ function PinTargetSync() {
 }
 
 export function Layout() {
+  const { t } = useTranslation('dialogs')
   const transport = useStore((s) => s.transport)
   useGlobalShortcuts()
 
@@ -218,8 +220,11 @@ export function Layout() {
           const result = await openProjectFromFile(file)
           if (result.kind === 'error') {
             void showAlert({
-              title: 'Could not open project',
-              message: `"${fileItem.name}" could not be loaded.\n\n${result.message}`,
+              title: t('drop.couldNotOpenProjectTitle'),
+              message: t('drop.couldNotOpenProjectMessage', {
+                name: fileItem.name,
+                detail: result.message,
+              }),
               tone: 'error',
             })
           }
@@ -238,8 +243,11 @@ export function Layout() {
             store.setTransport('stopped')
           } catch (err) {
             void showAlert({
-              title: 'Could not load MIDI',
-              message: `"${fileItem.name}" could not be parsed.\n\n${err instanceof Error ? err.message : String(err)}`,
+              title: t('drop.couldNotLoadMidiTitle'),
+              message: t('drop.couldNotLoadMidiMessage', {
+                name: fileItem.name,
+                detail: err instanceof Error ? err.message : String(err),
+              }),
               tone: 'error',
             })
           }
@@ -250,7 +258,7 @@ export function Layout() {
           const result = await importUserAudio(file)
           if (result.kind === 'error') {
             void showAlert({
-              title: result.title ?? 'Could not load audio',
+              title: result.title ?? t('drop.couldNotLoadAudioTitle'),
               message: result.message,
               tone: 'error',
             })
@@ -261,8 +269,8 @@ export function Layout() {
         // silently ignoring the drop. Users were left wondering whether
         // the drop registered at all.
         void showAlert({
-          title: 'Unsupported file type',
-          message: `"${fileItem.name}" is not a supported format. Drop a .nfz project, .mid / .midi, or .mp3 / .wav audio file.`,
+          title: t('drop.unsupportedTitle'),
+          message: t('drop.unsupportedMessage', { name: fileItem.name }),
           tone: 'error',
         })
       }}
@@ -294,7 +302,7 @@ export function Layout() {
         className="pointer-events-none fixed inset-0 z-50 hidden items-center justify-center bg-sky-500/10 backdrop-blur-sm group-data-[drop-target]/dropzone:flex"
       >
         <div className="rounded-md border border-sky-500/40 bg-black/55 px-5 py-3 text-sm font-medium text-sky-100 shadow-lg backdrop-blur-md">
-          Drop to load (.mid / .midi / .nfz / .mp3 / .wav)
+          {t('drop.indicator')}
         </div>
       </div>
     </DropZone>

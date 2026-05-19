@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import i18n from '../i18n'
 import { togglePlayback } from '../audio/playback'
 import { toggleRecord } from '../audio/recordControl'
 import { openProject, saveProject, saveProjectAs } from '../projects/actions'
@@ -116,7 +117,7 @@ export function useGlobalShortcuts(): void {
       void action().then((result) => {
         if (result.kind === 'error') {
           void showAlert({
-            title: 'Could not save project',
+            title: i18n.t('dialogs:shortcut.couldNotSaveTitle'),
             message: result.message,
             tone: 'error',
           })
@@ -155,7 +156,7 @@ export function useGlobalShortcuts(): void {
       void openProject().then((result) => {
         if (result.kind === 'error') {
           void showAlert({
-            title: result.title ?? 'Could not open file',
+            title: result.title ?? i18n.t('dialogs:shortcut.couldNotOpenFileTitle'),
             message: result.message,
             tone: 'error',
           })

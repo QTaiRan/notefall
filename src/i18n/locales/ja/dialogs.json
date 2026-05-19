@@ -1,0 +1,87 @@
+{
+  "confirm": {
+    "defaultConfirm": "OK",
+    "defaultCancel": "キャンセル"
+  },
+  "alert": {
+    "acknowledge": "OK"
+  },
+  "export": {
+    "ariaLabel": "書き出し設定",
+    "title": "書き出し",
+    "unsupported": "このブラウザーでは動画の書き出しを利用できません。音声の書き出しは利用できます。",
+    "format": {
+      "label": "形式",
+      "videoAudio": "動画＋音声（MP4）",
+      "videoOnly": "動画のみ（MP4・無音）",
+      "audioOnly": "音声のみ（WAV）"
+    },
+    "resolution": "解像度",
+    "fps": "フレームレート",
+    "fps30": "30 fps",
+    "fps60": "60 fps",
+    "quality": "画質",
+    "bitrateNote": "動画ビットレート {{mbps}} Mbps。「高」はエッジと光彩をよりきれいにするためにビットレートを1.5倍にします。それ以外は同じです。",
+    "estimatedSize": "推定サイズ",
+    "estimatedSizeValue": "約{{mb}} MB",
+    "playSoundOnComplete": "完了時に音を鳴らす",
+    "test": "テスト",
+    "cancel": "キャンセル",
+    "submit": "書き出し"
+  },
+  "progress": {
+    "note": "少し時間がかかる場合があります。タブを閉じないでください。",
+    "cancel": "キャンセル",
+    "eta": "残り{{eta}}",
+    "etaSeconds": "{{count}}秒",
+    "etaMinutes": "{{min}}分{{sec}}秒"
+  },
+  "drop": {
+    "couldNotOpenProjectTitle": "プロジェクトを開けませんでした",
+    "couldNotOpenProjectMessage": "「{{name}}」を読み込めませんでした。\n\n{{detail}}",
+    "couldNotLoadMidiTitle": "MIDIを読み込めませんでした",
+    "couldNotLoadMidiMessage": "「{{name}}」を解析できませんでした。\n\n{{detail}}",
+    "couldNotLoadAudioTitle": "音声を読み込めませんでした",
+    "unsupportedTitle": "未対応のファイル形式です",
+    "unsupportedMessage": "「{{name}}」は対応していない形式です。.nfz プロジェクト、.mid / .midi、または .mp3 / .wav の音声ファイルをドロップしてください。",
+    "indicator": "ドロップして読み込み（.mid / .midi / .nfz / .mp3 / .wav）"
+  },
+  "noteMenu": {
+    "close": "閉じる",
+    "deleteOne": "ノートを削除",
+    "deleteMany": "{{count}}個のノートを削除",
+    "notesSelected": "{{count}}個のノートを選択中",
+    "velocity": "ベロシティ"
+  },
+  "fastForward": {
+    "rate": "2x"
+  },
+  "shortcut": {
+    "couldNotSaveTitle": "プロジェクトを保存できませんでした",
+    "couldNotOpenFileTitle": "ファイルを開けませんでした"
+  },
+  "actions": {
+    "discardTitle": "保存していない変更を破棄しますか？",
+    "discardMessage": "{{prefix}}保存していない編集内容は失われます。",
+    "cancel": "キャンセル",
+    "discardAndOpen": "破棄して開く",
+    "discardAndLoad": "破棄して読み込む",
+    "discardAndNew": "破棄して新規作成",
+    "openReplace": "ファイルを開くと現在のセッションが置き換えられます。",
+    "openReplaceNamed": "「{{name}}」を開くと現在のセッションが置き換えられます。",
+    "loadDemoReplace": "デモ「{{label}}」を読み込むと現在のセッションが置き換えられます。",
+    "newDiscardTitle": "保存していない変更を破棄しますか？",
+    "newDiscardMessage": "新しいプロジェクトを開始すると現在のセッションが破棄されます。保存していない編集内容は失われます。",
+    "couldNotLoadMidiTitle": "MIDIを読み込めませんでした",
+    "couldNotLoadMidiMessage": "「{{name}}」を解析できませんでした。\n\n{{detail}}",
+    "midiParseFailed": "MIDIの解析に失敗しました: {{detail}}",
+    "couldNotOpenNamed": "「{{name}}」を開けませんでした。ファイルが移動・削除されたか、アクセスが拒否された可能性があります。",
+    "couldNotLoadDemo": "デモを読み込めませんでした: {{detail}}",
+    "unsupportedFileType": "未対応のファイル形式です: 「{{name}}」。.nfz または .mid/.midi ファイルをドロップしてください。",
+    "loadMidiFirstTitle": "先にMIDIファイルを読み込んでください",
+    "loadMidiFirstMessage": "音声はMIDIトラックの伴奏としてのみ読み込めます。音声を読み込む前にMIDIファイルを開くか録音してください。",
+    "couldNotLoadAudioTitle": "音声を読み込めませんでした",
+    "couldNotLoadAudioMessage": "「{{name}}」をデコードできませんでした。\n\n{{detail}}",
+    "somethingWentWrong": "問題が発生しました"
+  }
+}
