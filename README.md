@@ -2,8 +2,11 @@
 
 A browser-based piano visualizer. Notes fall onto an 88-key keyboard while a MIDI
 plays — and you can play live, record, edit the MIDI right on the canvas, animate
-the look along the timeline, and export it all to video. Everything runs
-client-side; nothing is uploaded.
+the look along the timeline, and export it all to video.
+
+**Your MIDI, recordings, and projects never leave your device.** No accounts, no
+content uploads — everything is processed entirely client-side. (Anonymous,
+opt-out usage stats only.)
 
 <p align="center">
   <img src=".github/demo.gif" alt="notefall in action" width="800">

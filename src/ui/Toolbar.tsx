@@ -23,6 +23,12 @@ import { pauseSong, playSong } from '../audio/playback'
 import { recorder } from '../audio/recorder'
 import { addEmptyStopListener, COUNT_IN_BEATS, toggleRecord as toggleRecordControl } from '../audio/recordControl'
 import { ensureAudioReady } from '../audio/midiInput'
+import {
+  track,
+  isAnalyticsOptedOut,
+  setAnalyticsOptOut,
+} from '../usage'
+import { durationBucket, type EventProps } from '../usage/events'
 import { useMidiInput } from '../audio/useMidiInput'
 import { useRecorder } from '../audio/useRecorder'
 import { parseMidi } from '../midi/parse'
@@ -236,6 +242,15 @@ export function Toolbar() {
   // the second click actually deletes. Lets the user undo a mis-click by
   // simply waiting it out or hovering away.
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
+
+  // Analytics opt-out is persisted in localStorage; mirror it in React
+  // state so the Help-menu toggle reflects the current choice.
+  const [analyticsOff, setAnalyticsOff] = useState(isAnalyticsOptedOut)
+  const toggleAnalytics = () => {
+    const next = !analyticsOff
+    setAnalyticsOptOut(next)
+    setAnalyticsOff(next)
+  }
   const confirmingDeleteTimerRef = useRef<number | null>(null)
   useEffect(() => {
     return () => {
@@ -348,6 +363,7 @@ export function Toolbar() {
         // A finalized recording is a new song → clear stale pins /
         // clip length / speed from the previous one; keep the look.
         setSong(parsed, { resetTimeline: true })
+        track('song_opened', { source: 'recording' })
         // setSong now treats a song load as a fresh baseline (clean).
         // A recording is unsaved work though — flip dirty so the user
         // gets the beforeunload prompt if they try to close without
@@ -510,6 +526,29 @@ export function Toolbar() {
     const title = isAudioOnly ? 'Exporting audio' : 'Exporting video'
     setExportState({ title, phaseLabel: 'Preparing', progress: 0, etaSeconds: null })
 
+    const exportFormat = isAudioOnly
+      ? 'wav'
+      : values.format === 'video-audio'
+        ? 'mp4_av'
+        : 'mp4_video'
+    const exportProps: EventProps = isAudioOnly
+      ? { format: exportFormat }
+      : {
+          format: exportFormat,
+          resolution: values.resolution,
+          fps: values.fps,
+          quality: values.quality,
+        }
+    track('export_started', exportProps)
+    const finishExport = (outcome: string) =>
+      track('export_finished', {
+        ...exportProps,
+        outcome,
+        duration: durationBucket(
+          (performance.now() - exportStartedAtRef.current) / 1000,
+        ),
+      })
+
     try {
       const fileName = buildExportFileName(values)
 
@@ -542,12 +581,17 @@ export function Toolbar() {
           },
         })
         if (result.kind === 'error') {
+          finishExport(abort.signal.aborted ? 'cancelled' : 'error')
           reportError('Could not export audio', result.message)
-        } else if (result.kind === 'ok' && values.playSoundOnComplete) {
-          playExportCompleteChime()
+        } else {
+          finishExport('ok')
+          if (result.kind === 'ok' && values.playSoundOnComplete) {
+            playExportCompleteChime()
+          }
         }
       } else {
         if (!videoExportSupported) {
+          finishExport('unsupported')
           reportError(
             'Video export not supported',
             'Your browser is missing the WebCodecs API. Use Chrome, Edge, or Safari 16.4+ to export video.',
@@ -581,14 +625,19 @@ export function Toolbar() {
           },
         })
         if (result.kind === 'error') {
+          finishExport(abort.signal.aborted ? 'cancelled' : 'error')
           reportError('Could not export video', result.message)
         } else if (result.kind === 'unsupported') {
+          finishExport('unsupported')
           reportError(
             'Video export not supported',
             'Your browser is missing the WebCodecs API.',
           )
-        } else if (result.kind === 'ok' && values.playSoundOnComplete) {
-          playExportCompleteChime()
+        } else {
+          finishExport('ok')
+          if (result.kind === 'ok' && values.playSoundOnComplete) {
+            playExportCompleteChime()
+          }
         }
       }
     } finally {
@@ -1159,6 +1208,21 @@ export function Toolbar() {
                 className={menuItemClass}
               >
                 <span>View on GitHub</span>
+              </MenuItem>
+              <Separator className="my-1 h-px bg-neutral-800" />
+              <MenuItem
+                onAction={toggleAnalytics}
+                textValue="Toggle anonymous usage analytics"
+                className={menuItemClass}
+              >
+                <div className="flex flex-col gap-0.5">
+                  <span>
+                    {analyticsOff ? '☐' : '☑'} Share anonymous usage stats
+                  </span>
+                  <span className="text-[10px] leading-tight text-neutral-500">
+                    Counts only — never your music, files, or any content.
+                  </span>
+                </div>
               </MenuItem>
             </Menu>
           </Popover>

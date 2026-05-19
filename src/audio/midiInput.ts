@@ -1,5 +1,6 @@
 import * as Tone from 'tone'
 import { audioEngine } from './engine'
+import { markLivePlay } from '../usage'
 
 export type MidiDeviceInfo = {
   id: string
@@ -150,6 +151,7 @@ class MidiInputManager {
     // Out of MIDI range after transpose → silently drop. Common when the
     // user's keyboard already covers the extreme range and they shift it.
     if (transposed < 0 || transposed > 127) return
+    markLivePlay('midi')
     // Same-pitch retrigger: release the previous voice first to avoid the
     // stuck-note state where the second Note Off only releases one of two
     // overlapping voices.

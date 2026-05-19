@@ -21,6 +21,7 @@
     "clsx": "^2.1.1",
     "fflate": "^0.8.2",
     "mp4-muxer": "^5.2.2",
+    "posthog-js": "^1.374.2",
     "react": "^18.3.1",
     "react-aria-components": "^1.4.1",
     "react-dom": "^18.3.1",

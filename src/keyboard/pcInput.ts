@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import * as Tone from "tone";
 import { audioEngine } from "../audio/engine";
+import { markLivePlay } from "../usage";
 import { useStore } from "../store";
 
 // PC keyboard → MIDI mapping. ZXCV/ASDF rows = lower octave (white/sharps),
@@ -49,6 +50,7 @@ export function usePcKeyboardInput(ensureAudio: () => Promise<boolean>) {
       const transpose = useStore.getState().settings.transpose;
       const midi = baseMidi + transpose;
       if (midi < 0 || midi > 127) return;
+      markLivePlay("pc_keyboard");
 
       if (Tone.getContext().state !== "running") {
         try {

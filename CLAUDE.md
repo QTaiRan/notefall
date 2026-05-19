@@ -1,6 +1,6 @@
 # notefall
 
-Browser-based piano visualizer. Notes fall onto an 88-key keyboard while a MIDI plays; users can also play live (touch / mouse / PC keyboard / Web MIDI), record, and edit MIDI directly on the canvas. All client-side. PolyForm Shield 1.0.0.
+Browser-based piano visualizer. Notes fall onto an 88-key keyboard while a MIDI plays; users can also play live (touch / mouse / PC keyboard / Web MIDI), record, and edit MIDI directly on the canvas. All content (MIDI / recordings / projects / audio) is processed client-side and never uploaded; the **only** outbound data is anonymous, opt-out usage analytics (see `src/usage/`). PolyForm Shield 1.0.0.
 
 ## Stack
 
@@ -201,7 +201,7 @@ Zip wrapper present from day 1 even with only `manifest.json`, so audio-sync (fu
 
 **Toolbar File menu** consolidates New / Open / Open Recent ▸ / Save / Save As / Open MIDI / Demo Songs. Disables during recording. Open MIDI replaces just the song; Open Project replaces the whole session. Open Recent submenu hides when no recents OR FSA unavailable.
 
-**Help menu** opens GitHub issue templates with `&environment=<encoded>` URL-prefilling browser/viewport/FSA info only — never user content.
+**Help menu** opens GitHub issue templates with `&environment=<encoded>` URL-prefilling browser/viewport/FSA info only — never user content. Also hosts the analytics opt-out toggle (see Analytics).
 
 **Global shortcuts** (`useGlobalShortcuts.ts`) for `Cmd+O` / `Cmd+S` / `Cmd+Shift+S` / Space wire on **capture phase** to beat browser native dialogs and any focused react-aria button.
 
@@ -267,6 +267,19 @@ Single function `renderSongVideo(song, settings, options)` produces a complete M
 `ExportSettingsDialog` — single configuration form with format radio (Video+audio / Video only / Audio only), resolution / fps / quality (when video), and an estimated-size readout. Defaults persist across the session via `Toolbar`'s `exportDefaults` state. Dismissable; no in-flight work to lose.
 
 `ExportProgressModal` — shared by all three export paths. Shows title, phase label, progress bar, percentage, and ETA (`elapsed × (1/progress - 1)`, suppressed below 5% progress so the readout doesn't snap from a wildly wrong huge number). Non-dismissable; Cancel button aborts the controller.
+
+## Analytics (`src/usage/`)
+
+Anonymous, opt-out usage analytics via **PostHog EU Cloud**. The only outbound data in the whole app; the "nothing is uploaded" promise is now scoped to *content* (MIDI / recordings / projects / audio), which is still never sent.
+
+- **The directory is deliberately `src/usage/`, NOT `src/analytics/`.** Ad/privacy blockers (uBlock, Brave, EasyPrivacy) block any request whose path contains `analytics` / `tracking` / `telemetry` / `metrics` / `beacon` etc. with `ERR_BLOCKED_BY_CLIENT`. In Vite dev, modules are served by source path, so a `src/analytics/` file is blocked outright — and since it's statically imported into `store.ts` (the earliest critical path) that **white-screens the entire app** for anyone with a blocker. Do NOT rename this back to a blocked word. PostHog's own SDK/network (dynamic `import('posthog-js')` + `eu.i.posthog.com`) is still blockable, but that's caught (`ph = null`) and only loses data — it never breaks the app.
+
+- **Hard invariant** (enforced in `index.ts` + documented in `events.ts`): only the closed event set in `events.ts` is sent; numeric magnitudes are **bucketed** (`noteBucket` / `durationBucket` / `pinCountBucket`) so a song can't be fingerprinted; never filenames/paths/free-text/error-message bodies. Mirrors the Help menu's existing "never user content" rule.
+- **`analyticsEnabled()` is the single gate**: needs a `VITE_POSTHOG_KEY` AND `import.meta.env.PROD` AND not `navigator.doNotTrack` AND not the persisted opt-out. Dev / local clones / no-key builds never even `import('posthog-js')` — true no-op. Re-checked on every `track()` so flipping DNT / opt-out mid-session takes effect with no reload.
+- **PostHog config**: EU host, `autocapture` + `capture_pageview` + session-recording all OFF, `person_profiles: 'identified_only'` (we never `identify()` → anonymous), `persistence: 'localStorage'` (no cookies → no consent banner, retention still works).
+- **Wiring**: `initAnalytics()` + `app_loaded` in `App.tsx` (capability flags only). Events fired at chokepoints: `store.ts` (`playback_*`, `note_edited` — one per committed `applySongEdit`, no op label; `undo`/`redo`; `settings_pin_added`/`settings_reset`), `recordControl.ts`, `projects/actions.ts` (`song_opened` with a `SongSource` enum, `project_*`, `error_surfaced` with a context enum — no message text), Toolbar export handlers (`export_started`/`export_finished` with format/res/fps/quality + outcome), and `markLivePlay()` (deduped once per input type per session) from `Keyboard.tsx` / `pcInput.ts` / `midiInput.ts`.
+- **Opt-out**: `nf:analytics-optout` in localStorage; Help-menu toggle (`Toolbar.tsx`) mirrors it. `setAnalyticsOptOut` also calls PostHog `opt_in/out_capturing`.
+- **Env**: `VITE_POSTHOG_KEY` / `VITE_POSTHOG_HOST` (default `https://eu.i.posthog.com`) in `.env.example` / `.env.production`. Blank key ⇒ analytics absent.
 
 ## License
 

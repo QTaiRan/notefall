@@ -3,6 +3,7 @@ import { scheduleCountIn, type CountInHandle } from './click'
 import { ensureAudioReady } from './midiInput'
 import { recorder } from './recorder'
 import { useStore } from '../store'
+import { track } from '../usage'
 import type { ParsedSong } from '../midi/types'
 
 /**
@@ -69,6 +70,7 @@ export async function toggleRecord(): Promise<void> {
   if (recorder.getState() === 'recording') {
     const wasEmpty = recorder.getCurrentEventCount() === 0
     recorder.stop()
+    track('record_finished', { outcome: wasEmpty ? 'empty' : 'saved' })
     if (wasEmpty) {
       // Nothing was captured — put the user's previous song back so
       // an accidental Record press isn't a silent way to lose work.
@@ -87,6 +89,7 @@ export async function toggleRecord(): Promise<void> {
   if (activeCountIn) {
     activeCountIn.cancel()
     activeCountIn = null
+    track('record_finished', { outcome: 'cancelled_countin' })
     useStore.getState().setCountInBeat(0)
     // Cancelled before any recording happened; restore for the same
     // reason we do on empty stop — pressing Record then bailing out
@@ -127,6 +130,8 @@ export async function toggleRecord(): Promise<void> {
     audioEngine.unloadSong()
   }
   setTransport('stopped')
+
+  track('record_started', { count_in: countInEnabled })
 
   if (countInEnabled) {
     setCountInBeat(1)

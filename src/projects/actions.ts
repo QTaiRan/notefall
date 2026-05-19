@@ -4,6 +4,8 @@ import { serializeMidi } from '../midi/serialize'
 import { useCustomTexture } from '../notes/customTexture'
 import { useUserAudio } from '../audio/userAudio'
 import { useStore } from '../store'
+import { track } from '../usage'
+import type { SongSource } from '../usage/events'
 import { showConfirm } from '../ui/confirm'
 import {
   ensureExtension,
@@ -134,11 +136,16 @@ async function confirmDiscardIfDirty(messagePrefix: string, confirmLabel: string
  * show the filename, but `currentFile` stays null since `Save` /
  * `Save As` always produce `.nfz`, never `.mid`.
  */
-async function applyOpenedMidi(buf: ArrayBuffer, name: string): Promise<ActionResult> {
+async function applyOpenedMidi(
+  buf: ArrayBuffer,
+  name: string,
+  source: SongSource,
+): Promise<ActionResult> {
   let parsed
   try {
     parsed = await parseMidi(buf, name)
   } catch (e) {
+    track('error_surfaced', { context: 'midi_parse' })
     return {
       kind: 'error',
       title: 'Could not load MIDI',
@@ -161,14 +168,20 @@ async function applyOpenedMidi(buf: ArrayBuffer, name: string): Promise<ActionRe
   if (!existing) useStore.setState({ projectName: seedName })
   audioEngine.loadSong(parsed)
   useStore.getState().setTransport('stopped')
+  track('song_opened', { source })
   return { kind: 'ok' }
 }
 
-async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef | null): Promise<ActionResult> {
+async function applyOpenedProject(
+  buf: ArrayBuffer,
+  ref: FileRef | null,
+  source: SongSource,
+): Promise<ActionResult> {
   let project: Project
   try {
     project = await unpack(buf)
   } catch (e) {
+    track('error_surfaced', { context: 'project_open' })
     return { kind: 'error', message: describeError(e) }
   }
 
@@ -179,6 +192,7 @@ async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef | null): Promis
     try {
       song = await parseMidi(project.songMidi, project.name)
     } catch (e) {
+      track('error_surfaced', { context: 'midi_parse' })
       return { kind: 'error', message: `MIDI parse failed: ${describeError(e)}` }
     }
   }
@@ -217,6 +231,7 @@ async function applyOpenedProject(buf: ArrayBuffer, ref: FileRef | null): Promis
   // shouldn't pollute the recents menu.
   if (ref) void addRecent(ref)
 
+  track('song_opened', { source })
   return { kind: 'ok' }
 }
 
@@ -247,9 +262,9 @@ export async function openProject(): Promise<ActionResult> {
   if (!opened) return { kind: 'cancelled' }
 
   if (isMidiName(opened.ref.name)) {
-    return applyOpenedMidi(opened.buf, opened.ref.name)
+    return applyOpenedMidi(opened.buf, opened.ref.name, 'midi_file')
   }
-  return applyOpenedProject(opened.buf, opened.ref)
+  return applyOpenedProject(opened.buf, opened.ref, 'project')
 }
 
 /**
@@ -274,10 +289,10 @@ export async function openProjectFromFile(file: File): Promise<ActionResult> {
     return { kind: 'error', message: describeError(e) }
   }
   if (isMidiName(file.name)) {
-    return applyOpenedMidi(buf, file.name)
+    return applyOpenedMidi(buf, file.name, 'drop')
   }
   if (isProjectName(file.name)) {
-    return applyOpenedProject(buf, { name: file.name, handle: null })
+    return applyOpenedProject(buf, { name: file.name, handle: null }, 'drop')
   }
   return {
     kind: 'error',
@@ -302,13 +317,14 @@ export async function openRecent(entry: RecentEntry): Promise<ActionResult> {
   const opened = await openFromHandle(entry.handle)
   if (!opened) {
     removeRecent(entry.id)
+    track('error_surfaced', { context: 'project_open' })
     return {
       kind: 'error',
       message: `Could not open "${entry.name}". The file may have been moved, deleted, or permission denied.`,
     }
   }
 
-  return applyOpenedProject(opened.buf, opened.ref)
+  return applyOpenedProject(opened.buf, opened.ref, 'recent')
 }
 
 // ───────── Demo ─────────
@@ -333,9 +349,11 @@ export async function loadDemoProject(label: string, url: string): Promise<Actio
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     buf = await res.arrayBuffer()
   } catch (e) {
+    track('error_surfaced', { context: 'demo_load' })
     return { kind: 'error', message: `Could not load demo: ${describeError(e)}` }
   }
-  return applyOpenedProject(buf, null)
+  track('demo_loaded', { demo_label: label })
+  return applyOpenedProject(buf, null, 'demo')
 }
 
 // ───────── Save / Save As ─────────
@@ -356,6 +374,7 @@ export async function saveProject(): Promise<ActionResult> {
       useStore.getState().markClean()
       // Bump the recents entry so this just-saved file moves to the top.
       void addRecent(s.currentFile)
+      track('project_saved', { mode: 'save' })
       return { kind: 'ok' }
     }
     // Handle stale (file moved, permission denied, etc.) — fall through.
@@ -375,12 +394,14 @@ export async function saveProjectAs(): Promise<ActionResult> {
   try {
     ref = await showSaveAs(suggested, blob)
   } catch (e) {
+    track('error_surfaced', { context: 'save' })
     return { kind: 'error', message: describeError(e) }
   }
   if (!ref) return { kind: 'cancelled' }
   useStore.getState().setCurrentFile(ref)
   useStore.getState().markClean()
   void addRecent(ref)
+  track('project_saved', { mode: 'save_as' })
   return { kind: 'ok' }
 }
 
@@ -412,6 +433,7 @@ export async function newProject(): Promise<ActionResult> {
   // Same for accompaniment audio — a fresh project starts with no
   // user audio attached.
   useUserAudio.getState().clearFromLoad()
+  track('project_new')
   return { kind: 'ok' }
 }
 
@@ -440,11 +462,13 @@ export async function importUserAudio(file: File): Promise<ActionResult> {
   try {
     await useUserAudio.getState().setFromFile(file)
   } catch (e) {
+    track('error_surfaced', { context: 'import_audio' })
     return {
       kind: 'error',
       title: 'Could not load audio',
       message: `"${file.name}" could not be decoded.\n\n${describeError(e)}`,
     }
   }
+  track('custom_audio_imported')
   return { kind: 'ok' }
 }

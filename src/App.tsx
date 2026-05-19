@@ -3,6 +3,9 @@ import { Layout } from './ui/Layout'
 import { UnsupportedScreen } from './ui/UnsupportedScreen'
 import { WebGLUnavailableScreen } from './ui/WebGLUnavailableScreen'
 import { PageLoader } from './ui/PageLoader'
+import { initAnalytics, track } from './usage'
+import { hasFileSystemAccess } from './projects/io'
+import { isVideoExportSupported } from './export/renderVideo'
 
 // Below this width the full UI (viewport + inspector + transport overlay)
 // does not fit, so a fallback is shown. Matches Tailwind's `lg` breakpoint.
@@ -58,6 +61,24 @@ export function App() {
   useEffect(() => {
     const t = window.setTimeout(() => setAppReady(true), SPLASH_HOLD_MS)
     return () => clearTimeout(t)
+  }, [])
+
+  // One anonymous load event with capability flags only — lets us see
+  // how many visitors hit the WebGL / small-screen fallback vs. the
+  // real app. No content, no identifiers. Fires once per session.
+  useEffect(() => {
+    initAnalytics().then(() => {
+      track('app_loaded', {
+        webgl: webglAvailable,
+        viewport_ok: window.innerWidth >= MIN_WIDTH_PX,
+        app_version: __APP_VERSION__,
+        fsa_supported: hasFileSystemAccess(),
+        video_export_supported: isVideoExportSupported(),
+        reduced_motion: window.matchMedia('(prefers-reduced-motion: reduce)')
+          .matches,
+      })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Render only one tree so the 3D Canvas / audio engine never initialise

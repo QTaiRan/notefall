@@ -2,6 +2,7 @@ import { useMemo, useRef, useEffect, useCallback } from "react";
 import * as THREE from "three";
 import * as Tone from "tone";
 import { resolveTrackColorHex } from "../notes/trackColor";
+import { markLivePlay } from "../usage";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import {
@@ -356,6 +357,7 @@ export function Keyboard() {
       if (e.nativeEvent.button === 1) return;
       e.stopPropagation();
       const id = e.pointerId;
+      markLivePlay(e.nativeEvent.pointerType === "touch" ? "touch" : "mouse");
 
       // Release implicit pointer capture (touch sets it automatically) so
       // pointerEnter on sibling keys fires while dragging.

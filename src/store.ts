@@ -9,6 +9,8 @@ import {
   isAnimatableKey,
 } from './midi/settingsKeyframes'
 import { audioEngine } from './audio/engine'
+import { track } from './usage'
+import { pinCountBucket } from './usage/events'
 import type { FileRef } from './projects/types'
 import {
   DEFAULT_VELOCITY_CURVE,
@@ -974,7 +976,14 @@ export const useStore = create<AppState>((set) => ({
   },
 
   transport: 'stopped',
-  setTransport: (transport) => set({ transport }),
+  setTransport: (transport) =>
+    set((state) => {
+      if (state.transport === transport) return state
+      if (transport === 'playing') track('playback_started')
+      else if (transport === 'paused') track('playback_paused')
+      else track('playback_stopped')
+      return { transport }
+    }),
 
   currentTime: 0,
   setCurrentTime: (currentTime) => set({ currentTime }),
@@ -1044,6 +1053,11 @@ export const useStore = create<AppState>((set) => ({
       const history = state.editHistory.concat({ kind: 'song', before: state.song })
       if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
       audioEngine.updateSong(computed)
+      // One per committed gesture (applySongEdit is the single undo-
+      // pushing chokepoint; in-flight drag frames go through
+      // setSongPreview and are deliberately not counted). Count only —
+      // no op label, no note data.
+      track('note_edited')
       // Re-snapshot lastNoteParams so post-edit values (resize, velocity
       // change) carry over to the next new note even if the user later
       // deselects.
@@ -1097,6 +1111,7 @@ export const useStore = create<AppState>((set) => ({
     // own end call (e.g. a slider whose pointercancel didn't fire). Most
     // gestures already commit themselves; this is the safety net.
     endSettingsEdit()
+    if (useStore.getState().editHistory.length > 0) track('undo')
     // Custom-texture restore is async (TextureLoader / ImageDecoder), so
     // it's dispatched OUTSIDE set(): we capture the current snapshot
     // synchronously, swap stacks synchronously, then kick off the
@@ -1187,6 +1202,7 @@ export const useStore = create<AppState>((set) => ({
   },
   redoEdit: () => {
     endSettingsEdit()
+    if (useStore.getState().editFuture.length > 0) track('redo')
     {
       const peek = useStore.getState().editFuture
       if (peek.length > 0) {
@@ -1373,6 +1389,7 @@ export const useStore = create<AppState>((set) => ({
         editT !== null
           ? curKfs.findIndex((p) => Math.abs(p.time - editT) < 1e-6)
           : -1
+      track('settings_reset', { scope: selIdx >= 0 ? 'pin' : 'base' })
       let settings: Settings
       if (selIdx >= 0) {
         // A pin is selected → reset ONLY that pin's snapshot to the
@@ -1441,6 +1458,7 @@ export const useStore = create<AppState>((set) => ({
       const next = without
         .concat({ time: t, settings: snapshot })
         .sort((a, b) => a.time - b.time)
+      track('settings_pin_added', { pin_count: pinCountBucket(next.length) })
       return {
         editingKeyframeTime: t,
         settings: { ...state.settings, settingsKeyframes: next },
