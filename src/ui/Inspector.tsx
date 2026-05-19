@@ -373,9 +373,25 @@ function PinEditingBanner() {
   // rAF-polled TL_audio playhead — the exact value `targetPinIndex`
   // resolves against, so the banner names the pin edits actually hit.
   useCurrentTime()
+  // No pins → base IS the whole look; nothing to disambiguate.
   if (keyframes.length === 0) return null
   const idx = targetPinIndex(keyframes)
-  if (idx < 0) return null
+  // Pins exist but the head is before the first one → edits land on
+  // the separate, editable BASE ("default look" the pre-first-pin
+  // region ramps from). Say so, so it's clear this is NOT a no-op.
+  if (idx < 0) {
+    return (
+      <div className="flex items-center gap-2 border-b border-sky-500/30 bg-sky-500/10 px-3 py-1.5">
+        <span
+          aria-hidden
+          className="h-2 w-2 shrink-0 rounded-full bg-sky-300"
+        />
+        <span className="flex-1 truncate text-[11px] text-sky-200">
+          Editing default look (before pin 1)
+        </span>
+      </div>
+    )
+  }
   const s = Math.max(0, keyframes[idx].time)
   const m = Math.floor(s / 60)
   const r = s - m * 60

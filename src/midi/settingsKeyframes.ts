@@ -255,6 +255,45 @@ function lowerIdx(kfs: readonly SettingsKeyframe[], t: number): number {
  * Returns a NEW object only when pins exist; otherwise returns `base`
  * by reference so unchanged consumers don't see spurious churn.
  */
+/**
+ * Pick the `{ from, to, u }` blend for time `t`. `kfs` must be sorted.
+ *
+ * - **Before the first pin** → ramp from the editable BASE (the
+ *   "default look", held separately from pins) into the first pin
+ *   over `[0, firstPin.time]`. Base acts as an implicit anchor at
+ *   t=0, so the region with no governing pin is driven by base —
+ *   that's what makes Inspector tweaks there visible (with no pin
+ *   targeted, edits land on base). If the first pin is at/≤0 there
+ *   is no pre-region, just that pin.
+ * - **After the last pin** → hold the last pin (automation tail
+ *   convention; that region still has a governing/target pin).
+ * - **Between two pins** → interpolate, eased by the left pin's
+ *   `curvature`.
+ */
+function pickBlend(
+  base: Settings,
+  kfs: readonly SettingsKeyframe[],
+  t: number,
+): { from: Partial<Settings>; to: Partial<Settings>; u: number } {
+  const last = kfs.length - 1
+  const firstT = kfs[0].time
+  if (t >= kfs[last].time) {
+    return { from: kfs[last].settings, to: kfs[last].settings, u: 1 }
+  }
+  if (t <= firstT) {
+    if (firstT > 0) {
+      return { from: base, to: kfs[0].settings, u: Math.max(0, t) / firstT }
+    }
+    return { from: kfs[0].settings, to: kfs[0].settings, u: 0 }
+  }
+  const i = lowerIdx(kfs, t)
+  const a = kfs[i]
+  const b = kfs[i + 1]
+  const span = b.time - a.time
+  const raw = span > 0 ? (t - a.time) / span : 0
+  return { from: a.settings, to: b.settings, u: applyCurvature(raw, a.curvature ?? 0) }
+}
+
 export function resolveSettingsAt(
   base: Settings,
   keyframes: readonly SettingsKeyframe[] | undefined,
@@ -263,28 +302,7 @@ export function resolveSettingsAt(
   if (!keyframes || keyframes.length === 0) return base
 
   const kfs = sortByTime(keyframes)
-  const last = kfs.length - 1
-
-  // Pick the snapshot pair + blend factor.
-  let from: Partial<Settings>
-  let to: Partial<Settings>
-  let u: number
-  if (t <= kfs[0].time) {
-    from = to = kfs[0].settings
-    u = 0
-  } else if (t >= kfs[last].time) {
-    from = to = kfs[last].settings
-    u = 1
-  } else {
-    const i = lowerIdx(kfs, t)
-    const a = kfs[i]
-    const b = kfs[i + 1]
-    from = a.settings
-    to = b.settings
-    const span = b.time - a.time
-    const raw = span > 0 ? (t - a.time) / span : 0
-    u = applyCurvature(raw, a.curvature ?? 0)
-  }
+  const { from, to, u } = pickBlend(base, kfs, t)
 
   const out = { ...base } as Record<string, unknown>
 
@@ -344,26 +362,7 @@ export function resolveNoteTintAt(
     return { noteColor: base.noteColor, trackColors: base.trackColors }
   }
   const kfs = sortByTime(keyframes)
-  const last = kfs.length - 1
-  let from: Partial<Settings>
-  let to: Partial<Settings>
-  let u: number
-  if (t <= kfs[0].time) {
-    from = to = kfs[0].settings
-    u = 0
-  } else if (t >= kfs[last].time) {
-    from = to = kfs[last].settings
-    u = 1
-  } else {
-    const i = lowerIdx(kfs, t)
-    const a = kfs[i]
-    const b = kfs[i + 1]
-    from = a.settings
-    to = b.settings
-    const span = b.time - a.time
-    const raw = span > 0 ? (t - a.time) / span : 0
-    u = applyCurvature(raw, a.curvature ?? 0)
-  }
+  const { from, to, u } = pickBlend(base, kfs, t)
   const an = (from.noteColor as string | undefined) ?? base.noteColor
   const bn = (to.noteColor as string | undefined) ?? base.noteColor
   const at =
