@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Slider, SliderThumb, SliderTrack } from 'react-aria-components'
-import { useStore, targetPinIndex } from '../store'
+import { useStore } from '../store'
 import { audioEngine } from '../audio/engine'
 import { useUserAudio, type UserAudioPeaks } from '../audio/userAudio'
 import { useCurrentDisplayTime } from '../audio/useCurrentTime'
@@ -1459,15 +1459,10 @@ export function Timeline() {
   // Timeline pins (settings keyframes). `time` is TL_audio; the pin
   // strip converts to the editor's display-time x-axis itself.
   const settingsKeyframes = useStore((s) => s.settings.settingsKeyframes)
-  // The pin Inspector edits currently route to — purely playhead-
-  // derived (nearest past pin). `currentTime` (the rAF display-time
-  // hook) re-renders this as the head moves so the lane highlights
-  // the governing pin live; `targetPinIndex` itself reads the TL_audio
-  // playhead. `null` when no pins.
-  const pinEditTargetTime =
-    settingsKeyframes.length > 0
-      ? (settingsKeyframes[targetPinIndex(settingsKeyframes)]?.time ?? null)
-      : null
+  // The selected pin (what the Inspector edits) — explicit, set by
+  // clicking a pin / adding one. `null` = editing the base default.
+  // The lane glows this pin so the selection is visible.
+  const pinEditTargetTime = useStore((s) => s.editingKeyframeTime)
 
   // Per-note tint for the timeline MIDI clip: each note is coloured by
   // the pin-resolved tint at its OWN time, so the whole colour
@@ -1690,11 +1685,10 @@ export function Timeline() {
         e.preventDefault()
         s.addKeyframe(audioEngine.currentSongTime())
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        const kfs = s.settings.settingsKeyframes
-        const ti = targetPinIndex(kfs)
-        if (ti >= 0) {
+        // Delete the SELECTED pin (if any).
+        if (s.editingKeyframeTime !== null) {
           e.preventDefault()
-          s.removeKeyframe(kfs[ti].time)
+          s.removeKeyframe(s.editingKeyframeTime)
         }
       }
     }

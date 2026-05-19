@@ -33,6 +33,30 @@ import {
 } from 'react-aria-components'
 import type { Key } from 'react-aria-components'
 import { defaultSettings, useStore, type Settings } from '../store'
+import { isAnimatableKey } from '../midi/settingsKeyframes'
+
+/**
+ * Value an Inspector control should DISPLAY: the SELECTED pin's
+ * snapshot value when a pin is selected and the key is animatable,
+ * otherwise the base default. Mirrors `updateSettings`' write routing
+ * so a control always shows exactly what it edits (selecting a pin
+ * shows that pin; with none selected it shows the base default —
+ * never silently the wrong one).
+ */
+export function useEffectiveSetting<K extends keyof Settings>(
+  key: K,
+): Settings[K] {
+  return useStore((s) => {
+    const t = s.editingKeyframeTime
+    if (t !== null && isAnimatableKey(key)) {
+      const kf = s.settings.settingsKeyframes.find(
+        (p) => Math.abs(p.time - t) < 1e-6,
+      )
+      if (kf && key in kf.settings) return kf.settings[key] as Settings[K]
+    }
+    return s.settings[key]
+  })
+}
 
 /**
  * Wrap an atomic settings mutation in a begin/end pair so it produces
@@ -1033,7 +1057,7 @@ export function BoundSliderRow({
   step?: number
   format?: (v: number) => string
 }) {
-  const value = useStore((s) => s.settings[settingKey] as number)
+  const value = useEffectiveSetting(settingKey) as number
   return (
     <SliderRow
       label={label}
@@ -1055,7 +1079,7 @@ export function BoundSwitchRow({
   label: string
   settingKey: BooleanKeys
 }) {
-  const value = useStore((s) => s.settings[settingKey] as boolean)
+  const value = useEffectiveSetting(settingKey) as boolean
   return (
     <SwitchRow
       label={label}
@@ -1073,7 +1097,7 @@ export function BoundColorRow({
   label: string
   settingKey: StringKeys
 }) {
-  const value = useStore((s) => s.settings[settingKey] as string)
+  const value = useEffectiveSetting(settingKey) as string
   return (
     <ColorRow
       label={label}

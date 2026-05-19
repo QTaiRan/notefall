@@ -6,7 +6,7 @@ import {
   type SettingsKeyframe,
   pickAnimatable,
   resolveSettingsAt,
-  ANIMATABLE_KEYS,
+  isAnimatableKey,
 } from './midi/settingsKeyframes'
 import { audioEngine } from './audio/engine'
 import type { FileRef } from './projects/types'
@@ -634,36 +634,6 @@ function dirtyFor(s: {
 }): boolean {
   if (s.externalDirty) return true
   return computeContentHash(s) !== s.savedContentHash
-}
-
-/**
- * Which pin an Inspector edit / Reset / indicator targets when pins
- * exist. Purely playhead-derived (no manual selection): the pin
- * **active at the current playhead** — the nearest pin AT OR BEFORE
- * the head (`time <= playhead`), i.e. the pin that opens the segment
- * the head sits in / whose look is currently held. Editing that pin
- * changes "what you see" forward from here, which is what users
- * expect when tweaking an automation.
- *
- * Returns -1 when there are no pins OR the head is before every pin
- * (no PAST pin — a future pin must NOT be grabbed; the caller then
- * leaves the target empty: no banner, no highlight, base-only edit).
- * `settingsKeyframes` is kept time-sorted by the pin actions, but this
- * scans defensively rather than assuming it.
- */
-export function targetPinIndex(kfs: readonly SettingsKeyframe[]): number {
-  if (kfs.length === 0) return -1
-  const t = audioEngine.currentSongTime() + 1e-6
-  let idx = -1
-  let bestTime = -Infinity
-  for (let i = 0; i < kfs.length; i++) {
-    const time = kfs[i].time
-    if (time <= t && time > bestTime) {
-      bestTime = time
-      idx = i
-    }
-  }
-  return idx
 }
 
 /**
@@ -1315,33 +1285,44 @@ export const useStore = create<AppState>((set) => ({
   // end, or use the helpers in controls.tsx.
   updateSettings: (patch) =>
     set((state) => {
-      let settings = { ...state.settings, ...patch }
-      // Pin-edit indirection: once any pin exists the resolver shadows
-      // the base animatable settings, so a bare base edit would do
-      // nothing visible ("the Inspector can't be operated"). Instead
-      // mirror the animatable part of the patch into the pin the
-      // playhead is currently sitting in (the nearest past pin) so
-      // EVERY Inspector control keeps working unchanged and edits
-      // "what you see". The base is still updated too so the Inspector
-      // reflects the new value (harmless: animatable base is shadowed
-      // while pins exist).
+      // Pin-edit routing keyed to the SELECTED pin (`editingKeyframeTime`,
+      // set by clicking a pin / adding one — playhead-independent so the
+      // Inspector is deterministic and shows that pin):
+      //  - a pin is selected → animatable keys edit THAT pin's snapshot
+      //    ONLY; base (the separate, persistent "default look" the
+      //    pre-first-pin region uses) is left untouched. Non-animatable
+      //    keys (audio etc.) still go to base — pins never hold them.
+      //  - no pin selected → edit base = the default look.
+      // The Inspector mirrors this on the read side (see
+      // `useEffectiveSetting`) so the controls show what they edit.
       const kfs = state.settings.settingsKeyframes
-      if (kfs.length > 0) {
-        const animPatch: Record<string, unknown> = {}
-        for (const k of ANIMATABLE_KEYS) {
-          if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
-        }
-        if (Object.keys(animPatch).length > 0) {
-          const idx = targetPinIndex(kfs)
-          if (idx >= 0) {
-            const next = kfs.slice()
-            next[idx] = {
-              ...next[idx],
-              settings: { ...next[idx].settings, ...animPatch },
-            }
-            settings = { ...settings, settingsKeyframes: next }
+      const editT = state.editingKeyframeTime
+      const targetIdx =
+        editT !== null
+          ? kfs.findIndex((p) => Math.abs(p.time - editT) < 1e-6)
+          : -1
+      let settings: Settings
+      if (targetIdx >= 0) {
+        const basePatch: Record<string, unknown> = {}
+        const pinPatch: Record<string, unknown> = {}
+        for (const k of Object.keys(patch)) {
+          if (isAnimatableKey(k as keyof Settings)) {
+            pinPatch[k] = (patch as Record<string, unknown>)[k]
+          } else {
+            basePatch[k] = (patch as Record<string, unknown>)[k]
           }
         }
+        settings = { ...state.settings, ...basePatch }
+        if (Object.keys(pinPatch).length > 0) {
+          const next = kfs.slice()
+          next[targetIdx] = {
+            ...next[targetIdx],
+            settings: { ...next[targetIdx].settings, ...pinPatch },
+          }
+          settings = { ...settings, settingsKeyframes: next }
+        }
+      } else {
+        settings = { ...state.settings, ...patch }
       }
       // Inside a gesture (slider drag, color popover session, etc.)
       // every onChange would otherwise call `dirtyFor` → `hashSong`
@@ -1370,26 +1351,38 @@ export const useStore = create<AppState>((set) => ({
   // untouched — transport, and the timeline editor's clip length
   // (sync/trim), speed pins, lane layout and session prefs (see
   // `RESET_PRESERVED_KEYS`). The pins themselves are never wiped;
-  // additionally, when a pin is the current edit target, its *content*
-  // is reset to the default look (other pins' snapshots untouched) so
-  // "Reset" means "reset this pin" while pins exist.
+  // additionally, when a pin is SELECTED (`editingKeyframeTime`), only
+  // that pin's *content* is reset to the default look (other pins'
+  // snapshots and the base default untouched) so "Reset" means "reset
+  // this pin" while a pin is selected; with no pin selected it resets
+  // the base default look.
   resetSettings: () => {
     beginSettingsEdit()
     set((state) => {
-      const settings: Settings = { ...defaultSettings }
-      for (const k of RESET_PRESERVED_KEYS) {
-        ;(settings as Record<string, unknown>)[k as string] = state.settings[k]
-      }
-      const kfs = settings.settingsKeyframes
-      if (kfs.length > 0) {
-        const idx = targetPinIndex(kfs)
-        if (idx >= 0) {
-          const next = kfs.slice()
-          next[idx] = {
-            ...next[idx],
-            settings: pickAnimatable(defaultSettings),
-          }
-          settings.settingsKeyframes = next
+      const curKfs = state.settings.settingsKeyframes
+      const editT = state.editingKeyframeTime
+      const selIdx =
+        editT !== null
+          ? curKfs.findIndex((p) => Math.abs(p.time - editT) < 1e-6)
+          : -1
+      let settings: Settings
+      if (selIdx >= 0) {
+        // A pin is selected → reset ONLY that pin's snapshot to the
+        // default look. The base default and everything else are left
+        // exactly as-is (the separate default look is not clobbered).
+        const next = curKfs.slice()
+        next[selIdx] = {
+          ...next[selIdx],
+          settings: pickAnimatable(defaultSettings),
+        }
+        settings = { ...state.settings, settingsKeyframes: next }
+      } else {
+        // No pin selected → reset the base default look, confined to
+        // what the Inspector shows (RESET_PRESERVED_KEYS carried over,
+        // pins never wiped).
+        settings = { ...defaultSettings }
+        for (const k of RESET_PRESERVED_KEYS) {
+          ;(settings as Record<string, unknown>)[k as string] = state.settings[k]
         }
       }
       return {
@@ -1415,13 +1408,13 @@ export const useStore = create<AppState>((set) => ({
 
   editingKeyframeTime: null,
   selectKeyframe: (time) => {
-    // Just records which pin was clicked. It must NOT merge the pin's
-    // snapshot into base `settings`: base is the separate, editable
-    // "default look" (what the pre-first-pin region ramps from) and
-    // selecting a pin must never overwrite it. The caller seeks to the
-    // pin; the edit target / banner / lane highlight are all derived
-    // from the playhead (`targetPinIndex`), so the seek alone makes
-    // the clicked pin the live target.
+    // Sets the SELECTED pin — the explicit target the Inspector reads
+    // and writes (`useEffectiveSetting` / `updateSettings`), the banner
+    // names, and the lane glows. `null` deselects → the Inspector edits
+    // the separate base "default look" instead. It must NEVER merge the
+    // pin snapshot into base `settings`: base is held separately (it's
+    // what the pre-first-pin region ramps from) and selecting a pin
+    // must not overwrite it. The caller also seeks for visual context.
     set((state) =>
       state.editingKeyframeTime === time
         ? state

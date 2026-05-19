@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { useStore, defaultSettings, targetPinIndex, type Settings } from '../store'
-import { useCurrentTime } from '../audio/useCurrentTime'
+import { useStore, defaultSettings, type Settings } from '../store'
 import {
   BoundColorRow,
   BoundSliderRow,
@@ -12,6 +11,7 @@ import {
   SelectRow,
   SliderRow,
   VerticalSliderBands,
+  useEffectiveSetting,
 } from './controls'
 import { VelocityCurveEditor } from './VelocityCurveEditor'
 import { Button, FileTrigger, OverlayArrow, Tooltip, TooltipTrigger } from 'react-aria-components'
@@ -41,8 +41,8 @@ function atomicUpdate(patch: Partial<Settings>): void {
 
 // ── Camera section ───────────────────────────────────────────────────
 function CameraSection() {
-  const cameraPos = useStore((st) => st.settings.cameraPos)
-  const cameraLookAt = useStore((st) => st.settings.cameraLookAt)
+  const cameraPos = useEffectiveSetting('cameraPos')
+  const cameraLookAt = useEffectiveSetting('cameraLookAt')
   // Re-express the cartesian camera state as the seven knobs the user
   // actually thinks in terms of (orbit triple + pivot triple + FOV).
   const dx = cameraPos[0] - cameraLookAt[0]
@@ -150,7 +150,7 @@ function CameraSection() {
 
 // ── Theme section ────────────────────────────────────────────────────
 function ThemeSection() {
-  const themeColor = useStore((st) => st.settings.themeColor)
+  const themeColor = useEffectiveSetting('themeColor')
   return (
     <ColorRow
       label="Color"
@@ -171,8 +171,8 @@ function ThemeSection() {
 // ── Notes: track color rows ──────────────────────────────────────────
 function TrackColorRows() {
   const song = useStore((st) => st.song)
-  const trackColors = useStore((st) => st.settings.trackColors)
-  const noteColor = useStore((st) => st.settings.noteColor)
+  const trackColors = useEffectiveSetting('trackColors')
+  const noteColor = useEffectiveSetting('noteColor')
   const noteTracks =
     song?.tracks.map((t, idx) => ({ t, idx })).filter(({ t }) => t.hasNotes) ?? []
   if (noteTracks.length === 0) {
@@ -362,32 +362,27 @@ function PreDelayRow() {
   )
 }
 
-// Indicator of which pin the Inspector controls currently edit. Once
-// any pin exists, edits always route to the pin the playhead sits in
-// (the nearest past pin — see `targetPinIndex`); this banner names it
-// so the user always knows what they're changing. No "clear" action:
-// the target is purely playhead-derived, so it follows the head /
-// pin-clicks automatically — there is nothing to deselect.
+// Indicator of WHAT the Inspector controls currently edit: the
+// SELECTED pin (set by clicking a pin / adding one), or the base
+// "default look" when none is selected. The two are held separately —
+// editing a pin never touches the default. The "Default" button
+// deselects so the user can edit the default look (and back via a pin
+// click). With no pins at all there's nothing to disambiguate.
 function PinEditingBanner() {
   const keyframes = useStore((st) => st.settings.settingsKeyframes)
-  // rAF-polled TL_audio playhead — the exact value `targetPinIndex`
-  // resolves against, so the banner names the pin edits actually hit.
-  useCurrentTime()
-  // No pins → base IS the whole look; nothing to disambiguate.
+  const editingTime = useStore((st) => st.editingKeyframeTime)
   if (keyframes.length === 0) return null
-  const idx = targetPinIndex(keyframes)
-  // Pins exist but the head is before the first one → edits land on
-  // the separate, editable BASE ("default look" the pre-first-pin
-  // region ramps from). Say so, so it's clear this is NOT a no-op.
+  const idx =
+    editingTime !== null
+      ? keyframes.findIndex((p) => Math.abs(p.time - editingTime) < 1e-6)
+      : -1
+  // No pin selected → editing the separate, editable base default look.
   if (idx < 0) {
     return (
       <div className="flex items-center gap-2 border-b border-sky-500/30 bg-sky-500/10 px-3 py-1.5">
-        <span
-          aria-hidden
-          className="h-2 w-2 shrink-0 rounded-full bg-sky-300"
-        />
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-sky-300" />
         <span className="flex-1 truncate text-[11px] text-sky-200">
-          Editing default look (before pin 1)
+          Editing default look — click a pin to edit it
         </span>
       </div>
     )
@@ -405,6 +400,13 @@ function PinEditingBanner() {
       <span className="flex-1 truncate text-[11px] text-amber-200">
         Editing pin {idx + 1}/{keyframes.length} @ {stamp}
       </span>
+      <button
+        type="button"
+        onClick={() => useStore.getState().selectKeyframe(null)}
+        className="shrink-0 rounded bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-100 outline-none hover:bg-amber-500/35"
+      >
+        Default
+      </button>
     </div>
   )
 }

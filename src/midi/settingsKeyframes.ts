@@ -146,6 +146,20 @@ export const ANIMATABLE_KEYS: readonly (keyof Settings)[] = [
   ...ANIMATABLE_COLORMAP_KEYS,
 ]
 
+const ANIMATABLE_SET: ReadonlySet<string> = new Set(
+  ANIMATABLE_KEYS as readonly string[],
+)
+
+/**
+ * Is this settings key one a pin snapshots / animates? Drives the
+ * Inspector's "edit the selected pin vs. the base default" routing:
+ * animatable keys go to the targeted pin's snapshot, everything else
+ * (audio, etc.) always to base.
+ */
+export function isAnimatableKey(k: keyof Settings): boolean {
+  return ANIMATABLE_SET.has(k as string)
+}
+
 /**
  * Extract just the animatable subset of a Settings object — the
  * snapshot stored in a freshly-dropped pin. Never includes
