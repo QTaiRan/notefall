@@ -636,6 +636,41 @@ function dirtyFor(s: {
   return computeContentHash(s) !== s.savedContentHash
 }
 
+/**
+ * Which pin an Inspector edit / Reset targets when pins exist.
+ *
+ * - An explicitly-selected pin (`editingKeyframeTime`) always wins —
+ *   the user clicked it / the Clear button is showing.
+ * - Otherwise the pin **reflected at the current playhead** (nearest
+ *   by time) so editing a control changes "what you see" instead of
+ *   the shadowed base settings (which the resolver ignores once any
+ *   pin exists — the symptom being "the Inspector does nothing").
+ *
+ * Returns -1 when there are no pins (caller falls back to plain base
+ * editing — the original behaviour).
+ */
+function targetPinIndex(
+  kfs: readonly SettingsKeyframe[],
+  editingTime: number | null,
+): number {
+  if (kfs.length === 0) return -1
+  if (editingTime !== null) {
+    const i = kfs.findIndex((p) => Math.abs(p.time - editingTime) < 1e-6)
+    if (i >= 0) return i
+  }
+  const t = audioEngine.currentSongTime()
+  let best = -1
+  let bestDist = Infinity
+  for (let i = 0; i < kfs.length; i++) {
+    const d = Math.abs(kfs[i].time - t)
+    if (d < bestDist) {
+      bestDist = d
+      best = i
+    }
+  }
+  return best
+}
+
 export type TransportState = 'stopped' | 'playing' | 'paused'
 
 export type LoadStatus =
@@ -1200,66 +1235,25 @@ export const useStore = create<AppState>((set) => ({
   updateSettings: (patch) =>
     set((state) => {
       let settings = { ...state.settings, ...patch }
-      let editingKeyframeTime = state.editingKeyframeTime
-
-      // Animatable subset of this patch.
-      const animPatch: Record<string, unknown> = {}
-      for (const k of ANIMATABLE_KEYS) {
-        if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
-      }
-
-      if (Object.keys(animPatch).length > 0) {
-        const kfs = state.settings.settingsKeyframes ?? []
-
-        // DAW-style auto-keyframe: pins exist but none is explicitly
-        // selected, and this is a real Inspector gesture
-        // (`pendingSettingsDepth > 0`) — write the edit at the
-        // playhead so it's always visible, instead of editing the
-        // resolver-shadowed base invisibly. The `pendingSettingsDepth`
-        // gate is the crucial accidental-pin guard: camera orbit /
-        // dolly (CameraControls) and transport side-effects call
-        // `updateSettings` directly, OUTSIDE a begin/endSettingsEdit
-        // gesture, so navigation never spawns pins — only deliberate
-        // Inspector edits do. Update the pin under the head if one
-        // sits there (±ε); else drop a new pin capturing the resolved
-        // look so the curve doesn't jump, then stamp the change in.
-        // The whole drag stays one undo entry: the pin list lives in
-        // `settings` and the gesture's baseline (captured at
-        // beginSettingsEdit) predates the new pin.
-        if (
-          editingKeyframeTime === null &&
-          kfs.length > 0 &&
-          pendingSettingsDepth > 0
-        ) {
-          const t = Math.max(0, audioEngine.currentSongTime())
-          const hit = kfs.find((p) => Math.abs(p.time - t) < 1e-6)
-          if (hit) {
-            editingKeyframeTime = hit.time
-          } else {
-            const snapshot = pickAnimatable(
-              resolveSettingsAt(state.settings, kfs, t),
-            )
-            const created = kfs
-              .concat({ time: t, settings: snapshot })
-              .sort((a, b) => a.time - b.time)
-            settings = { ...settings, settingsKeyframes: created }
-            editingKeyframeTime = t
-          }
+      // Pin-edit indirection: once any pin exists the resolver shadows
+      // the base animatable settings, so a bare base edit would do
+      // nothing visible ("the Inspector can't be operated"). Instead
+      // mirror the animatable part of the patch into the pin the user
+      // is effectively editing — the explicitly-selected one, or the
+      // pin reflected at the playhead — so EVERY Inspector control
+      // keeps working unchanged and edits "what you see". The base is
+      // still updated too so the Inspector reflects the new value
+      // (harmless: animatable base is shadowed while pins exist).
+      const kfs = state.settings.settingsKeyframes
+      if (kfs.length > 0) {
+        const animPatch: Record<string, unknown> = {}
+        for (const k of ANIMATABLE_KEYS) {
+          if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
         }
-
-        // Pin-edit indirection: stamp the animatable patch into the
-        // target pin (the explicitly-selected one, or the playhead pin
-        // resolved just above). Keeps EVERY Inspector control working
-        // unchanged — it still edits "settings"; the store
-        // transparently also stamps the active pin so the Inspector
-        // reflects what the user changed (base drift is harmless since
-        // the resolver shadows base animatable keys once a pin exists).
-        if (editingKeyframeTime !== null) {
-          const target = editingKeyframeTime
-          const cur = settings.settingsKeyframes
-          const idx = cur.findIndex((p) => Math.abs(p.time - target) < 1e-6)
+        if (Object.keys(animPatch).length > 0) {
+          const idx = targetPinIndex(kfs, state.editingKeyframeTime)
           if (idx >= 0) {
-            const next = cur.slice()
+            const next = kfs.slice()
             next[idx] = {
               ...next[idx],
               settings: { ...next[idx].settings, ...animPatch },
@@ -1267,11 +1261,6 @@ export const useStore = create<AppState>((set) => ({
             settings = { ...settings, settingsKeyframes: next }
           }
         }
-      }
-
-      const changed: Partial<AppState> = { settings }
-      if (editingKeyframeTime !== state.editingKeyframeTime) {
-        changed.editingKeyframeTime = editingKeyframeTime
       }
       // Inside a gesture (slider drag, color popover session, etc.)
       // every onChange would otherwise call `dirtyFor` → `hashSong`
@@ -1282,10 +1271,10 @@ export const useStore = create<AppState>((set) => ({
       // gesture (atomic switch/select clicks) we still compute it
       // synchronously so the indicator flips immediately.
       if (pendingSettingsDepth > 0) {
-        return changed
+        return { settings }
       }
       return {
-        ...changed,
+        settings,
         dirty: dirtyFor({
           song: state.song,
           settings,
@@ -1298,13 +1287,33 @@ export const useStore = create<AppState>((set) => ({
   // the user's listening setup isn't lost when they reset the visual /
   // audio Inspector. The Reset button lives in the Inspector and is
   // expected to only affect what the Inspector shows.
+  //
+  // Pins are NEVER deleted by Reset (`settingsKeyframes` is part of
+  // Settings, so a naive `...defaultSettings` would wipe the whole
+  // automation). Instead, when pins exist, Reset clears the *content*
+  // of the pin the Inspector is editing (selected, else the one
+  // reflected at the playhead) back to the default look — leaving
+  // every pin in place and other pins' snapshots untouched.
   resetSettings: () => {
     beginSettingsEdit()
     set((state) => {
-      const settings = {
+      const kfs = state.settings.settingsKeyframes
+      let settings: Settings = {
         ...defaultSettings,
         volume: state.settings.volume,
         playbackRate: state.settings.playbackRate,
+        settingsKeyframes: kfs,
+      }
+      if (kfs.length > 0) {
+        const idx = targetPinIndex(kfs, state.editingKeyframeTime)
+        if (idx >= 0) {
+          const next = kfs.slice()
+          next[idx] = {
+            ...next[idx],
+            settings: pickAnimatable(defaultSettings),
+          }
+          settings = { ...settings, settingsKeyframes: next }
+        }
       }
       return {
         settings,
