@@ -2,6 +2,12 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import type { ParsedSong } from './midi/types'
 import type { SpeedPoint } from './midi/speedMap'
+import {
+  type SettingsKeyframe,
+  pickAnimatable,
+  resolveSettingsAt,
+  ANIMATABLE_KEYS,
+} from './midi/settingsKeyframes'
 import { audioEngine } from './audio/engine'
 import type { FileRef } from './projects/types'
 import {
@@ -343,6 +349,14 @@ export type Settings = {
   // pan or zoom) — those gestures clearly imply "show me something
   // other than the playhead".
   followPlayhead: boolean
+  // Timeline "pins": snapshot keyframes for animatable visual settings.
+  // Each pin captures the visual-continuous subset of settings at a
+  // timeline-time; the scene morphs between consecutive pins. Lives
+  // inside Settings (like `midiSpeedAutomation`) so it rides the
+  // normal persistence / dirty / undo / .nfz paths. See
+  // `midi/settingsKeyframes.ts`. Empty = no automation (resolver is a
+  // bit-for-bit identity early-return).
+  settingsKeyframes: SettingsKeyframe[]
 }
 
 export const defaultSettings: Settings = {
@@ -472,6 +486,7 @@ export const defaultSettings: Settings = {
   timelineAudioLaneRatio: 1,
   previewHighFps: false,
   followPlayhead: true,
+  settingsKeyframes: [],
 }
 
 /**
@@ -757,6 +772,32 @@ type AppState = {
    */
   pushCustomTextureSnapshot: (before: CustomTextureSnapshot) => void
 
+  // === Timeline pins (settings keyframes) =================================
+  // Timeline-time (seconds) of the pin the Inspector is currently
+  // editing, or null when editing the global base settings. When a pin
+  // is selected, `updateSettings` transparently stamps animatable
+  // patches into that pin's snapshot too — so every Inspector control
+  // keeps working unchanged while it edits "the pin".
+  editingKeyframeTime: number | null
+  // Select a pin for editing: loads its snapshot into the live base
+  // settings (so the Inspector reflects it) and marks it the edit
+  // target. Pass null to go back to editing base settings. Does NOT
+  // seek the transport — the timeline UI owns playhead movement.
+  selectKeyframe: (time: number | null) => void
+  // Drop a pin at `time`, capturing the *resolved* (interpolated)
+  // animatable settings there so inserting between pins doesn't jump.
+  // Selects the new pin. One undo entry.
+  addKeyframe: (time: number) => void
+  // Remove the pin at (closest to, within epsilon) `time`. Clears the
+  // edit target if it pointed at the removed pin.
+  removeKeyframe: (time: number) => void
+  // Move a pin from one timeline-time to another (drag). One undo
+  // entry per gesture — bracket the drag with begin/endSettingsEdit.
+  moveKeyframe: (from: number, to: number) => void
+  // Set the easing curvature of the segment STARTING at the pin at
+  // `time` (matches SpeedPoint.curvature semantics).
+  setKeyframeCurvature: (time: number, curvature: number) => void
+
   // === Project file persistence ============================================
   // The .nfz file currently associated with this session, or null when
   // the user is editing a fresh / never-saved project. `handle` (when
@@ -824,6 +865,7 @@ export const useStore = create<AppState>((set) => ({
       editHistory: [],
       editFuture: [],
       selection: new Set(),
+      editingKeyframeTime: null,
       // The freshly loaded MIDI becomes the new dirty baseline:
       // anything from this point reads as dirty, and an edit-then-
       // revert (add + delete, undo, etc.) returns to clean. Loading
@@ -1157,7 +1199,33 @@ export const useStore = create<AppState>((set) => ({
   // end, or use the helpers in controls.tsx.
   updateSettings: (patch) =>
     set((state) => {
-      const settings = { ...state.settings, ...patch }
+      let settings = { ...state.settings, ...patch }
+      // Pin-edit indirection: when a pin is the edit target, mirror the
+      // animatable part of the patch into that pin's snapshot too. This
+      // keeps EVERY Inspector control working unchanged — it still
+      // edits "settings"; the store transparently also stamps the
+      // active pin. Base values for animatable keys are shadowed by the
+      // resolver once any pin exists, so the base drift is harmless and
+      // it keeps the Inspector reflecting what the user just changed.
+      const editT = state.editingKeyframeTime
+      if (editT !== null) {
+        const animPatch: Record<string, unknown> = {}
+        for (const k of ANIMATABLE_KEYS) {
+          if (k in patch) animPatch[k as string] = (patch as Record<string, unknown>)[k as string]
+        }
+        if (Object.keys(animPatch).length > 0) {
+          const kfs = state.settings.settingsKeyframes
+          const idx = kfs.findIndex((p) => Math.abs(p.time - editT) < 1e-6)
+          if (idx >= 0) {
+            const next = kfs.slice()
+            next[idx] = {
+              ...next[idx],
+              settings: { ...next[idx].settings, ...animPatch },
+            }
+            settings = { ...settings, settingsKeyframes: next }
+          }
+        }
+      }
       // Inside a gesture (slider drag, color popover session, etc.)
       // every onChange would otherwise call `dirtyFor` → `hashSong`
       // (O(notes)) + JSON.stringify(settings). At 60fps on a multi-
@@ -1210,6 +1278,102 @@ export const useStore = create<AppState>((set) => ({
       const history = state.editHistory.concat({ kind: 'customTexture', before })
       if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT)
       return { editHistory: history, editFuture: [] }
+    }),
+
+  editingKeyframeTime: null,
+  selectKeyframe: (time) => {
+    if (time === null) {
+      set((state) =>
+        state.editingKeyframeTime === null ? state : { editingKeyframeTime: null },
+      )
+      return
+    }
+    // Load the pin's snapshot into the live base settings so the
+    // Inspector reflects what the pin looks like (Inspector reads base;
+    // see updateSettings' pin-edit indirection). One undo entry.
+    beginSettingsEdit()
+    set((state) => {
+      const kf = state.settings.settingsKeyframes.find(
+        (p) => Math.abs(p.time - time) < 1e-6,
+      )
+      if (!kf) return { editingKeyframeTime: time }
+      return {
+        editingKeyframeTime: time,
+        settings: { ...state.settings, ...kf.settings },
+      }
+    })
+    endSettingsEdit()
+  },
+  addKeyframe: (time) => {
+    beginSettingsEdit()
+    set((state) => {
+      const t = Math.max(0, time)
+      const kfs = state.settings.settingsKeyframes
+      // Capture the *resolved* look at `t` so inserting between two
+      // pins doesn't snap the scene.
+      const snapshot = pickAnimatable(resolveSettingsAt(state.settings, kfs, t))
+      const without = kfs.filter((p) => Math.abs(p.time - t) >= 1e-6)
+      const next = without
+        .concat({ time: t, settings: snapshot })
+        .sort((a, b) => a.time - b.time)
+      return {
+        editingKeyframeTime: t,
+        settings: { ...state.settings, settingsKeyframes: next },
+      }
+    })
+    endSettingsEdit()
+  },
+  removeKeyframe: (time) => {
+    beginSettingsEdit()
+    set((state) => {
+      const next = state.settings.settingsKeyframes.filter(
+        (p) => Math.abs(p.time - time) >= 1e-6,
+      )
+      if (next.length === state.settings.settingsKeyframes.length) return state
+      return {
+        settings: { ...state.settings, settingsKeyframes: next },
+        editingKeyframeTime:
+          state.editingKeyframeTime !== null &&
+          Math.abs(state.editingKeyframeTime - time) < 1e-6
+            ? null
+            : state.editingKeyframeTime,
+      }
+    })
+    endSettingsEdit()
+  },
+  // Per-drag-frame setter — the caller brackets the whole drag with
+  // begin/endSettingsEdit (same one-undo-entry-per-gesture model as
+  // Inspector sliders), so this just replaces state.
+  moveKeyframe: (from, to) =>
+    set((state) => {
+      const t = Math.max(0, to)
+      const kfs = state.settings.settingsKeyframes
+      const idx = kfs.findIndex((p) => Math.abs(p.time - from) < 1e-6)
+      if (idx < 0) return state
+      const moved = { ...kfs[idx], time: t }
+      const next = kfs
+        .filter((_, i) => i !== idx)
+        .filter((p) => Math.abs(p.time - t) >= 1e-6)
+        .concat(moved)
+        .sort((a, b) => a.time - b.time)
+      const editingKeyframeTime =
+        state.editingKeyframeTime !== null &&
+        Math.abs(state.editingKeyframeTime - from) < 1e-6
+          ? t
+          : state.editingKeyframeTime
+      return {
+        settings: { ...state.settings, settingsKeyframes: next },
+        editingKeyframeTime,
+      }
+    }),
+  setKeyframeCurvature: (time, curvature) =>
+    set((state) => {
+      const kfs = state.settings.settingsKeyframes
+      const idx = kfs.findIndex((p) => Math.abs(p.time - time) < 1e-6)
+      if (idx < 0) return state
+      const next = kfs.slice()
+      next[idx] = { ...next[idx], curvature }
+      return { settings: { ...state.settings, settingsKeyframes: next } }
     }),
 
   currentFile: null,
@@ -1271,6 +1435,7 @@ export const useStore = create<AppState>((set) => ({
       editHistory: [],
       editFuture: [],
       selection: new Set(),
+      editingKeyframeTime: null,
       contextMenu: null,
       rangeSelectRect: null,
     })
@@ -1292,6 +1457,7 @@ export const useStore = create<AppState>((set) => ({
       editHistory: [],
       editFuture: [],
       selection: new Set(),
+      editingKeyframeTime: null,
       contextMenu: null,
       rangeSelectRect: null,
     })
