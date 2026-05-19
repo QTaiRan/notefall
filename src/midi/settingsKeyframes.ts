@@ -61,8 +61,16 @@ export const ANIMATABLE_NUMBER_KEYS = [
   'noteWidthScale',
   'noteMinLength',
   'noteTextureScale',
-  'noteAnimSpeedX',
-  'noteAnimSpeedY',
+  // NOTE: `noteAnimSpeedX/Y` are deliberately NOT animatable. They are a
+  // texture-flow RATE, not a state value, and keyframing a rate is
+  // ill-posed: a pin-interpolated rate makes the visible speed lurch
+  // (the resolver ramps the rate itself) — it caused both the "speed
+  // explodes at the next pin" and the "speed decays to a standstill
+  // over a couple of minutes" bugs. With them excluded the Inspector's
+  // Animation Speed always reads/writes the single base value, so "1"
+  // means a constant 1 everywhere regardless of pins. Texture POSITION
+  // (the integrated phase in FallingNotes) is what carries over time;
+  // the rate that drives it stays global.
   'noteTextureOffsetX',
   'noteTextureOffsetY',
   'noteTextureBlur',

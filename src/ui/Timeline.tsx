@@ -1377,6 +1377,7 @@ export function Timeline() {
   const audioError = useUserAudio((s) => s.error)
   const offsetSec = useStore((s) => s.settings.userAudioOffsetSec)
   const updateSettings = useStore((s) => s.updateSettings)
+  const shiftKeyframes = useStore((s) => s.shiftKeyframes)
   const beginEdit = useStore((s) => s.beginSettingsEdit)
   const endEdit = useStore((s) => s.endSettingsEdit)
   // Cursor position on the editor's natural-MIDI-time x-axis. NOT
@@ -2080,7 +2081,15 @@ export function Timeline() {
     // natural MIDI-time.
     const minOffset = -midiTrimStartSec
     const next = Math.max(minOffset, drag.startOffset + dt)
-    if (next !== midiOffsetSec) updateSettings({ midiOffsetSec: next })
+    if (next !== midiOffsetSec) {
+      // Move the pins with the clip by exactly the applied delta so
+      // the colour automation stays glued to the notes (offset is a
+      // pure additive shift of every note's TL_audio time). Both
+      // mutations sit inside this drag's begin/endSettingsEdit
+      // bracket, so the whole move collapses to one undo entry.
+      shiftKeyframes(next - midiOffsetSec)
+      updateSettings({ midiOffsetSec: next })
+    }
   }
   const onMidiPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!midiDragRef.current) return

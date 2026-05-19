@@ -24,6 +24,13 @@ import { buildSpeedMap, midiToTimeline } from '../midi/speedMap'
 import { noteDeathFx, FADE_DURATION as DEATH_FADE_DURATION } from './noteDeathFx'
 
 const MAX_INSTANCES = 4096
+// Texture-phase wrap period (see the wrap in the useFrame). A power of
+// two so the modulo is float32-exact; large enough that the one-frame
+// noise discontinuity at the wrap is tens of minutes apart even at the
+// max animation speed, yet small enough that fbm/hash inputs stay in
+// float32-precise range so the flow never freezes. Mirrors HitLine's
+// TIME_WRAP_SECONDS guard for the same precision-collapse failure.
+const PHASE_WRAP = 1024
 // Buffer in world units between the visible top edge of the camera frustum
 // and the note spawn line — keeps notes off-screen when they're created so
 // they can slide in from above instead of popping into view mid-screen.
@@ -133,15 +140,19 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uOpacity;
   uniform float uRadius;
   uniform float uHitY;
-  uniform float uTime;
+  // Accumulated per-axis texture phase = integral of animSpeed dt,
+  // integrated CPU-side. Integrating the RATE rather than multiplying
+  // absolute clock time by the current speed (the old uTime*uAnimSpeed)
+  // keeps the visual velocity exactly animSpeed even while a pin
+  // animates it: with the old form the velocity picked up a
+  // now()*dSpeed/dt term, and now() is a large absolute timestamp, so
+  // any speed slope between pins exploded the flow speed. X = custom UV
+  // scroll X, Y = generic time multiplier (custom UV Y, liquid/gem).
+  uniform vec2 uPhase;
   // Texture preset selector — branched in main(). See TEXTURE_* constants
   // (CPU side) for the value mapping.
   uniform int uTextureMode;
   uniform float uTextureScale;
-  // X/Y animation speed. Custom uses both axes for UV scroll; liquid and
-  // gem use only Y as their generic time multiplier (their patterns have
-  // no inherent direction).
-  uniform vec2 uAnimSpeed;
   // Static positional shift on the texture sample point. Subtracted from
   // the UV so positive offset visually moves the image in the positive
   // direction (right / up) on the note.
@@ -212,7 +223,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     vec2 uv = p * uTextureScale + vSeed * 100.0 - uTextureOffset;
     vec2 i = floor(uv);
     vec2 f = fract(uv);
-    float t = uTime * uAnimSpeed.y;
+    float t = uPhase.y;
 
     // 3x3 neighborhood is mandatory for correct Voronoi (a pixel's nearest
     // site can live in a diagonal neighbor). Tracks the smallest and 2nd-
@@ -298,7 +309,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   // - uTextureScale = "tiles per world unit". Higher = smaller tiles
   //   (image repeats more times within the note). Both axes scale
   //   uniformly so the source aspect ratio is preserved.
-  // - uAnimSpeed (X, Y) scrolls the UV per axis. Same world-unit
+  // - uPhase (X, Y) scrolls the UV per axis. Same world-unit
   //   semantics as the position term, so motion looks consistent
   //   regardless of scale.
   // - uTextureOffset shifts the image inside each note (positive = right
@@ -312,7 +323,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   // Texture wrap is RepeatWrapping in customTexture.ts so values outside
   // [0,1] tile naturally.
   vec3 textureCustom(vec2 p, float d) {
-    vec2 uv = (vUv * vSize + uTime * uAnimSpeed) * uTextureScale + vSeed * 100.0 * uTextureVariation - uTextureOffset;
+    vec2 uv = (vUv * vSize + uPhase) * uTextureScale + vSeed * 100.0 * uTextureVariation - uTextureOffset;
     // Single tap with LOD bias — the texture is configured with mipmaps
     // and trilinear filtering, so the bias selects a progressively-blurred
     // mip level. This is what GPU hardware is built to do, and produces a
@@ -330,7 +341,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     // Per-note offset so each note samples a different region of the noise
     // field — otherwise every note shows the same flow pattern.
     vec2 uv = p * uTextureScale + vSeed * 100.0 - uTextureOffset;
-    float t = uTime * uAnimSpeed.y;
+    float t = uPhase.y;
     // Domain warp — feeding noise into noise's input gives the swirling
     // "lava lamp" / molten gold look.
     vec2 q = vec2(fbm(uv + vec2(0.0, t * 0.4)),
@@ -503,6 +514,11 @@ export function FallingNotes() {
   )
 
   const meshRef = useRef<THREE.InstancedMesh>(null)
+  // Integrated texture phase (∫ animSpeed dt) + the previous `now()` it
+  // was advanced at. Persist across frames AND across the live→export
+  // handoff (same component instance) so the flow never jumps.
+  const phaseRef = useRef(new THREE.Vector2(0, 0))
+  const lastPhaseNow = useRef<number | null>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
   // Scratch Color used to parse hex strings into linear RGB once per
   // track per frame. Reused across all calls in the resolveTint cache
@@ -569,10 +585,9 @@ export function FallingNotes() {
         uOpacity: { value: settings.noteOpacity },
         uRadius: { value: settings.noteCornerRadius },
         uHitY: { value: 0 },
-        uTime: { value: 0 },
         uTextureMode: { value: TEXTURE_MODE[settings.noteTexture] ?? TEXTURE_SOLID },
         uTextureScale: { value: settings.noteTextureScale },
-        uAnimSpeed: { value: new THREE.Vector2(settings.noteAnimSpeedX, settings.noteAnimSpeedY) },
+        uPhase: { value: new THREE.Vector2(0, 0) },
         uTextureOffset: { value: new THREE.Vector2(settings.noteTextureOffsetX, settings.noteTextureOffsetY) },
         uTextureBlur: { value: settings.noteTextureBlur },
         uTextureVariation: { value: settings.noteTextureVariation },
@@ -682,9 +697,40 @@ export function FallingNotes() {
     mesh.scale.x = NOTE_PARALLAX_SCALE
     mesh.position.x = parallaxX(0)
     material.uniforms.uHitY.value = hitY
-    // Wall clock — used by texture presets (e.g. liquid flow). Pause-friendly
-    // (keeps animating) since the texture should breathe even when stopped.
-    material.uniforms.uTime.value = now()
+    // Texture phase = ∫ animSpeed dt. `noteAnimSpeed{X,Y}` is a global
+    // (non-animatable) value, so this is normally a steady ramp; we
+    // still integrate rather than use the old `now() * animSpeed` form
+    // because that made the velocity `animSpeed + now()*dAnimSpeed/dt`
+    // — fragile the instant the rate ever changes (an Inspector tweak
+    // mid-flow would jump the pattern, since `now()` is a huge absolute
+    // timestamp). Integrating keeps the visible speed exactly animSpeed
+    // and the phase continuous through any rate change. Driven off
+    // `now()` (so it stays pause-proof and the virtual export clock
+    // keeps parity); the per-frame delta is clamped so a backgrounded
+    // tab / seek / the live→export clock handoff can't teleport it.
+    {
+      const nowT = now()
+      const prev = lastPhaseNow.current
+      const dt = prev === null ? 0 : Math.min(Math.max(nowT - prev, 0), 0.1)
+      lastPhaseNow.current = nowT
+      const ph = phaseRef.current
+      ph.x += dt * rs.noteAnimSpeedX
+      ph.y += dt * rs.noteAnimSpeedY
+      // Wrap the phase the same way HitLine wraps its uTime, and for the
+      // same reason: the accumulator grows unboundedly, and once it
+      // feeds fbm/hash at hundreds-of-thousands magnitude GLSL's float32
+      // precision collapses — the per-frame delta drops below the ULP
+      // and the flow visibly FREEZES even at speed 1 (a long-standing
+      // bug the old `now() * animSpeed` form had too, since `now()`
+      // itself was unbounded and unwrapped here). The `%` discontinuity
+      // is one frame, ~tens of minutes apart, and lands inside the
+      // noise's churn so it isn't perceptible. JS `%` keeps the sign so
+      // negative speeds wrap symmetrically. Deterministic in the phase,
+      // so live and the offline export wrap at the same point.
+      ph.x %= PHASE_WRAP
+      ph.y %= PHASE_WRAP
+      material.uniforms.uPhase.value.copy(ph)
+    }
     // Pin-resolved animatable note uniforms (formerly a settings-deps
     // useEffect). Edge gating still keys off the non-animatable
     // `edgeEnabled` toggle but the width/intensity it gates are
@@ -693,7 +739,6 @@ export function FallingNotes() {
     material.uniforms.uOpacity.value = rs.noteOpacity
     material.uniforms.uRadius.value = rs.noteCornerRadius
     material.uniforms.uTextureScale.value = rs.noteTextureScale
-    material.uniforms.uAnimSpeed.value.set(rs.noteAnimSpeedX, rs.noteAnimSpeedY)
     material.uniforms.uTextureOffset.value.set(rs.noteTextureOffsetX, rs.noteTextureOffsetY)
     material.uniforms.uTextureBlur.value = rs.noteTextureBlur
     material.uniforms.uTextureVariation.value = rs.noteTextureVariation

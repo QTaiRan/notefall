@@ -871,6 +871,14 @@ type AppState = {
   // Set the easing curvature of the segment STARTING at the pin at
   // `time` (matches SpeedPoint.curvature semantics).
   setKeyframeCurvature: (time: number, curvature: number) => void
+  // Translate EVERY pin's time by `delta` seconds (clamped ≥ 0). Driven
+  // by the MIDI-clip drag so pins stay glued to the music: `midiOffset`
+  // is a pure additive shift of every note's TL_audio time, so shifting
+  // each pin's TL_audio time by the same delta keeps pins locked to the
+  // notes regardless of the speed map. Per-drag-frame setter — the
+  // caller brackets the drag with begin/endSettingsEdit (one undo
+  // entry per gesture), same contract as `moveKeyframe`.
+  shiftKeyframes: (delta: number) => void
 
   // === Project file persistence ============================================
   // The .nfz file currently associated with this session, or null when
@@ -1491,6 +1499,27 @@ export const useStore = create<AppState>((set) => ({
       const next = kfs.slice()
       next[idx] = { ...next[idx], curvature }
       return { settings: { ...state.settings, settingsKeyframes: next } }
+    }),
+  shiftKeyframes: (delta) =>
+    set((state) => {
+      const kfs = state.settings.settingsKeyframes
+      if (kfs.length === 0 || delta === 0) return state
+      // Shift then re-sort: clamping at 0 can reorder pins that were
+      // already before the clip's content (an edge case — pins
+      // normally sit over notes, well past t=0).
+      const next = kfs
+        .map((p) => ({ ...p, time: Math.max(0, p.time + delta) }))
+        .sort((a, b) => a.time - b.time)
+      // Keep the edit target glued to its pin for this frame;
+      // PinTargetSync re-derives it from the playhead next rAF anyway.
+      const editingKeyframeTime =
+        state.editingKeyframeTime !== null
+          ? Math.max(0, state.editingKeyframeTime + delta)
+          : null
+      return {
+        settings: { ...state.settings, settingsKeyframes: next },
+        editingKeyframeTime,
+      }
     }),
 
   currentFile: null,
