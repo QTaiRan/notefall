@@ -362,12 +362,12 @@ function PreDelayRow() {
   )
 }
 
-// Indicator of WHAT the Inspector controls currently edit: the
-// SELECTED pin (set by clicking a pin / adding one), or the base
-// "default look" when none is selected. The two are held separately —
-// editing a pin never touches the default. The "Default" button
-// deselects so the user can edit the default look (and back via a pin
-// click). With no pins at all there's nothing to disambiguate.
+// Indicator of WHAT the Inspector controls currently edit. The target
+// follows the PLAYHEAD (nearest pin at/before the head — see
+// `PinTargetSync`): move the timeline and the banner retargets. Before
+// the first pin there's no target → the base "default look" (held
+// separately; editing a pin never touches it). No pins at all → nothing
+// to disambiguate.
 function PinEditingBanner() {
   const keyframes = useStore((st) => st.settings.settingsKeyframes)
   const editingTime = useStore((st) => st.editingKeyframeTime)
@@ -376,13 +376,13 @@ function PinEditingBanner() {
     editingTime !== null
       ? keyframes.findIndex((p) => Math.abs(p.time - editingTime) < 1e-6)
       : -1
-  // No pin selected → editing the separate, editable base default look.
+  // Head before the first pin → editing the separate base default look.
   if (idx < 0) {
     return (
       <div className="flex items-center gap-2 border-b border-sky-500/30 bg-sky-500/10 px-3 py-1.5">
         <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-sky-300" />
         <span className="flex-1 truncate text-[11px] text-sky-200">
-          Editing default look — click a pin to edit it
+          Editing default look (before the first pin)
         </span>
       </div>
     )
@@ -400,13 +400,6 @@ function PinEditingBanner() {
       <span className="flex-1 truncate text-[11px] text-amber-200">
         Editing pin {idx + 1}/{keyframes.length} @ {stamp}
       </span>
-      <button
-        type="button"
-        onClick={() => useStore.getState().selectKeyframe(null)}
-        className="shrink-0 rounded bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-100 outline-none hover:bg-amber-500/35"
-      >
-        Default
-      </button>
     </div>
   )
 }

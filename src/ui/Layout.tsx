@@ -26,6 +26,42 @@ const MIDI_EXT_RE = /\.midi?$/i
 const isProjectName = (name: string) => PROJECT_EXT_RE.test(name)
 const isMidiName = (name: string) => MIDI_EXT_RE.test(name)
 
+/**
+ * Drives the pin edit target off the PLAYHEAD: the nearest pin at or
+ * before the head (`time <= currentSongTime`), or `null` before the
+ * first pin / when there are none. Single app-wide rAF; writes
+ * `editingKeyframeTime` only when it actually changes (a pin-boundary
+ * crossing or a seek), so the Inspector / banner / lane re-render only
+ * then — not every frame. This is what makes the Inspector follow the
+ * timeline (and stops a clicked pin sticking once the head moves away).
+ */
+function PinTargetSync() {
+  useEffect(() => {
+    let raf = 0
+    const loop = () => {
+      const st = useStore.getState()
+      const kfs = st.settings.settingsKeyframes
+      let target: number | null = null
+      if (kfs.length > 0) {
+        const t = audioEngine.currentSongTime() + 1e-6
+        let best = -Infinity
+        for (let i = 0; i < kfs.length; i++) {
+          const tm = kfs[i].time
+          if (tm <= t && tm > best) best = tm
+        }
+        if (best > -Infinity) target = best
+      }
+      if (target !== st.editingKeyframeTime) {
+        useStore.setState({ editingKeyframeTime: target })
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return null
+}
+
 export function Layout() {
   const transport = useStore((s) => s.transport)
   useGlobalShortcuts()
@@ -243,6 +279,7 @@ export function Layout() {
         </div>
         <Inspector />
       </div>
+      <PinTargetSync />
       <LoadingOverlay />
       <ConfirmModal />
       {/* Drop indicator. Toggled via CSS off the DropZone's
