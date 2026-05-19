@@ -645,32 +645,68 @@ function dirtyFor(s: {
  * changes "what you see" forward from here, which is what users
  * expect when tweaking an automation.
  *
- * If the head is before every pin, the first pin's look is what's
- * shown (held), so that's the target. Returns -1 only when there are
- * no pins (caller falls back to plain base editing — original
- * behaviour). `settingsKeyframes` is kept time-sorted by the pin
- * actions, but this scans defensively rather than assuming it.
+ * Returns -1 when there are no pins OR the head is before every pin
+ * (no PAST pin — a future pin must NOT be grabbed; the caller then
+ * leaves the target empty: no banner, no highlight, base-only edit).
+ * `settingsKeyframes` is kept time-sorted by the pin actions, but this
+ * scans defensively rather than assuming it.
  */
 export function targetPinIndex(kfs: readonly SettingsKeyframe[]): number {
   if (kfs.length === 0) return -1
   const t = audioEngine.currentSongTime() + 1e-6
   let idx = -1
   let bestTime = -Infinity
-  let firstIdx = 0
-  let firstTime = Infinity
   for (let i = 0; i < kfs.length; i++) {
     const time = kfs[i].time
-    if (time < firstTime) {
-      firstTime = time
-      firstIdx = i
-    }
     if (time <= t && time > bestTime) {
       bestTime = time
       idx = i
     }
   }
-  return idx >= 0 ? idx : firstIdx
+  return idx
 }
+
+/**
+ * Keys the Inspector's Reset button must NOT touch — it should stay
+ * confined to what the Inspector itself shows (look + audio voicing).
+ * These all live OUTSIDE the Inspector: the transport bar, and the
+ * timeline editor (clip sync / trim = "clip length", speed
+ * automation = "speed pins", lane layout, follow/preview session
+ * prefs) — plus the pins themselves. A naive `{ ...defaultSettings }`
+ * wiped all of these; Reset now carries them over from current state.
+ * If you add a NEW timeline-editor / clip / session setting, add its
+ * key here so Reset keeps leaving it alone.
+ */
+const RESET_PRESERVED_KEYS = [
+  // Transport bar
+  'volume',
+  'playbackRate',
+  // Clip sync + trim ("clip length")
+  'midiOffsetSec',
+  'midiTrimStartSec',
+  'midiTrimEndSec',
+  'userAudioOffsetSec',
+  'userAudioTrimStartSec',
+  'userAudioTrimEndSec',
+  // Per-clip audio, controlled from the timeline lanes
+  'userAudioVolume',
+  'midiVolume',
+  'midiEnabled',
+  // Speed automation ("speed pins")
+  'midiSpeedAutomation',
+  'midiSpeedAutomationYRangeLog2',
+  'midiSpeedAutomationYCenterLog2',
+  // Timeline editor layout / session prefs
+  'timelineEditorOpen',
+  'timelineLaneScale',
+  'timelineMidiLaneRatio',
+  'timelineSpeedLaneRatio',
+  'timelineAudioLaneRatio',
+  'previewHighFps',
+  'followPlayhead',
+  // Settings pins — never wiped by Reset
+  'settingsKeyframes',
+] as const satisfies readonly (keyof Settings)[]
 
 export type TransportState = 'stopped' | 'playing' | 'paused'
 
@@ -1284,27 +1320,23 @@ export const useStore = create<AppState>((set) => ({
         }),
       }
     }),
-  // Preserve transport-bar controlled settings (volume, playback speed) so
-  // the user's listening setup isn't lost when they reset the visual /
-  // audio Inspector. The Reset button lives in the Inspector and is
-  // expected to only affect what the Inspector shows.
-  //
-  // Pins are NEVER deleted by Reset (`settingsKeyframes` is part of
-  // Settings, so a naive `...defaultSettings` would wipe the whole
-  // automation). Instead, when pins exist, Reset clears the *content*
-  // of the pin the Inspector is editing (selected, else the one
-  // reflected at the playhead) back to the default look — leaving
-  // every pin in place and other pins' snapshots untouched.
+  // Reset stays confined to what the Inspector shows (visual look +
+  // audio voicing): every Inspector-controlled key goes back to its
+  // default, while everything OUTSIDE the Inspector is carried over
+  // untouched — transport, and the timeline editor's clip length
+  // (sync/trim), speed pins, lane layout and session prefs (see
+  // `RESET_PRESERVED_KEYS`). The pins themselves are never wiped;
+  // additionally, when a pin is the current edit target, its *content*
+  // is reset to the default look (other pins' snapshots untouched) so
+  // "Reset" means "reset this pin" while pins exist.
   resetSettings: () => {
     beginSettingsEdit()
     set((state) => {
-      const kfs = state.settings.settingsKeyframes
-      let settings: Settings = {
-        ...defaultSettings,
-        volume: state.settings.volume,
-        playbackRate: state.settings.playbackRate,
-        settingsKeyframes: kfs,
+      const settings: Settings = { ...defaultSettings }
+      for (const k of RESET_PRESERVED_KEYS) {
+        ;(settings as Record<string, unknown>)[k as string] = state.settings[k]
       }
+      const kfs = settings.settingsKeyframes
       if (kfs.length > 0) {
         const idx = targetPinIndex(kfs)
         if (idx >= 0) {
@@ -1313,7 +1345,7 @@ export const useStore = create<AppState>((set) => ({
             ...next[idx],
             settings: pickAnimatable(defaultSettings),
           }
-          settings = { ...settings, settingsKeyframes: next }
+          settings.settingsKeyframes = next
         }
       }
       return {
