@@ -1,5 +1,6 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
+import { RoundedBox } from '@react-three/drei'
 import type { BloomEffect } from 'postprocessing'
 import * as THREE from 'three'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -37,7 +38,7 @@ import { FallingNotes } from '../notes/FallingNotes'
 import { LandingFlashes } from '../notes/LandingFlashes'
 import { HitParticles } from '../notes/HitParticles'
 import { HitLine } from '../notes/HitLine'
-import { WHITE_KEY_LENGTH } from '../keyboard/layout'
+import { WHITE_KEY_LENGTH, KEYBOARD_LAYOUT } from '../keyboard/layout'
 import { audioEngine } from '../audio/engine'
 import { pauseSong, playSong, togglePlayback } from '../audio/playback'
 import { EditTools } from './EditTools'
@@ -201,10 +202,182 @@ function SceneContents({ recState }: { recState: 'idle' | 'recording' }) {
       <R3FStateBridge />
       {editMode ? <EditTools /> : <PlayToggleArea />}
       <Keyboard />
+      <KeyboardFrontRail />
+      <KeyboardCheekBlocks />
       {s.notesEnabled && <FallingNotes />}
       {s.flashEnabled && <LandingFlashes />}
       <HitParticles />
       <HitLine />
+    </>
+  )
+}
+
+/**
+ * Glossy black piano frame — the "key slip" plus the bed the
+ * keyboard sits on. Two boxes recessed behind the white-key plane:
+ *   - Front rail (visible strip BELOW the keyboard). A gap of
+ *     `CHEEK_FRONT_OVERHANG` between the rail's top edge and the
+ *     keyboard's player edge reads as a shadowed channel, framed
+ *     laterally by the cheekblocks (which overhang by the same
+ *     amount).
+ *   - Back panel (hidden behind the keys). Plugs the seams between
+ *     rounded white keys / chamfered black keys so a light
+ *     `backgroundColor` can't bleed through as pale slivers.
+ *
+ * Both share `FRONT_RAIL_DEPTH` / `FRONT_RAIL_FRONT_Z` so they read
+ * as one piece of carcass viewed from the back/top.
+ *
+ * Material mimics piano polyester lacquer: very dark grey (a hair
+ * above true black so scene lighting still picks out highlights),
+ * low roughness, modest metalness. `raycast={() => null}` so it
+ * never intercepts editor / play-toggle clicks.
+ */
+const FRONT_RAIL_HEIGHT = 0.13
+const FRONT_RAIL_DEPTH = 0.4
+const FRONT_RAIL_FRONT_Z = -0.2
+// Back panel only needs enough z-thickness to act as an opaque
+// surface plugging the inter-key seams. Anchored by its REAR face
+// (`BACK_PANEL_BACK_Z`) so pushing the panel further back in z (by
+// shrinking `BACK_PANEL_DEPTH`) only moves its FRONT face deeper —
+// the rear of the carcass keeps the same silhouette as before.
+const BACK_PANEL_BACK_Z = FRONT_RAIL_FRONT_Z - 0.15
+const BACK_PANEL_DEPTH = 0.01
+const FRONT_RAIL_COLOR = '#0c0c0c'
+function KeyboardFrontRail() {
+  const keyboardY = useStore((st) => st.settings.keyboardY)
+  // Extend laterally under the cheekblocks so the rail and back
+  // panel span the same overall x range as the rest of the case
+  // (edges align with the outer faces of the cheeks).
+  const width = KEYBOARD_LAYOUT.totalWidth + 2 * CHEEK_WIDTH
+  const centerZ = FRONT_RAIL_FRONT_Z - FRONT_RAIL_DEPTH / 2
+
+  // Back panel: only as wide as the keyboard. The cheeks already
+  // occupy and visually seal the lateral regions, and extending the
+  // back panel under them would let it poke out behind the cheeks'
+  // rounded corners (where the cheek silhouette inset reveals what
+  // sits in z behind it).
+  const backWidth = KEYBOARD_LAYOUT.totalWidth
+
+  // Visible front rail strip — sits BELOW the keyboard with a gap of
+  // `CHEEK_FRONT_OVERHANG` between its top edge and the white-key
+  // player edge. That gap reads as a shadowed channel on real grands,
+  // framed laterally by the cheekblocks (which themselves overhang
+  // forward by the same amount).
+  const railTopY = keyboardY - CHEEK_FRONT_OVERHANG
+  const railBottomY = railTopY - FRONT_RAIL_HEIGHT
+  const railHeight = railTopY - railBottomY
+  const railCenterY = (railTopY + railBottomY) / 2
+
+  // Back panel — hidden behind the keys, top at the hit line, bottom
+  // extended FORWARD to meet the front rail's top edge so the gap
+  // between rail and keyboard (the `CHEEK_FRONT_OVERHANG` channel)
+  // is closed off from behind by the back panel. Also plugs the
+  // seams between rounded white keys / chamfered black keys so a
+  // light `backgroundColor` can't bleed through as pale slivers.
+  const backTopY = keyboardY + WHITE_KEY_LENGTH
+  const backBottomY = railTopY
+  const backHeight = backTopY - backBottomY
+  const backCenterY = (backTopY + backBottomY) / 2
+
+  const noRaycast = useMemo(() => () => null, [])
+  return (
+    <>
+      <mesh position={[0, railCenterY, centerZ]} raycast={noRaycast}>
+        <boxGeometry args={[width, railHeight, FRONT_RAIL_DEPTH]} />
+        <meshStandardMaterial color={FRONT_RAIL_COLOR} roughness={1} metalness={0} />
+      </mesh>
+      <mesh
+        position={[0, backCenterY, BACK_PANEL_BACK_Z + BACK_PANEL_DEPTH / 2]}
+        raycast={noRaycast}
+      >
+        <boxGeometry args={[backWidth, backHeight, BACK_PANEL_DEPTH]} />
+        <meshStandardMaterial color={FRONT_RAIL_COLOR} roughness={1} metalness={0} />
+      </mesh>
+    </>
+  )
+}
+
+/**
+ * Cheekblocks — the two glossy black wooden blocks bookending the
+ * keyboard on its left (bass) and right (treble) sides. Real grand
+ * pianos rise these slightly ABOVE the white-key surface so the
+ * highest sharps stop short of the case rather than meeting it flush.
+ *
+ * Per block:
+ *   width (x)   `CHEEK_WIDTH`                                   — a touch wider than one white key
+ *   length (y)  `[keyboardY, keyboardY + WHITE_KEY_LENGTH]`     — full keyboard depth
+ *   height (z)  `[FRAME_BACK_Z, CHEEK_TOP_Z]`                   — from the frame's back face up
+ *                                                                 just above the black-key top
+ *
+ * x centres:
+ *   left   = −totalWidth/2 − CHEEK_WIDTH/2
+ *   right  = +totalWidth/2 + CHEEK_WIDTH/2
+ *
+ * Same lacquer material as `KeyboardFrontRail` so the surrounding
+ * frame reads as one continuous piece. `raycast={() => null}` keeps
+ * editor / play-toggle clicks unaffected.
+ */
+const CHEEK_WIDTH = 0.8
+// Top sits just above the black-key crowns (z ≈ 0.09) so the cheek
+// reads as taller than the white keys without dominating the blacks.
+const CHEEK_TOP_Z = 0.08
+// Overhang in front of the white-key player edge. Real grands have the
+// cheekblocks protruding a touch toward the player, ahead of the keys.
+const CHEEK_FRONT_OVERHANG = 0.02
+function KeyboardCheekBlocks() {
+  const keyboardY = useStore((st) => st.settings.keyboardY)
+  // Match the frame's z extent so the blocks visually continue the
+  // front rail / back panel as one carcass piece.
+  const frameBackZ = FRONT_RAIL_FRONT_Z - FRONT_RAIL_DEPTH
+  const depth = CHEEK_TOP_Z - frameBackZ
+  const centerZ = (CHEEK_TOP_Z + frameBackZ) / 2
+  // Front edge sits CHEEK_FRONT_OVERHANG ahead of `keyboardY` (the
+  // white-key player edge); back edge stays at the hit line.
+  const frontY = keyboardY - CHEEK_FRONT_OVERHANG
+  const backY = keyboardY + WHITE_KEY_LENGTH
+  const length = backY - frontY
+  const centerY = (frontY + backY) / 2
+  const halfKb = KEYBOARD_LAYOUT.totalWidth / 2
+  const leftX = -halfKb - CHEEK_WIDTH / 2
+  const rightX = +halfKb + CHEEK_WIDTH / 2
+  const noRaycast = useMemo(() => () => null, [])
+  // `RoundedBox` rounds all 12 edges uniformly. The radius is small
+  // enough that the bottom / back / outer edges (mostly hidden against
+  // the rail or facing offscreen) still read as square, while the two
+  // edges the user asked for — front-top (player-side top) and
+  // inner-side-top (along the white keys) — get a visible quarter
+  // roundover. `creaseAngle` smooths the round-to-flat seam.
+  const cornerRadius = 0.04
+  return (
+    <>
+      <RoundedBox
+        position={[leftX, centerY, centerZ]}
+        args={[CHEEK_WIDTH, length, depth]}
+        radius={cornerRadius}
+        smoothness={4}
+        creaseAngle={0.4}
+        raycast={noRaycast}
+      >
+        <meshStandardMaterial
+          color={FRONT_RAIL_COLOR}
+          roughness={0.25}
+          metalness={0.15}
+        />
+      </RoundedBox>
+      <RoundedBox
+        position={[rightX, centerY, centerZ]}
+        args={[CHEEK_WIDTH, length, depth]}
+        radius={cornerRadius}
+        smoothness={4}
+        creaseAngle={0.4}
+        raycast={noRaycast}
+      >
+        <meshStandardMaterial
+          color={FRONT_RAIL_COLOR}
+          roughness={0.25}
+          metalness={0.15}
+        />
+      </RoundedBox>
     </>
   )
 }

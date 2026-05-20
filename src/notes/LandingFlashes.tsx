@@ -127,6 +127,13 @@ export function LandingFlashes() {
       fragmentShader: FRAGMENT_SHADER,
       transparent: true,
       depthWrite: false,
+      // Disable depthTest so the flash renders on top regardless of
+      // z. Needed because we now bake the flash at the SAME z as the
+      // falling notes (0.05) for perspective parity — otherwise the
+      // black keys at z ≈ 0.09 would occlude the flash where its
+      // halo extends across neighbours. Render order + additive
+      // blending already keep the painter order correct.
+      depthTest: false,
       blending: THREE.AdditiveBlending,
       toneMapped: false,
     })
@@ -222,7 +229,13 @@ export function LandingFlashes() {
         const baseScale = k.width * BASE_PLANE_SCALE * rs.flashSize
         const planeWidth = baseScale * rs.flashWidth
         const planeHeight = baseScale
-        dummy.position.set(k.x, WHITE_KEY_LENGTH, 0.105)
+        // Match FallingNotes' z (0.05) so a key's flash and the note
+        // above it share the same perspective scale. With a flash at
+        // z = 0.105 and notes at z = 0.05, the flash projected wider
+        // than the note at the same world-x, shifting the visible
+        // white burst outward toward the keyboard edges (most
+        // noticeable on A0 / C8). Same z eliminates the parallax.
+        dummy.position.set(k.x, WHITE_KEY_LENGTH, 0.05)
         dummy.scale.set(planeWidth, planeHeight, 1)
         dummy.updateMatrix()
         mesh.setMatrixAt(i, dummy.matrix)

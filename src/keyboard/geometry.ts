@@ -12,7 +12,7 @@ import {
 // inset so the visible gap between keys runs continuously top-to-bottom
 // (and adjacent bodies' rounded front corners don't collide at the
 // boundary). Wood is still visible at oblique viewing angles.
-export const WHITE_BODY_HEIGHT = 0.22;
+export const WHITE_BODY_HEIGHT = 0.5;
 export const WOOD_COLOR = "#a87d38";
 export const WOOD_TOP_GAP = 0;
 export const WHITE_CAP_THICKNESS = 0.015;
