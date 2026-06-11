@@ -23,6 +23,12 @@ import * as Tone from 'tone'
  * slashes get stripped so `${base}/A0v1.ogg` always produces a clean
  * URL.
  *
+ * In `npm run dev` we route through Vite's `/samples-cdn` proxy
+ * (see `vite.config.ts`) — the R2 bucket's CORS allow-list is locked
+ * to https://notefall.app, so a direct cross-origin fetch from
+ * localhost would be blocked. Going through the proxy makes the
+ * request same-origin and CORS-free.
+ *
  * Cache Storage (see `sampleCache.ts`) absorbs the one-time ~77 MB
  * download — subsequent loads return from disk without touching the
  * network, so there's no UX cost to always hitting the CDN on first
@@ -32,7 +38,10 @@ const SAMPLES_BASE_URL =
   (import.meta.env.VITE_SAMPLES_BASE_URL as string | undefined)?.replace(
     /\/$/,
     '',
-  ) ?? 'https://samples.notefall.app/salamander-v3-close'
+  ) ??
+  (import.meta.env.DEV
+    ? '/samples-cdn/salamander-v3-close'
+    : 'https://samples.notefall.app/salamander-v3-close')
 
 export type LoadProgress = { loaded: number; total: number }
 

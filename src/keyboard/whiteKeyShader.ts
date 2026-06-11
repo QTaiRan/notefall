@@ -51,7 +51,7 @@ const SHADOW_BASE_BLUR = 0.02;
 // light-side edge — the crisp silhouette line bordering the bright
 // direct-light streak — FAR is the edge away from the light, where
 // the penumbra bleeds out.
-const SHADOW_NEAR_EDGE_BLUR = 0.01;
+const SHADOW_NEAR_EDGE_BLUR = 0;
 const SHADOW_FAR_EDGE_BLUR = 0.06;
 // Width of the straight-down self shadow when the light sits on the
 // key itself (pressed black key), as a fraction of the key's width —
