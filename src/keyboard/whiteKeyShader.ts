@@ -41,7 +41,7 @@ const SHADOW_FADE_START = 0.8;
 // exponent on the light falloff inside the shadow term. 1 = decay at
 // the light's own rate (previous behaviour), 0 = no decay (a shadow
 // stays fully dark however far the light is), >1 = decay faster.
-const SHADOW_DISTANCE_FADE = 0.6;
+const SHADOW_DISTANCE_FADE = 0.5;
 // Uniform blur added to EVERY shadow boundary (the user-facing halo
 // slider's uShadowHalo still adds on top).
 const SHADOW_BASE_BLUR = 0.02;
@@ -76,7 +76,7 @@ const SHADOW_WALL_ABSORB = 0.5;
 const SHADOW_WALL_FREE = 0.0;
 // >1.0 pushes the lit-area formula negative inside the silhouette so the
 // surface is actively darkened, not just stripped of the additive boost.
-const SHADOW_OPACITY = 0.7;
+const SHADOW_OPACITY = 0.8;
 // Per-fragment cost is MAX_LIGHTS × BLACK_KEY_COUNT (= 6 × 36 = 216 ops).
 export const MAX_LIGHTS = 6;
 // World-unit silhouette growth per unit of per-key glow. Active keys cast
