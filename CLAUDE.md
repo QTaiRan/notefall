@@ -119,7 +119,7 @@ Right-click and eraser drag emit `DyingNote { midi, velocity, x, centerY, width,
 
 ## Hit particles (`src/notes/HitParticles.tsx`)
 
-3D curl-noise system. Per-particle world XYZ position so the divergence-free field produces internal cluster width without horizontal spreading (a 2D curl produced either thin strands or too-wide spread). EMA-smoothed (60 ms) curl filters lattice-cell discontinuities. Two emission paths share `emitParticleAt(...)`:
+3D curl-noise system. Per-particle world XYZ position so the divergence-free field produces internal cluster width without horizontal spreading (a 2D curl produced either thin strands or too-wide spread). Curl forcing is low-passed by a **two-stage cascaded EMA (τ = 100 ms/stage, −12 dB/oct)** — the noise field's Z time-slide flutters at ≈ `flowSpeed` Hz (~5 Hz at default), and a single pole passed enough of that band to read as a fine left-right shake. Sideways velocity (x/z, not vy) relaxes exponentially toward 0 (`HORIZ_CONFINE_TAU`) so curl drift saturates at ≈ forcing × τ instead of fanning the plume wider with altitude. Two emission paths share `emitParticleAt(...)`:
 - **Per-key** — `addKeyListener` → ATTACK_BURST (3) on note-on + sustained per-frame while held.
 - **Note death** — `noteDeathFx` → `DeathEmitter` for `DEATH_EMIT_DURATION` (0.35 s).
 

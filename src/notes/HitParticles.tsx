@@ -105,18 +105,30 @@ const MIN_XY_SPEED = 1 / 20
 // Tuned so that with drag = 1.0 a unit-speed particle loses about half
 // its speed every 230 ms.
 const DRAG_RATE_PER_SEC = 3.0
+// Time constant (seconds) of the horizontal-confinement relaxation.
+// Off-vertical velocity components (x and z) decay exponentially toward
+// 0 with this τ, turning the curl forcing's unbounded random walk into
+// a bounded wiggle: sideways speed saturates at ≈ forcing × τ instead
+// of accumulating with age. Without this, older (= higher) particles
+// carry ever-larger |vx| and the plume fans out as it rises; with it
+// the column meanders at a roughly constant width. vy is untouched so
+// the upward drift is preserved (the user-facing `drag` damps the full
+// xy speed, rise included, so it can't serve this role).
+const HORIZ_CONFINE_TAU = 0.4
 // Per-second angular bend rate at maximum deviation from vertical.
 // Multiplied by `swirl`, `dt`, and the deviation factor; produces the
 // swirling-spread when the user dials it up.
 const ANGULAR_BEND_RATE_PER_SEC = 2.4
-// Time constant (seconds) for the per-particle curl-velocity low-pass
-// filter. The raw curl sample at a particle's current position changes
-// discretely whenever the particle crosses a noise lattice cell or the
-// noise field's Z-axis time slide moves by a feature; without smoothing
-// these discontinuities show up as a high-frequency wobble layered on
-// top of the underlying swirl. EMA-blending with this time constant
-// removes the wobble while keeping the swirl response snappy.
-const CURL_SMOOTHING_TAU = 0.06
+// Time constant (seconds) PER STAGE of the two-stage cascaded EMA that
+// low-passes the per-particle curl forcing. The raw curl sample at a
+// particle's position flutters at ≈ flowSpeed Hz (the Z-axis time slide
+// crosses that many noise cells per second — ~5 Hz at the default 4.75),
+// plus extra chatter when the particle crosses lattice cells. Integrated
+// into velocity, that flutter reads as a fine left-right shake. A single
+// pole (−6 dB/oct) lets too much of the ~5 Hz band through at any τ that
+// keeps the swirl responsive; cascading two stages gives −12 dB/oct, so
+// at τ = 0.10 the 5 Hz flutter drops to ~9% while ~1 Hz swirl keeps ~60%.
+const CURL_SMOOTHING_TAU = 0.10
 const TWO_OVER_PI = 2.0 / Math.PI
 const HALF_PI = Math.PI / 2
 
@@ -256,12 +268,13 @@ export function HitParticles() {
   //   give intra-emission coherence within a single press.
   const velocities = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
   const emitterPositions = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
-  // Per-particle low-pass-filtered curl velocity. EMA-blended with the
-  // raw curl sample each frame; used in place of the raw sample for the
-  // velocity update so frame-to-frame curl discontinuities don't show
-  // as a high-frequency wobble. Initialised to 0 on emit so the first
-  // few frames ramp into the wind smoothly.
+  // Per-particle low-pass-filtered curl velocity — two cascaded EMA
+  // stages (see CURL_SMOOTHING_TAU). Stage 2 replaces the raw sample in
+  // the velocity update so the curl field's temporal flutter doesn't
+  // show as a fine left-right shake. Both stages initialise to 0 on
+  // emit so the first few frames ramp into the wind smoothly.
   const smoothedCurl = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
+  const smoothedCurl2 = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
   const baseSizes = useMemo(() => new Float32Array(MAX_PARTICLES), [])
   const colors = useMemo(() => new Float32Array(MAX_PARTICLES * 3), [])
 
@@ -533,6 +546,8 @@ export function HitParticles() {
     // smoothing filter. α = 1 − exp(−dt/τ); at 60fps with τ=60ms this
     // is ≈ 0.245.
     const smoothingAlpha = 1 - Math.exp(-dt / CURL_SMOOTHING_TAU)
+    // Per-frame horizontal-confinement decay factor (see HORIZ_CONFINE_TAU).
+    const horizRelax = Math.exp(-dt / HORIZ_CONFINE_TAU)
 
     let positionDirty = false
     // Skip the per-particle integration pass entirely when no particle
@@ -583,18 +598,28 @@ export function HitParticles() {
         // Multi-octave curl noise sample.
         sampleCurl(dx, dy, dz, octaves, octScale, octMul, curlScratch)
 
-        // EMA-blend the raw curl into the per-particle smoothed buffer
-        // to filter out the high-frequency wobble caused by lattice-cell
-        // gradient discontinuities + fast Z-axis time slide.
-        const sx = smoothedCurl[i3 + 0]
-        const sy = smoothedCurl[i3 + 1]
-        const sz_ = smoothedCurl[i3 + 2]
-        const nsx = sx + smoothingAlpha * (curlScratch[0] - sx)
-        const nsy = sy + smoothingAlpha * (curlScratch[1] - sy)
-        const nsz = sz_ + smoothingAlpha * (curlScratch[2] - sz_)
-        smoothedCurl[i3 + 0] = nsx
-        smoothedCurl[i3 + 1] = nsy
-        smoothedCurl[i3 + 2] = nsz
+        // Two-stage cascaded EMA on the raw curl (−12 dB/oct) to filter
+        // out the temporal flutter from the Z-axis time slide and
+        // lattice-cell crossings — a single pole left enough of the
+        // ~5 Hz band through to read as a fine left-right shake.
+        const s1x = smoothedCurl[i3 + 0]
+        const s1y = smoothedCurl[i3 + 1]
+        const s1z = smoothedCurl[i3 + 2]
+        const n1x = s1x + smoothingAlpha * (curlScratch[0] - s1x)
+        const n1y = s1y + smoothingAlpha * (curlScratch[1] - s1y)
+        const n1z = s1z + smoothingAlpha * (curlScratch[2] - s1z)
+        smoothedCurl[i3 + 0] = n1x
+        smoothedCurl[i3 + 1] = n1y
+        smoothedCurl[i3 + 2] = n1z
+        const s2x = smoothedCurl2[i3 + 0]
+        const s2y = smoothedCurl2[i3 + 1]
+        const s2z = smoothedCurl2[i3 + 2]
+        const nsx = s2x + smoothingAlpha * (n1x - s2x)
+        const nsy = s2y + smoothingAlpha * (n1y - s2y)
+        const nsz = s2z + smoothingAlpha * (n1z - s2z)
+        smoothedCurl2[i3 + 0] = nsx
+        smoothedCurl2[i3 + 1] = nsy
+        smoothedCurl2[i3 + 2] = nsz
 
         // Component-multiply by per-axis amplitudes so TurbX/Y/Z also
         // weight the OUTPUT, giving asymmetric noise when the user dials
@@ -643,6 +668,11 @@ export function HitParticles() {
           vz *= newVzAbs / vzAbs
         }
       }
+
+      // Horizontal confinement — bleed off the sideways components so
+      // curl-accumulated drift saturates instead of widening with age.
+      vx *= horizRelax
+      vz *= horizRelax
 
       // Integrate position.
       px += vx * dt
@@ -717,6 +747,9 @@ export function HitParticles() {
       smoothedCurl[i3 + 0] = 0
       smoothedCurl[i3 + 1] = 0
       smoothedCurl[i3 + 2] = 0
+      smoothedCurl2[i3 + 0] = 0
+      smoothedCurl2[i3 + 1] = 0
+      smoothedCurl2[i3 + 2] = 0
       baseSizes[slot] = BASE_PARTICLE_SIZE * sizeJitter * velFactor * burstSize * sizeMul
       colors[i3 + 0] = r
       colors[i3 + 1] = g
