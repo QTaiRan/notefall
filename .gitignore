@@ -4,9 +4,10 @@ dist
 *.local
 *.tsbuildinfo
 _local/
-# Salamander Grand Piano V3 OGGs (~77 MB). Prepared locally via
-# `npm run fetch-salamander`, deployed to R2 in prod.
-public/samples/
+# Salamander Grand Piano V3 OGGs (~77 MB). Committed so GitHub Pages
+# can serve them same-origin (the R2 CDN's CORS allow-list only permits
+# https://notefall.app). Keep extras (rel/harm/pedal) out of the build.
+public/samples/salamander-v3-extras/
 # Env overrides — `.env.example` is the documented template.
 .env
 .env.production
