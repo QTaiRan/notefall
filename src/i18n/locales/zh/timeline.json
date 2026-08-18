@@ -1,0 +1,100 @@
+{
+  "editor": {
+    "show": "显示时间轴编辑器",
+    "hide": "隐藏时间轴编辑器",
+    "title": "时间轴编辑器",
+    "resizeLanes": "拖动调整轨道大小",
+    "resizeAria": "调整时间轴编辑器大小"
+  },
+  "follow": {
+    "stop": "停止跟随播放头",
+    "start": "播放时跟随播放头",
+    "label": "跟随"
+  },
+  "empty": {
+    "prompt": "未加载歌曲 — 拖放 .mid / .nfz 文件或选择快捷操作",
+    "openFile": "打开文件…",
+    "record": "录音",
+    "demoSongs": "示例歌曲",
+    "demoSongsAria": "示例歌曲"
+  },
+  "error": {
+    "couldNotOpenProjectTitle": "无法打开项目",
+    "couldNotLoadDemoTitle": "无法加载示例"
+  },
+  "lane": {
+    "midi": "MIDI",
+    "speed": "速度",
+    "audio": "音频",
+    "pins": "标记",
+    "pinsLabel": "标记",
+    "speedLabel": "速度",
+    "options": "轨道选项",
+    "mute": "静音",
+    "unmute": "取消静音",
+    "resizeLanes": "拖动调整轨道大小",
+    "decoding": "解码中…"
+  },
+  "context": {
+    "volume": "音量",
+    "mute": "静音",
+    "unmute": "取消静音",
+    "resetToUnity": "重置为 0 dB",
+    "removeAudio": "移除音频"
+  },
+  "speed": {
+    "automationAria": "MIDI 速度自动化",
+    "automationTitle": "点击添加断点 · 拖动移动 · 右键删除 · 在中点上滚动调整曲线",
+    "breakpointTitle": "{{time}} 秒处 {{value}}× — 双击重置 · 右键删除",
+    "curveTitle": "曲线 {{curvature}} — 拖动或滚动调整 · 右键拉直"
+  },
+  "trim": {
+    "drag": "拖动裁剪",
+    "midiHead": "裁剪 MIDI 头部",
+    "midiTail": "裁剪 MIDI 尾部",
+    "audioHead": "裁剪音频头部",
+    "audioTail": "裁剪音频尾部"
+  },
+  "pin": {
+    "addAtPlayheadAria": "在播放头处添加标记",
+    "addAtPlayheadTitle": "在播放头处添加标记（P）",
+    "laneAria": "设置标记",
+    "laneTitle": "标记捕获时间点的视觉设置 — 场景在相邻标记之间渐变。点击空白处添加标记 · 点击标记选择并跳转 · 拖动移动 · 右键拖动擦除。",
+    "markerTitle": "{{time}} 处的标记 — 点击选择并跳转 · 拖动移动 · 右键拖动擦除"
+  },
+  "ruler": {
+    "seekAria": "标尺 — 点击在视图内跳转",
+    "seekTitle": "拖动跳转 · 双击适应窗口",
+    "resetZoomAria": "重置缩放",
+    "resetZoomTitle": "重置缩放"
+  },
+  "clip": {
+    "syncTitle": "拖动同步 — 偏移 {{offset}} 秒"
+  },
+  "minimap": {
+    "panAria": "小地图 — 拖动平移",
+    "panTitle": "拖动平移可见范围",
+    "zoomToEnable": "放大以启用平移",
+    "resizeFromLeft": "从左侧调整可见范围",
+    "resizeFromRight": "从右侧调整可见范围"
+  },
+  "velocityCurve": {
+    "label": "力度曲线"
+  },
+  "transport": {
+    "rewindToStart": "回到开头",
+    "rewind10": "后退 10 秒",
+    "forward10": "快进 10 秒",
+    "play": "播放",
+    "pause": "暂停",
+    "enableLoop": "开启循环",
+    "disableLoop": "关闭循环",
+    "volume": "音量",
+    "speed": "速度",
+    "playbackSpeed": "播放速度",
+    "resetCameraView": "重置摄像机视角",
+    "enterFullscreen": "进入全屏",
+    "exitFullscreen": "退出全屏",
+    "seek": "跳转"
+  }
+}

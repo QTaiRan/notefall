@@ -1,0 +1,25 @@
+{
+  "unsupported": {
+    "title": "不支持此设备",
+    "body": "请在桌面或平板电脑上以横向模式打开 notefall — 需要更宽的屏幕。"
+  },
+  "webgl": {
+    "title": "需要硬件加速",
+    "body": "notefall 使用 WebGL 渲染下落音符，需要开启浏览器的硬件加速功能。",
+    "howToTitle": "如何开启",
+    "chromeLabel": "Chrome / Edge：",
+    "chromeSetting": "使用图形加速（如果可用）",
+    "firefoxLabel": "Firefox：",
+    "firefoxSetting": "使用推荐的性能设置",
+    "safariLabel": "Safari：",
+    "safariSetting": "WebGL",
+    "reload": "重新加载页面"
+  },
+  "pageLoader": {
+    "loading": "加载中"
+  },
+  "loading": {
+    "title": "正在加载钢琴采样",
+    "note": "首次加载需要获取约 77MB 的高质量采样；后续会话将使用缓存。"
+  }
+}

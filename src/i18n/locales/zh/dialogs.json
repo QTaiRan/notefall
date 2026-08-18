@@ -1,0 +1,87 @@
+{
+  "confirm": {
+    "defaultConfirm": "确定",
+    "defaultCancel": "取消"
+  },
+  "alert": {
+    "acknowledge": "确定"
+  },
+  "export": {
+    "ariaLabel": "导出设置",
+    "title": "导出",
+    "unsupported": "此浏览器不支持视频导出。音频导出仍然可用。",
+    "format": {
+      "label": "格式",
+      "videoAudio": "视频 + 音频（MP4）",
+      "videoOnly": "仅视频（MP4，静音）",
+      "audioOnly": "仅音频（WAV）"
+    },
+    "resolution": "分辨率",
+    "fps": "帧率",
+    "fps30": "30 fps",
+    "fps60": "60 fps",
+    "quality": "质量",
+    "bitrateNote": "视频码率 {{mbps}} Mbps。高质量使用 1.5 倍码率以获得更清晰的边缘和辉光效果；其他设置相同。",
+    "estimatedSize": "预估大小",
+    "estimatedSizeValue": "约 {{mb}} MB",
+    "playSoundOnComplete": "完成后播放提示音",
+    "test": "测试",
+    "cancel": "取消",
+    "submit": "导出"
+  },
+  "progress": {
+    "note": "这可能需要一些时间。请不要关闭标签页。",
+    "cancel": "取消",
+    "eta": "剩余 {{eta}}",
+    "etaSeconds": "{{count}} 秒",
+    "etaMinutes": "{{min}} 分 {{sec}} 秒"
+  },
+  "drop": {
+    "couldNotOpenProjectTitle": "无法打开项目",
+    "couldNotOpenProjectMessage": "无法加载 \"{{name}}\"。\n\n{{detail}}",
+    "couldNotLoadMidiTitle": "无法加载 MIDI",
+    "couldNotLoadMidiMessage": "无法解析 \"{{name}}\"。\n\n{{detail}}",
+    "couldNotLoadAudioTitle": "无法加载音频",
+    "unsupportedTitle": "不支持的文件类型",
+    "unsupportedMessage": "\"{{name}}\" 不是支持的格式。请拖放 .nfz 项目文件、.mid / .midi 文件或 .mp3 / .wav 音频文件。",
+    "indicator": "拖放以加载（.mid / .midi / .nfz / .mp3 / .wav）"
+  },
+  "noteMenu": {
+    "close": "关闭",
+    "deleteOne": "删除音符",
+    "deleteMany": "删除 {{count}} 个音符",
+    "notesSelected": "已选择 {{count}} 个音符",
+    "velocity": "力度"
+  },
+  "fastForward": {
+    "rate": "2 倍速"
+  },
+  "shortcut": {
+    "couldNotSaveTitle": "无法保存项目",
+    "couldNotOpenFileTitle": "无法打开文件"
+  },
+  "actions": {
+    "discardTitle": "放弃未保存的更改？",
+    "discardMessage": "{{prefix}} 未保存的编辑将丢失。",
+    "cancel": "取消",
+    "discardAndOpen": "放弃并打开",
+    "discardAndLoad": "放弃并加载",
+    "discardAndNew": "放弃并新建",
+    "openReplace": "打开文件将替换当前会话。",
+    "openReplaceNamed": "打开 \"{{name}}\" 将替换当前会话。",
+    "loadDemoReplace": "加载 \"{{label}}\" 示例将替换当前会话。",
+    "newDiscardTitle": "放弃未保存的更改？",
+    "newDiscardMessage": "新建项目将放弃当前会话。未保存的编辑将丢失。",
+    "couldNotLoadMidiTitle": "无法加载 MIDI",
+    "couldNotLoadMidiMessage": "无法解析 \"{{name}}\"。\n\n{{detail}}",
+    "midiParseFailed": "MIDI 解析失败：{{detail}}",
+    "couldNotOpenNamed": "无法打开 \"{{name}}\"。文件可能已被移动、删除或没有访问权限。",
+    "couldNotLoadDemo": "无法加载示例：{{detail}}",
+    "unsupportedFileType": "不支持的文件类型：\"{{name}}\"。请拖放 .nfz 或 .mid/.midi 文件。",
+    "loadMidiFirstTitle": "请先加载 MIDI 文件",
+    "loadMidiFirstMessage": "音频只能作为 MIDI 轨道的伴奏加载。请先打开或录制 MIDI 文件，然后再导入音频。",
+    "couldNotLoadAudioTitle": "无法加载音频",
+    "couldNotLoadAudioMessage": "无法解码 \"{{name}}\"。\n\n{{detail}}",
+    "somethingWentWrong": "出了点问题"
+  }
+}

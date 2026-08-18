@@ -1,0 +1,95 @@
+{
+  "file": {
+    "menuButton": "文件",
+    "menuLabel": "文件",
+    "new": "新建",
+    "open": "打开…",
+    "openRecent": "最近打开",
+    "openRecentLabel": "最近打开",
+    "clearRecent": "清除最近记录",
+    "save": "保存",
+    "saveAs": "另存为…",
+    "openAudio": "打开音频…",
+    "saveSongAsMidi": "将歌曲保存为 MIDI…",
+    "export": "导出…",
+    "demoSongs": "示例歌曲",
+    "demoSongsLabel": "示例歌曲"
+  },
+  "midi": {
+    "button": "MIDI 输入",
+    "inputDevices": "输入设备",
+    "noDevices": "未检测到 MIDI 设备。请插入 USB MIDI 设备并重新打开。",
+    "disconnect": "断开连接",
+    "connect": "连接"
+  },
+  "record": {
+    "stop": "停止录音",
+    "cancelCountIn": "取消预备拍",
+    "start": "开始录音",
+    "label": "录音",
+    "disableCountIn": "关闭预备拍",
+    "enableCountIn": "开启预备拍"
+  },
+  "recordings": {
+    "showWithNew": "显示录音（{{count}} 条新录音）",
+    "show": "显示录音",
+    "unread": "未读",
+    "heading": "录音",
+    "clearAll": "全部清除",
+    "empty": "暂无录音。点击录音按钮开始录制。",
+    "clickToRename": "点击重命名",
+    "pause": "暂停播放",
+    "loadAndPlay": "加载并播放",
+    "saveAsMid": "保存为 .mid",
+    "confirmDelete": "确认删除录音",
+    "delete": "删除录音"
+  },
+  "toast": {
+    "emptyRecording": "未捕获到音符 — 录音为空"
+  },
+  "help": {
+    "aria": "帮助与反馈",
+    "reportBug": "报告 Bug…",
+    "requestFeature": "功能建议…",
+    "viewOnGitHub": "在 GitHub 上查看"
+  },
+  "analytics": {
+    "label": "帮助改进 notefall",
+    "caption": "仅收集匿名使用数据 — 不会上传您的音乐或文件。"
+  },
+  "badge": {
+    "unsaved": "未保存",
+    "unsavedAria": "未保存的更改"
+  },
+  "projectName": {
+    "aria": "项目名称",
+    "rename": "重命名项目",
+    "untitled": "未命名",
+    "noFile": "未加载文件"
+  },
+  "export": {
+    "titleAudio": "正在导出音频",
+    "titleVideo": "正在导出视频",
+    "phasePreparing": "准备中",
+    "phaseLoadingSamples": "加载采样中",
+    "phaseRendering": "渲染中",
+    "phaseRenderingAudio": "渲染音频中",
+    "phaseFinalizing": "完成中"
+  },
+  "error": {
+    "couldNotLoadDemo": "无法加载示例",
+    "couldNotOpenFile": "无法打开文件",
+    "couldNotSaveProject": "无法保存项目",
+    "couldNotLoadAudio": "无法加载音频",
+    "couldNotOpenProject": "无法打开项目",
+    "couldNotExportAudio": "无法导出音频",
+    "couldNotExportVideo": "无法导出视频",
+    "videoNotSupportedTitle": "不支持视频导出",
+    "videoNotSupportedMessage": "您的浏览器缺少 WebCodecs API。请使用 Chrome、Edge 或 Safari 16.4+ 来导出视频。",
+    "videoNotSupportedShort": "您的浏览器缺少 WebCodecs API。"
+  },
+  "language": {
+    "label": "语言",
+    "aria": "切换语言"
+  }
+}

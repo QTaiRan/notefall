@@ -33,9 +33,17 @@ import jaDialogs from './locales/ja/dialogs.json'
 import jaInspector from './locales/ja/inspector.json'
 import jaTimeline from './locales/ja/timeline.json'
 
+import zhCommon from './locales/zh/common.json'
+import zhToolbar from './locales/zh/toolbar.json'
+import zhScreens from './locales/zh/screens.json'
+import zhDialogs from './locales/zh/dialogs.json'
+import zhInspector from './locales/zh/inspector.json'
+import zhTimeline from './locales/zh/timeline.json'
+
 export const SUPPORTED_LANGUAGES = [
   { code: 'en', label: 'English' },
   { code: 'ja', label: '日本語' },
+  { code: 'zh', label: '中文' },
 ] as const
 
 export type LanguageCode = (typeof SUPPORTED_LANGUAGES)[number]['code']
@@ -66,6 +74,14 @@ const resources = {
     inspector: jaInspector,
     timeline: jaTimeline,
   },
+  zh: {
+    common: zhCommon,
+    toolbar: zhToolbar,
+    screens: zhScreens,
+    dialogs: zhDialogs,
+    inspector: zhInspector,
+    timeline: zhTimeline,
+  },
 } as const
 
 void i18n
@@ -74,7 +90,7 @@ void i18n
   .init({
     resources,
     fallbackLng: 'en',
-    supportedLngs: ['en', 'ja'],
+    supportedLngs: ['en', 'ja', 'zh'],
     // 'ja-JP' / 'en-US' collapse to the base language.
     load: 'languageOnly',
     nonExplicitSupportedLngs: true,
