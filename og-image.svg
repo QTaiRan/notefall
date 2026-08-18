@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070a12"/>
+      <stop offset="1" stop-color="#03040a"/>
+    </linearGradient>
+    <linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#03040a" stop-opacity="0.92"/>
+      <stop offset="0.55" stop-color="#03040a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#03040a" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="7" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="hitglow" x="-20%" y="-400%" width="140%" height="900%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <rect x="206.33" y="70" width="20.67" height="150" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="206.33" y="250" width="20.67" height="90" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="373.00" y="120" width="20.67" height="210" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="506.33" y="40" width="20.67" height="120" rx="6" fill="#ff8bd8" filter="url(#glow)" opacity="0.95"/><rect x="506.33" y="200" width="20.67" height="130" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="639.67" y="96" width="20.67" height="170" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="773.00" y="180" width="20.67" height="240" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="939.67" y="60" width="20.67" height="110" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/><rect x="939.67" y="210" width="20.67" height="150" rx="6" fill="#ff8bd8" filter="url(#glow)" opacity="0.95"/><rect x="1073.00" y="130" width="20.67" height="200" rx="6" fill="#5ad7ff" filter="url(#glow)" opacity="0.95"/>
+
+  <!-- Hit line glow just above the keys -->
+  <rect x="0" y="483" width="1200" height="6" fill="#5ad7ff" opacity="0.5" filter="url(#hitglow)"/>
+  <rect x="0" y="484.5" width="1200" height="3" fill="#5ad7ff" opacity="0.85"/>
+
+  <!-- Keyboard -->
+  <rect x="0.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="33.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="67.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="100.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="133.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="167.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="200.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="233.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="267.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="300.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="333.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="367.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="400.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="433.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="467.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="500.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="533.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="567.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="600.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="633.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="667.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="700.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="733.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="767.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="800.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="833.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="867.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="900.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="933.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="967.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="1000.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="1033.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="1067.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="1100.60" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="1133.93" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/><rect x="1167.27" y="486" width="32.13" height="144" rx="3" fill="#f5f5f5"/>
+  <rect x="23.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="57.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="123.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="157.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="190.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="257.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="290.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="357.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="390.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="423.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="490.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="523.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="590.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="623.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="657.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="723.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="757.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="823.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="857.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="890.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="957.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="990.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="1057.00" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="1090.33" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/><rect x="1123.67" y="486" width="19.33" height="86.40" rx="2.5" fill="#141414"/>
+
+  <!-- Left scrim for text legibility -->
+  <rect width="1200" height="486" fill="url(#scrim)"/>
+
+  <!-- Wordmark + tagline -->
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+    <text x="80" y="232" font-size="104" font-weight="700" fill="#ffffff" letter-spacing="-3">notefall</text>
+    <text x="84" y="296" font-size="38" font-weight="500" fill="#cdd9e8">Piano MIDI visualizer in your browser</text>
+    <text x="84" y="350" font-size="27" font-weight="500" fill="#5ad7ff" letter-spacing="0.5">Falling notes · play live · record · edit · export to video</text>
+  </g>
+</svg>
