@@ -293,16 +293,17 @@ export async function createPiano(
   // can mutate per-group `volume` later — smplr re-reads these on
   // every `piano.start()` (RegionMatcher stores `groupRef`).
   const descriptor = buildSalamanderDescriptor(SAMPLES_BASE_URL)
-  // Samples are shipped as a single ZIP bundle (see zipBundle.ts) so
-  // first load is ONE ~76 MB download with byte-level progress, not
-  // 480 round-trips. smplr's own per-file onLoadProgress is useless in
-  // bundle mode (all fetches resolve from memory), so we drive the UI
-  // progress from the zip download instead and fall back to smplr's
-  // count only when the bundle failed and we degraded to per-file.
+  // Samples are shipped as npm tarballs from the Tencent mirror (see
+  // tarballBundle.ts) — 8 velocity layers, so 240 files — with the ZIP
+  // bundle and per-file fetch as fallbacks. smplr's own per-file
+  // onLoadProgress is useless in bundle mode (all fetches resolve from
+  // memory), so we drive the UI progress from the download instead and
+  // fall back to smplr's count only when the bundle failed and we
+  // degraded to per-file.
   let bundleActive = false
   const storage = createSampleStorage(SAMPLES_BASE_URL + '.zip', (p) => {
     bundleActive = true
-    const SAMPLE_COUNT = 480
+    const SAMPLE_COUNT = 240
     onProgress?.({
       loaded: p.total > 0 ? Math.round((p.loaded / p.total) * SAMPLE_COUNT) : 0,
       total: SAMPLE_COUNT,

@@ -123,14 +123,20 @@ function computeLayerVolumeDb(layer: number, compensation: number): number {
 export function buildSalamanderDescriptor(
   baseUrl: string,
   compensation: number = DEFAULT_VELOCITY_COMPENSATION,
+  /** How many of the 16 recorded layers to use (subsampled evenly). */
+  velocityLayers: number = 8,
 ): SmplrJson {
   const keyRanges = computeKeyRanges()
   const groups: SmplrGroup[] = []
-  for (let layer = 1; layer <= VELOCITY_LAYERS; layer++) {
-    // Evenly partition velocity 1..127 across the 16 layers.
+  const layers = Math.min(Math.max(Math.round(velocityLayers), 1), VELOCITY_LAYERS)
+  for (let i = 0; i < layers; i++) {
+    // Subsample the 16 recorded layers evenly (e.g. 8 layers -> 2, 4,
+    // 6, ... 16) and re-partition velocity 1..127 across the subset.
+    const layer = Math.round(((i + 0.5) * VELOCITY_LAYERS) / layers)
+    // Evenly partition velocity 1..127 across the layers.
     // smplr's velRange is inclusive at both ends.
-    const vLow = Math.max(1, Math.round(((layer - 1) * 127) / VELOCITY_LAYERS) + 1)
-    const vHigh = Math.round((layer * 127) / VELOCITY_LAYERS)
+    const vLow = Math.max(1, Math.round((i * 127) / layers) + 1)
+    const vHigh = Math.round(((i + 1) * 127) / layers)
     // NOTE: use `pitch` + `keyRange`, NOT `key`. smplr's
     // processRegion collapses keyRange to `[key, key]` when `key` is
     // set, which would make the region match only the sampled root

@@ -15,16 +15,21 @@ import type { ZipProgress } from './zipBundle'
  * Each tarball is gzip(tar); fflate has no tar decoder, so we parse the
  * tar container ourselves (trivial 512-byte-block format — see
  * `parseTar`). Everything is unpacked into memory and served by name,
- * mirroring the ZIP-bundle storage. Cache Storage persists the 16 raw
+ * mirroring the ZIP-bundle storage. Cache Storage persists the raw
  * tarball responses, so second loads never touch the network.
+ *
+ * The app uses 8 of the 16 recorded layers (the even ones) — half the
+ * download AND half the decode work, at no audible quality loss.
  *
  * If the mirror is unreachable we degrade to the ZIP bundle (github.io,
  * same-origin, slow) and then to per-file fetch — never silent.
  */
 export const SALAMANDER_TARBALL_URLS: readonly string[] = Array.from(
-  { length: 16 },
-  (_, i) =>
-    `https://mirrors.cloud.tencent.com/npm/@audio-samples/piano-velocity${i + 1}/-/piano-velocity${i + 1}-1.0.5.tgz`,
+  { length: 8 },
+  (_, i) => {
+    const layer = (i + 1) * 2
+    return `https://mirrors.cloud.tencent.com/npm/@audio-samples/piano-velocity${layer}/-/piano-velocity${layer}-1.0.5.tgz`
+  },
 )
 
 export class TarballBundleStorage implements Storage {
@@ -74,7 +79,7 @@ export class TarballBundleStorage implements Storage {
       requests.map((r) => (cache ? cache.match(r).catch(() => undefined) : undefined)),
     )
 
-    // Aggregate byte-granular progress across the 16 parallel downloads.
+    // Aggregate byte-granular progress across the parallel downloads.
     const totals = cached.map((h) =>
       h && h.status === 200 ? Number(h.headers.get('content-length') || 0) : 0,
     )
@@ -127,8 +132,9 @@ export class TarballBundleStorage implements Storage {
         map.set(name, data)
       }
     }
-    if (map.size !== 480) {
-      throw new Error(`expected 480 samples in tarballs, got ${map.size}`)
+    const oggCount = [...map.keys()].filter((k) => k.endsWith('.ogg')).length
+    if (oggCount !== 240) {
+      throw new Error(`expected 240 samples in tarballs, got ${oggCount}`)
     }
     report()
     return map
@@ -140,6 +146,9 @@ export class TarballBundleStorage implements Storage {
  * octal size at 124..136, typeflag at 156), data padded to 512, empty
  * zero block terminates. Only regular files are returned; paths are
  * reduced to their basename (tarballs prefix with `package/audio/`).
+ * npm tarballs use the upstream `D#` sharp naming, but `#` is a URL
+ * fragment delimiter — the app storage keys on the `Ds` convention
+ * (see salamanderDescriptor.ts), so sharps are normalised here.
  */
 export function parseTar(tar: Uint8Array): Map<string, Uint8Array> {
   const files = new Map<string, Uint8Array>()
@@ -154,7 +163,8 @@ export function parseTar(tar: Uint8Array): Map<string, Uint8Array> {
     const typeflag = header[156]
     const dataStart = off + 512
     if ((typeflag === 0 || typeflag === 0x30) && size > 0) {
-      files.set(name.slice(name.lastIndexOf('/') + 1), tar.slice(dataStart, dataStart + size))
+      const base = name.slice(name.lastIndexOf('/') + 1)
+      files.set(base.includes('#') ? base.replaceAll('#', 's') : base, tar.slice(dataStart, dataStart + size))
     }
     off = dataStart + Math.ceil(size / 512) * 512
   }
