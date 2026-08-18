@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -29,6 +29,23 @@ jobs:
         env:
           BASE_URL: /notefall/
           VITE_SAMPLES_BASE_URL: /notefall/samples/salamander-v3-close
+      # Publish raw build output to the gh-pages branch so jsDelivr
+      # can serve the JS/CSS assets from a mainland-reachable CDN
+      # (github.io measures ~30-190 KB/s from China; jsDelivr ~150 KB/s
+      # with automatic gzip, i.e. ~5 s for the 625 KB gzipped bundle).
+      # Orphaned on every build so the branch only ever holds the
+      # current dist — jsDelivr URLs are content-hashed, so new
+      # hashes always cache-miss and pull fresh.
+      - name: Publish assets to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          force_orphan: true
+      - name: Rewrite asset URLs to jsDelivr
+        run: |
+          sed -i 's|/notefall/assets/|https://cdn.jsdelivr.net/gh/QTaiRan/notefall@gh-pages/assets/|g' dist/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
