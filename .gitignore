@@ -8,6 +8,8 @@ _local/
 # can serve them same-origin (the R2 CDN's CORS allow-list only permits
 # https://notefall.app). Keep extras (rel/harm/pedal) out of the build.
 public/samples/salamander-v3-extras/
+# Generated sample bundle (scripts/pack-samples.cjs) — built in CI, not committed.
+public/samples/*.zip
 # Env overrides — `.env.example` is the documented template.
 .env
 .env.production

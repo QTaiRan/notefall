@@ -6,9 +6,10 @@
   "license": "SEE LICENSE IN LICENSE.md",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && node scripts/pack-samples.cjs && vite build && node scripts/prune-dist.cjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
+    "pack-samples": "node scripts/pack-samples.cjs",
     "fetch-salamander": "bash scripts/fetch-salamander.sh",
     "prepare-salamander": "node scripts/prepare-salamander.mjs",
     "upload-r2": "bash scripts/upload-r2.sh"

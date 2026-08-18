@@ -1,4 +1,5 @@
 import { HttpStorage, type Storage, type StorageResponse } from 'smplr'
+import { ZipBundleStorage, type ZipProgress } from './zipBundle'
 
 /**
  * Persistent on-disk sample cache backed by the Cache Storage API.
@@ -18,14 +19,14 @@ import { HttpStorage, type Storage, type StorageResponse } from 'smplr'
  * (e.g. third-party iframe, very old browser).
  */
 
-// v3: previous (v2) builds passed a synthetic Response to cache.put,
-// which in some browsers landed without a usable body — cache.match
-// then returned undefined and every page reload re-fetched. Bump on
+// v4: v3 stored per-file samples; v4 stores the single ZIP bundle
+// (see scripts/pack-samples.cjs + src/audio/zipBundle.ts). Bump on
 // any code change to invalidate previous-build entries.
-const CACHE_NAME = 'notefall-samples-v3'
+const CACHE_NAME = 'notefall-samples-v4'
 const LEGACY_CACHE_NAMES = [
   'notefall-samples-v1',
   'notefall-samples-v2',
+  'notefall-samples-v3',
 ] as const
 
 /** Whether Cache Storage is usable in this environment. */
@@ -51,8 +52,7 @@ let loggedMiss = false
  * to `cache.put` worked in Chrome but failed silently in some
  * other browsers, leaving the cache permanently empty.
  */
-class StatusFilteredCacheStorage implements Storage {
-  constructor(private readonly cacheName: string) {}
+export class StatusFilteredCacheStorage implements Storage {  constructor(private readonly cacheName: string) {}
 
   async fetch(url: string): Promise<StorageResponse> {
     const cache = isSampleCacheAvailable()
@@ -98,14 +98,26 @@ class StatusFilteredCacheStorage implements Storage {
   }
 }
 
-/** Returns the Cache Storage-backed Storage for use with smplr's Smplr
- *  constructor, or the plain HttpStorage fallback. */
-export function createSampleStorage(): Storage {
+/**
+ * Returns the sample storage for use with smplr's `Smplr` constructor.
+ *
+ * When a ZIP bundle exists at `${zipUrl}`, samples are served from the
+ * single-bundle download (fastest — one request for the whole set, see
+ * `zipBundle.ts`), with byte-level progress reported through
+ * `onZipProgress`. Falls back to per-file loading if the bundle can't
+ * be fetched, and to plain HttpStorage if Cache Storage is unusable.
+ */
+export function createSampleStorage(
+  zipUrl?: string,
+  onZipProgress?: (p: ZipProgress) => void,
+): Storage {
   if (!isSampleCacheAvailable()) return HttpStorage
   // Best-effort cleanup of older cache versions so they don't
   // silently consume disk forever. Fire-and-forget.
   void purgeLegacyCaches()
-  return new StatusFilteredCacheStorage(CACHE_NAME)
+  const perFile = new StatusFilteredCacheStorage(CACHE_NAME)
+  if (zipUrl) return new ZipBundleStorage(zipUrl, perFile, onZipProgress)
+  return perFile
 }
 
 async function purgeLegacyCaches(): Promise<void> {

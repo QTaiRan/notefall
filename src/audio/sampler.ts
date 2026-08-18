@@ -293,16 +293,32 @@ export async function createPiano(
   // can mutate per-group `volume` later — smplr re-reads these on
   // every `piano.start()` (RegionMatcher stores `groupRef`).
   const descriptor = buildSalamanderDescriptor(SAMPLES_BASE_URL)
+  // Samples are shipped as a single ZIP bundle (see zipBundle.ts) so
+  // first load is ONE ~76 MB download with byte-level progress, not
+  // 480 round-trips. smplr's own per-file onLoadProgress is useless in
+  // bundle mode (all fetches resolve from memory), so we drive the UI
+  // progress from the zip download instead and fall back to smplr's
+  // count only when the bundle failed and we degraded to per-file.
+  let bundleActive = false
+  const storage = createSampleStorage(SAMPLES_BASE_URL + '.zip', (p) => {
+    bundleActive = true
+    const SAMPLE_COUNT = 480
+    onProgress?.({
+      loaded: p.total > 0 ? Math.round((p.loaded / p.total) * SAMPLE_COUNT) : 0,
+      total: SAMPLE_COUNT,
+    })
+  })
   const piano = new Smplr(
     context as AudioContext,
     descriptor,
     {
       destination: masterGain,
-      storage: createSampleStorage(),
+      storage,
       velocity: 100,
       scheduler: options?.scheduler,
-      onLoadProgress: (p) =>
-        onProgress?.({ loaded: p.loaded, total: p.total }),
+      onLoadProgress: (p) => {
+        if (!bundleActive) onProgress?.({ loaded: p.loaded, total: p.total })
+      },
     },
   )
   await piano.load
