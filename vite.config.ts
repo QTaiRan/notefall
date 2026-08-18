@@ -6,6 +6,9 @@ const pkg = JSON.parse(readFileSync('./package.json', 'utf-8')) as { version: st
 
 export default defineConfig({
   plugins: [react()],
+  // Deployed under a subpath (e.g. /notefall/ on GitHub Pages). The
+  // workflow sets BASE_URL=/notefall/; local builds default to root.
+  base: process.env.BASE_URL ?? '/',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
