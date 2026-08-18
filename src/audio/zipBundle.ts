@@ -1,6 +1,10 @@
 import { unzipSync } from 'fflate'
 import type { Storage, StorageResponse } from 'smplr'
-import { isSampleCacheAvailable, type StatusFilteredCacheStorage } from './sampleCache'
+import {
+  isSampleCacheAvailable,
+  SAMPLE_CACHE_NAME,
+  type StatusFilteredCacheStorage,
+} from './sampleCache'
 
 /**
  * Storage wrapper that fetches the WHOLE sample set as a single ZIP
@@ -60,7 +64,7 @@ export class ZipBundleStorage implements Storage {
 
   private async loadBundle(): Promise<Map<string, Uint8Array>> {
     const request = new Request(this.zipUrl, { method: 'GET' })
-    const cache = isSampleCacheAvailable() ? await caches.open('notefall-samples-v4').catch(() => null) : null
+    const cache = isSampleCacheAvailable() ? await caches.open(SAMPLE_CACHE_NAME).catch(() => null) : null
 
     let ab: ArrayBuffer
     let persist = false

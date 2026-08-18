@@ -1,5 +1,6 @@
 import { HttpStorage, type Storage, type StorageResponse } from 'smplr'
 import { ZipBundleStorage, type ZipProgress } from './zipBundle'
+import { SALAMANDER_TARBALL_URLS, TarballBundleStorage } from './tarballBundle'
 
 /**
  * Persistent on-disk sample cache backed by the Cache Storage API.
@@ -19,14 +20,17 @@ import { ZipBundleStorage, type ZipProgress } from './zipBundle'
  * (e.g. third-party iframe, very old browser).
  */
 
-// v4: v3 stored per-file samples; v4 stores the single ZIP bundle
-// (see scripts/pack-samples.cjs + src/audio/zipBundle.ts). Bump on
-// any code change to invalidate previous-build entries.
-const CACHE_NAME = 'notefall-samples-v4'
+// v5: v4 stored one ZIP bundle; v5 stores the 16 npm tarballs fetched
+// from the Tencent npm mirror (see tarballBundle.ts). Bump on any code
+// change to invalidate previous-build entries.
+const CACHE_NAME = 'notefall-samples-v5'
+/** @internal exported for the bundle storages to share the same cache. */
+export const SAMPLE_CACHE_NAME = CACHE_NAME
 const LEGACY_CACHE_NAMES = [
   'notefall-samples-v1',
   'notefall-samples-v2',
   'notefall-samples-v3',
+  'notefall-samples-v4',
 ] as const
 
 /** Whether Cache Storage is usable in this environment. */
@@ -101,11 +105,14 @@ export class StatusFilteredCacheStorage implements Storage {  constructor(privat
 /**
  * Returns the sample storage for use with smplr's `Smplr` constructor.
  *
- * When a ZIP bundle exists at `${zipUrl}`, samples are served from the
- * single-bundle download (fastest — one request for the whole set, see
- * `zipBundle.ts`), with byte-level progress reported through
- * `onZipProgress`. Falls back to per-file loading if the bundle can't
- * be fetched, and to plain HttpStorage if Cache Storage is unusable.
+ * Storage chain, fastest first:
+ *   1. `TarballBundleStorage` — 16 npm tarballs from the Tencent mirror
+ *      (mainland-fast, CORS-open; ~10-30 s for the whole set).
+ *   2. `ZipBundleStorage` — single ZIP at `${zipUrl}` (github.io,
+ *      same-origin, slow but reliable).
+ *   3. `StatusFilteredCacheStorage` — per-file fetch (last resort).
+ * Byte-level progress for the tarball download is reported through
+ * `onZipProgress`.
  */
 export function createSampleStorage(
   zipUrl?: string,
@@ -116,8 +123,8 @@ export function createSampleStorage(
   // silently consume disk forever. Fire-and-forget.
   void purgeLegacyCaches()
   const perFile = new StatusFilteredCacheStorage(CACHE_NAME)
-  if (zipUrl) return new ZipBundleStorage(zipUrl, perFile, onZipProgress)
-  return perFile
+  const zip = zipUrl ? new ZipBundleStorage(zipUrl, perFile, onZipProgress) : perFile
+  return new TarballBundleStorage(SALAMANDER_TARBALL_URLS, zip, onZipProgress)
 }
 
 async function purgeLegacyCaches(): Promise<void> {
